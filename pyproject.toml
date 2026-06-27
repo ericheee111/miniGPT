@@ -7,7 +7,7 @@ name = "minitrain-gpt"
 version = "0.1.0"
 description = "CPU-first GPT training and profiling lab"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "numpy>=1.26",
     "psutil>=5.9",
@@ -30,7 +30,7 @@ addopts = ["-ra", "--strict-config", "--strict-markers"]
 
 [tool.basedpyright]
 typeCheckingMode = "all"
-pythonVersion = "3.11"
+pythonVersion = "3.14"
 pythonPlatform = "All"
 include = ["src", "tests"]
 exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist"]
@@ -41,7 +41,7 @@ reportMissingReturnType = "error"
 reportPrivateUsage = "error"
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py314"
 line-length = 100
 src = ["src", "tests"]
 
