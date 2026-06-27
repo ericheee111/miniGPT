@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.basedpyright/
+.venv/
+build/
+dist/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Training data and generated artifacts
+data/raw/
+data/processed/
+checkpoints/
+outputs/
+runs/
+*.pt
+*.pth
+*.prof
+*.trace.json
+
+# Local tooling
+.codegraph/
