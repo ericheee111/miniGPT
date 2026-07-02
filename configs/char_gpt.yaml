@@ -1,0 +1,35 @@
+runtime:
+  seed: 1337
+  num_threads: 20
+  device: cpu
+data:
+  directory: data/processed
+  block_size: 128
+  batch_size: 16
+model:
+  vocab_size: null
+  n_layer: 4
+  n_head: 4
+  n_embd: 128
+  dropout: 0.1
+  bias: false
+optimizer:
+  learning_rate: 0.0003
+  min_learning_rate: 0.00003
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+training:
+  max_steps: 1000
+  warmup_steps: 100
+  eval_interval: 50
+  eval_batches: 20
+  log_interval: 10
+  checkpoint_interval: 100
+  sample_interval: 100
+  sample_tokens: 200
+  sample_prompt: "ROMEO:"
+  output_dir: outputs/char_gpt
+  checkpoint_dir: checkpoints/char_gpt
+  tensorboard_dir: outputs/char_gpt/tensorboard
