@@ -20,6 +20,7 @@ data/raw/
 data/processed/
 checkpoints/
 outputs/
+reports/
 runs/
 *.pt
 *.pth

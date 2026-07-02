@@ -1,0 +1,22 @@
+seed: 1337
+vocab_size: 65
+thread_counts: [1, 4]
+block_sizes: [32, 64]
+batch_sizes: [2]
+model_sizes:
+  small:
+    n_layer: 2
+    n_head: 2
+    n_embd: 64
+warmup_steps: 1
+measurement_steps: 1
+repeats: 2
+output_dir: reports/benchmark_smoke
+profile:
+  enabled: true
+  thread_count: 4
+  block_size: 64
+  batch_size: 2
+  model_size: small
+  warmup_steps: 1
+  active_steps: 2

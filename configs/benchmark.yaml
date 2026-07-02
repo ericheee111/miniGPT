@@ -1,0 +1,30 @@
+seed: 1337
+vocab_size: 65
+thread_counts: [1, 4, 8, 12, 16, 20]
+block_sizes: [64, 128, 256]
+batch_sizes: [4, 8, 16, 32]
+model_sizes:
+  small:
+    n_layer: 2
+    n_head: 2
+    n_embd: 64
+  base:
+    n_layer: 4
+    n_head: 4
+    n_embd: 128
+  larger:
+    n_layer: 6
+    n_head: 8
+    n_embd: 256
+warmup_steps: 3
+measurement_steps: 5
+repeats: 5
+output_dir: reports/benchmark
+profile:
+  enabled: true
+  thread_count: 20
+  block_size: 128
+  batch_size: 16
+  model_size: base
+  warmup_steps: 2
+  active_steps: 3

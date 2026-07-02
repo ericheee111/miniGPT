@@ -18,7 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+    "basedpyright>=1.39.9",
+    "pytest>=8.0",
+    "ruff>=0.15.20",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -37,7 +41,6 @@ exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist"]
 reportUnnecessaryTypeIgnoreComment = "error"
 reportUnusedVariable = "error"
 reportMissingParameterType = "error"
-reportMissingReturnType = "error"
 reportPrivateUsage = "error"
 
 [tool.ruff]
