@@ -135,7 +135,7 @@ def _integer_tuple(document: ConfigMapping, key: str, source: Path) -> tuple[int
 def load_benchmark_config(path: Path) -> BenchmarkConfig:
     """Load and validate a benchmark matrix from YAML."""
     try:
-        raw_document = cast("object", yaml.safe_load(path.read_text(encoding="utf-8")))
+        raw_document = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as error:
         raise InvalidBenchmarkConfigError(path, str(error)) from error
     if not isinstance(raw_document, dict):

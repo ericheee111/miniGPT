@@ -1,8 +1,22 @@
+"""Define validated, serializable settings for miniGPT experiments."""
+
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal, override
 
 import yaml
+
+_VOCAB_SIZE_FIELD: Final = "vocab_size"
+_BLOCK_SIZE_FIELD: Final = "block_size"
+_N_LAYER_FIELD: Final = "n_layer"
+_N_HEAD_FIELD: Final = "n_head"
+_N_EMBD_FIELD: Final = "n_embd"
+_DROPOUT_FIELD: Final = "dropout"
+_POSITIVE_REASON: Final = "must be positive"
+_DIVISIBLE_HEADS_REASON: Final = "must be divisible by n_head"
+_DROPOUT_RANGE_REASON: Final = "must be in [0.0, 1.0)"
+_MEMORY_SOURCE: Final = Path("<memory>")
+_UNRESOLVED_VOCAB_REASON: Final = "model.vocab_size must be resolved before model construction"
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +26,9 @@ class InvalidModelConfigError(ValueError):
     field: str
     reason: str
 
+    @override
     def __str__(self) -> str:
+        """Render the invalid field and its failed constraint."""
         return f"invalid model config field {self.field!r}: {self.reason}"
 
 
@@ -29,20 +45,21 @@ class GPTConfig:
     bias: bool = False
 
     def __post_init__(self) -> None:
+        """Reject dimensions and probabilities that cannot define a GPT."""
         if self.vocab_size <= 0:
-            raise InvalidModelConfigError("vocab_size", "must be positive")
+            raise InvalidModelConfigError(_VOCAB_SIZE_FIELD, _POSITIVE_REASON)
         if self.block_size <= 0:
-            raise InvalidModelConfigError("block_size", "must be positive")
+            raise InvalidModelConfigError(_BLOCK_SIZE_FIELD, _POSITIVE_REASON)
         if self.n_layer <= 0:
-            raise InvalidModelConfigError("n_layer", "must be positive")
+            raise InvalidModelConfigError(_N_LAYER_FIELD, _POSITIVE_REASON)
         if self.n_head <= 0:
-            raise InvalidModelConfigError("n_head", "must be positive")
+            raise InvalidModelConfigError(_N_HEAD_FIELD, _POSITIVE_REASON)
         if self.n_embd <= 0:
-            raise InvalidModelConfigError("n_embd", "must be positive")
+            raise InvalidModelConfigError(_N_EMBD_FIELD, _POSITIVE_REASON)
         if self.n_embd % self.n_head != 0:
-            raise InvalidModelConfigError("n_embd", "must be divisible by n_head")
+            raise InvalidModelConfigError(_N_EMBD_FIELD, _DIVISIBLE_HEADS_REASON)
         if not 0.0 <= self.dropout < 1.0:
-            raise InvalidModelConfigError("dropout", "must be in [0.0, 1.0)")
+            raise InvalidModelConfigError(_DROPOUT_FIELD, _DROPOUT_RANGE_REASON)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +69,9 @@ class InvalidExperimentConfigError(ValueError):
     source: Path
     reason: str
 
+    @override
     def __str__(self) -> str:
+        """Render the source path and configuration failure."""
         return f"invalid experiment config {self.source}: {self.reason}"
 
 
@@ -75,14 +94,17 @@ class DataSettings:
 
     @property
     def train_path(self) -> Path:
+        """Return the training-token array path."""
         return self.directory / "train.npy"
 
     @property
     def val_path(self) -> Path:
+        """Return the validation-token array path."""
         return self.directory / "val.npy"
 
     @property
     def tokenizer_path(self) -> Path:
+        """Return the tokenizer metadata path."""
         return self.directory / "tokenizer.json"
 
 
@@ -101,8 +123,8 @@ class ModelSettings:
         """Build a concrete GPT configuration after vocabulary resolution."""
         if self.vocab_size is None:
             raise InvalidExperimentConfigError(
-                Path("<memory>"),
-                "model.vocab_size must be resolved before model construction",
+                _MEMORY_SOURCE,
+                _UNRESOLVED_VOCAB_REASON,
             )
         return GPTConfig(
             vocab_size=self.vocab_size,
@@ -155,13 +177,14 @@ class ExperimentConfig:
     optimizer: OptimizerSettings
     training: TrainingSettings
 
-    def resolve_vocab_size(self, actual_vocab_size: int) -> "ExperimentConfig":
+    def resolve_vocab_size(self, actual_vocab_size: int) -> ExperimentConfig:
         """Bind or verify the dataset vocabulary size."""
         configured = self.model.vocab_size
         if configured is not None and configured != actual_vocab_size:
+            reason = f"model vocab_size {configured} does not match tokenizer {actual_vocab_size}"
             raise InvalidExperimentConfigError(
-                Path("<memory>"),
-                f"model vocab_size {configured} does not match tokenizer {actual_vocab_size}",
+                _MEMORY_SOURCE,
+                reason,
             )
         return replace(
             self,

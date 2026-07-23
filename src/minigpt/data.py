@@ -1,24 +1,62 @@
-from collections.abc import Sequence
+"""Prepare Tiny Shakespeare and provide its character tokenizer."""
+
+from __future__ import annotations
+
+import json
 from dataclasses import dataclass, field
 from hashlib import sha256
-import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Mapping
+from typing import TYPE_CHECKING, Final, Protocol, Self, cast, override
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 import numpy as np
 
-from minigpt.batching import InvalidBatchConfigurationError, TokenBatcher
+from minigpt.batching import TokenBatcher
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+    from types import TracebackType
+
+__all__ = (
+    "TINY_SHAKESPEARE_URL",
+    "CharTokenizer",
+    "DatasetDownloadError",
+    "InvalidCorpusError",
+    "InvalidTokenIdError",
+    "PreparedDataset",
+    "TokenBatcher",
+    "TokenizerFormatError",
+    "UnknownCharacterError",
+    "download_text",
+    "prepare_tiny_shakespeare",
+)
 
 TINY_SHAKESPEARE_URL: Final = (
-    "https://raw.githubusercontent.com/karpathy/char-rnn/master/"
-    "data/tinyshakespeare/input.txt"
+    "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 )
 TRAIN_SPLIT_RATIO: Final = 0.9
 TOKENIZER_FORMAT_VERSION: Final = 1
 DOWNLOAD_TIMEOUT_SECONDS: Final = 30.0
+MINIMUM_CORPUS_TOKENS: Final = 2
+DEFAULT_DATA_DIR: Final = Path("data")
+_MEMORY_SOURCE: Final = Path("<memory>")
+
+type JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+
+
+class _BinaryResponse(Protocol):
+    def __enter__(self) -> Self: ...
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    def read(self) -> bytes: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +66,9 @@ class UnknownCharacterError(ValueError):
     character: str
     position: int
 
+    @override
     def __str__(self) -> str:
+        """Render the unknown character and its position."""
         return f"unknown character {self.character!r} at position {self.position}"
 
 
@@ -40,7 +80,9 @@ class InvalidTokenIdError(ValueError):
     position: int
     vocab_size: int
 
+    @override
     def __str__(self) -> str:
+        """Render the invalid token ID and vocabulary range."""
         return (
             f"token ID {self.token_id} at position {self.position} is outside "
             f"[0, {self.vocab_size})"
@@ -54,7 +96,9 @@ class TokenizerFormatError(ValueError):
     path: Path
     reason: str
 
+    @override
     def __str__(self) -> str:
+        """Render the tokenizer path and validation failure."""
         return f"invalid tokenizer file {self.path}: {self.reason}"
 
 
@@ -66,7 +110,9 @@ class DatasetDownloadError(RuntimeError):
     destination: Path
     reason: str
 
+    @override
     def __str__(self) -> str:
+        """Render the failed download source and destination."""
         return f"failed to download {self.url} to {self.destination}: {self.reason}"
 
 
@@ -76,8 +122,10 @@ class InvalidCorpusError(ValueError):
 
     token_count: int
 
+    @override
     def __str__(self) -> str:
-        return f"corpus needs at least 2 tokens, received {self.token_count}"
+        """Render the corpus size required for a non-empty split."""
+        return f"corpus needs at least {MINIMUM_CORPUS_TOKENS} tokens, received {self.token_count}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,13 +136,14 @@ class CharTokenizer:
     _character_to_id: Mapping[str, int] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        """Validate the vocabulary and build its immutable reverse lookup."""
         if not self._vocabulary:
-            raise TokenizerFormatError(Path("<memory>"), "vocabulary must not be empty")
+            raise TokenizerFormatError(_MEMORY_SOURCE, "vocabulary must not be empty")
         if len(set(self._vocabulary)) != len(self._vocabulary):
-            raise TokenizerFormatError(Path("<memory>"), "vocabulary contains duplicates")
+            raise TokenizerFormatError(_MEMORY_SOURCE, "vocabulary contains duplicates")
         if any(len(character) != 1 for character in self._vocabulary):
             raise TokenizerFormatError(
-                Path("<memory>"),
+                _MEMORY_SOURCE,
                 "each vocabulary item must be one character",
             )
         mapping = MappingProxyType(
@@ -103,7 +152,7 @@ class CharTokenizer:
         object.__setattr__(self, "_character_to_id", mapping)
 
     @classmethod
-    def from_text(cls, text: str) -> "CharTokenizer":
+    def from_text(cls, text: str) -> CharTokenizer:
         """Build a deterministic vocabulary sorted by Unicode code point."""
         return cls(tuple(sorted(set(text))))
 
@@ -138,16 +187,19 @@ class CharTokenizer:
             "version": TOKENIZER_FORMAT_VERSION,
             "vocabulary": list(self._vocabulary),
         }
-        path.write_text(
+        _ = path.write_text(
             json.dumps(document, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
 
     @classmethod
-    def load(cls, path: Path) -> "CharTokenizer":
+    def load(cls, path: Path) -> CharTokenizer:
         """Load and validate a persisted tokenizer vocabulary."""
         try:
-            document = json.loads(path.read_text(encoding="utf-8"))
+            document = cast(
+                "JsonValue",
+                json.loads(path.read_text(encoding="utf-8")),
+            )
         except json.JSONDecodeError as error:
             raise TokenizerFormatError(path, str(error)) from error
         if not isinstance(document, dict):
@@ -185,17 +237,21 @@ def download_text(url: str, destination: Path) -> Path:
         raise DatasetDownloadError(url, destination, f"unsupported URL scheme {scheme!r}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:  # noqa: S310
+        response = cast(
+            "_BinaryResponse",
+            urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS),  # noqa: S310
+        )
+        with response:
             content = response.read()
-        content.decode("utf-8")
-        destination.write_bytes(content)
+        _ = content.decode("utf-8")
+        _ = destination.write_bytes(content)
     except (OSError, UnicodeError) as error:
         raise DatasetDownloadError(url, destination, str(error)) from error
     return destination
 
 
 def prepare_tiny_shakespeare(
-    data_dir: Path = Path("data"),
+    data_dir: Path = DEFAULT_DATA_DIR,
     source_url: str = TINY_SHAKESPEARE_URL,
 ) -> PreparedDataset:
     """Download, tokenize, split, and persist the Tiny Shakespeare corpus."""
@@ -203,7 +259,7 @@ def prepare_tiny_shakespeare(
     text = raw_path.read_text(encoding="utf-8")
     tokenizer = CharTokenizer.from_text(text)
     tokens = np.asarray(tokenizer.encode(text), dtype=np.uint16)
-    if tokens.size < 2:
+    if tokens.size < MINIMUM_CORPUS_TOKENS:
         raise InvalidCorpusError(int(tokens.size))
 
     processed_dir = data_dir / "processed"
@@ -228,7 +284,7 @@ def prepare_tiny_shakespeare(
         "val_tokens": int(tokens.size) - split_index,
         "split_ratio": TRAIN_SPLIT_RATIO,
     }
-    metadata_path.write_text(
+    _ = metadata_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )

@@ -1,11 +1,19 @@
+from __future__ import annotations
+
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 import torch
 
-import minigpt.data as data
+from minigpt import data
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+type MetadataValue = str | int | float
 
 
 def test_tokenizer_round_trip() -> None:
@@ -30,7 +38,7 @@ def test_tokenizer_rejects_unknown_character() -> None:
         data.UnknownCharacterError,
         match=r"'z'.*position 1",
     ) as error_info:
-        tokenizer.encode("az")
+        _ = tokenizer.encode("az")
 
     # Then: the typed error identifies the character and position.
     assert error_info.value.character == "z"
@@ -54,7 +62,7 @@ def test_tokenizer_save_load_preserves_vocabulary(tmp_path: Path) -> None:
 def test_download_text_fetches_source(tmp_path: Path) -> None:
     # Given: a local URL and an empty raw-data destination.
     source_path = tmp_path / "source.txt"
-    source_path.write_text("first version", encoding="utf-8")
+    _ = source_path.write_text("first version", encoding="utf-8")
     destination = tmp_path / "raw" / "input.txt"
 
     # When: the source is downloaded.
@@ -69,7 +77,7 @@ def test_download_text_reuses_existing_file(tmp_path: Path) -> None:
     # Given: an existing destination and a source that must not be accessed.
     destination = tmp_path / "raw" / "input.txt"
     destination.parent.mkdir(parents=True)
-    destination.write_text("cached version", encoding="utf-8")
+    _ = destination.write_text("cached version", encoding="utf-8")
 
     # When: download is requested again.
     result = data.download_text("https://invalid.example/unused.txt", destination)
@@ -83,7 +91,7 @@ def test_prepare_tiny_shakespeare_writes_split_and_metadata(tmp_path: Path) -> N
     # Given: an existing raw corpus that must be reused.
     raw_path = tmp_path / "raw" / "input.txt"
     raw_path.parent.mkdir(parents=True)
-    raw_path.write_text("abcdeabcde", encoding="utf-8")
+    _ = raw_path.write_text("abcdeabcde", encoding="utf-8")
 
     # When: the corpus is prepared with a 90/10 split.
     prepared = data.prepare_tiny_shakespeare(
@@ -92,9 +100,12 @@ def test_prepare_tiny_shakespeare_writes_split_and_metadata(tmp_path: Path) -> N
     )
 
     # Then: tokens, tokenizer, and reproducibility metadata are persisted.
-    train_tokens = np.load(prepared.train_path)
-    val_tokens = np.load(prepared.val_path)
-    metadata = json.loads(prepared.metadata_path.read_text(encoding="utf-8"))
+    train_tokens = cast("npt.NDArray[np.uint16]", np.load(prepared.train_path))
+    val_tokens = cast("npt.NDArray[np.uint16]", np.load(prepared.val_path))
+    metadata = cast(
+        "dict[str, MetadataValue]",
+        json.loads(prepared.metadata_path.read_text(encoding="utf-8")),
+    )
     assert train_tokens.shape == (9,)
     assert val_tokens.shape == (1,)
     assert prepared.tokenizer_path.is_file()

@@ -1,15 +1,49 @@
-from dataclasses import dataclass
+"""Persist and restore complete, reproducible training checkpoints."""
+
+from __future__ import annotations
+
 import json
-from pathlib import Path
 import random
-from typing import TypedDict
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, TypedDict, cast, override
 
 import numpy as np
+import numpy.typing as npt
 import torch
-from torch import nn
+from torch import Tensor, nn
 
-from minigpt.batching import TokenBatcher
-from minigpt.config import ExperimentConfig, parse_experiment_config
+from minigpt.config import parse_experiment_config
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from minigpt.batching import TokenBatcher
+    from minigpt.settings import ExperimentConfig
+
+_CHECKPOINT_FORMAT_VERSION: Final = 1
+_MAPPING_REASON: Final = "top-level value must be a mapping"
+_VERSION_REASON: Final = "unsupported format version"
+_STEP_REASON: Final = "step must be an integer"
+_CONFIG_REASON: Final = "config_yaml must be a string"
+_NUMPY_STATE_REASON: Final = "NumPy random state is malformed"
+_FIELDS_REASON: Final = "checkpoint fields have invalid types"
+_PYTHON_STATE_PARTS: Final = 3
+_UNEXPECTED_NUMPY_STATE: Final = "legacy NumPy random state must be a tuple"
+
+type JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+type StateValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | Tensor
+    | list["StateValue"]
+    | tuple["StateValue", ...]
+    | dict[str | int, "StateValue"]
+)
+type PythonRandomState = tuple[int, tuple[int, ...], float | None]
+type NumpyRandomState = tuple[str, npt.NDArray[np.uint32], int, int, float]
 
 
 class CheckpointPayload(TypedDict):
@@ -18,9 +52,9 @@ class CheckpointPayload(TypedDict):
     format_version: int
     step: int
     config_yaml: str
-    model_state: dict
-    optimizer_state: dict
-    python_random_state: tuple
+    model_state: dict[str, Tensor]
+    optimizer_state: dict[str, StateValue]
+    python_random_state: PythonRandomState
     numpy_random_state_json: str
     torch_random_state: torch.Tensor
     train_batcher_random_state: str
@@ -34,7 +68,9 @@ class CheckpointFormatError(ValueError):
     path: Path
     reason: str
 
+    @override
     def __str__(self) -> str:
+        """Render the checkpoint path and format failure."""
         return f"invalid checkpoint {self.path}: {self.reason}"
 
 
@@ -46,10 +82,16 @@ class ResumeState:
 
 
 def _numpy_random_state_json() -> str:
-    algorithm, keys, position, has_gauss, cached_gaussian = np.random.get_state()
-    document = {
+    state = np.random.get_state(legacy=True)  # noqa: NPY002
+    if isinstance(state, dict):
+        raise TypeError(_UNEXPECTED_NUMPY_STATE)
+    algorithm, keys, position, has_gauss, cached_gaussian = state
+    serialized_keys: list[JsonValue] = [
+        int(cast("np.uint32", keys[index])) for index in range(keys.size)
+    ]
+    document: dict[str, JsonValue] = {
         "algorithm": algorithm,
-        "keys": keys.tolist(),
+        "keys": serialized_keys,
         "position": position,
         "has_gauss": has_gauss,
         "cached_gaussian": cached_gaussian,
@@ -57,90 +99,192 @@ def _numpy_random_state_json() -> str:
     return json.dumps(document)
 
 
-def _restore_numpy_random_state(state_json: str) -> None:
-    document = json.loads(state_json)
-    np.random.set_state(
+def _restore_numpy_random_state(state_json: str, path: Path) -> None:
+    document = cast("JsonValue", json.loads(state_json))
+    if not isinstance(document, dict):
+        raise CheckpointFormatError(path, _NUMPY_STATE_REASON)
+    algorithm = document.get("algorithm")
+    raw_keys = document.get("keys")
+    position = document.get("position")
+    has_gauss = document.get("has_gauss")
+    cached_gaussian = document.get("cached_gaussian")
+    if (
+        not isinstance(algorithm, str)
+        or not isinstance(raw_keys, list)
+        or isinstance(position, bool)
+        or not isinstance(position, int)
+        or isinstance(has_gauss, bool)
+        or not isinstance(has_gauss, int)
+        or isinstance(cached_gaussian, bool)
+        or not isinstance(cached_gaussian, int | float)
+    ):
+        raise CheckpointFormatError(path, _NUMPY_STATE_REASON)
+    keys: list[int] = []
+    for value in raw_keys:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise CheckpointFormatError(path, _NUMPY_STATE_REASON)
+        keys.append(value)
+    np.random.set_state(  # noqa: NPY002
         (
-            document["algorithm"],
-            np.asarray(document["keys"], dtype=np.uint32),
-            document["position"],
-            document["has_gauss"],
-            document["cached_gaussian"],
+            algorithm,
+            np.asarray(keys, dtype=np.uint32),
+            position,
+            has_gauss,
+            float(cached_gaussian),
         )
     )
 
 
+def _validated_model_state(value: StateValue, path: Path) -> dict[str, Tensor]:
+    if not isinstance(value, dict):
+        raise CheckpointFormatError(path, _FIELDS_REASON)
+    model_state: dict[str, Tensor] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, Tensor):
+            raise CheckpointFormatError(path, _FIELDS_REASON)
+        model_state[key] = item
+    return model_state
+
+
+def _validated_optimizer_state(value: StateValue, path: Path) -> dict[str, StateValue]:
+    if not isinstance(value, dict):
+        raise CheckpointFormatError(path, _FIELDS_REASON)
+    optimizer_state: dict[str, StateValue] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise CheckpointFormatError(path, _FIELDS_REASON)
+        optimizer_state[key] = item
+    return optimizer_state
+
+
+def _validated_python_state(value: StateValue, path: Path) -> PythonRandomState:
+    if not isinstance(value, tuple) or len(value) != _PYTHON_STATE_PARTS:
+        raise CheckpointFormatError(path, _FIELDS_REASON)
+    version, raw_internal_state, raw_gauss = value
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or not isinstance(raw_internal_state, tuple)
+        or (
+            raw_gauss is not None
+            and (isinstance(raw_gauss, bool) or not isinstance(raw_gauss, int | float))
+        )
+    ):
+        raise CheckpointFormatError(path, _FIELDS_REASON)
+    internal_state: list[int] = []
+    for item in raw_internal_state:
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise CheckpointFormatError(path, _FIELDS_REASON)
+        internal_state.append(item)
+    return (
+        version,
+        tuple(internal_state),
+        None if raw_gauss is None else float(raw_gauss),
+    )
+
+
 def _load_payload(path: Path) -> CheckpointPayload:
-    payload = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(payload, dict):
-        raise CheckpointFormatError(path, "top-level value must be a mapping")
-    if payload.get("format_version") != 1:
-        raise CheckpointFormatError(path, "unsupported format version")
-    return payload
+    loaded = cast(
+        "StateValue",
+        torch.load(path, map_location="cpu", weights_only=True),
+    )
+    if not isinstance(loaded, dict):
+        raise CheckpointFormatError(path, _MAPPING_REASON)
+    if loaded.get("format_version") != _CHECKPOINT_FORMAT_VERSION:
+        raise CheckpointFormatError(path, _VERSION_REASON)
+    step = loaded.get("step")
+    config_yaml = loaded.get("config_yaml")
+    numpy_state = loaded.get("numpy_random_state_json")
+    torch_state = loaded.get("torch_random_state")
+    train_batcher_state = loaded.get("train_batcher_random_state")
+    val_batcher_state = loaded.get("val_batcher_random_state")
+    if (
+        isinstance(step, bool)
+        or not isinstance(step, int)
+        or not isinstance(config_yaml, str)
+        or not isinstance(numpy_state, str)
+        or not isinstance(torch_state, Tensor)
+        or not isinstance(train_batcher_state, str)
+        or not isinstance(val_batcher_state, str)
+    ):
+        raise CheckpointFormatError(path, _FIELDS_REASON)
+    return CheckpointPayload(
+        format_version=_CHECKPOINT_FORMAT_VERSION,
+        step=step,
+        config_yaml=config_yaml,
+        model_state=_validated_model_state(loaded.get("model_state"), path),
+        optimizer_state=_validated_optimizer_state(loaded.get("optimizer_state"), path),
+        python_random_state=_validated_python_state(loaded.get("python_random_state"), path),
+        numpy_random_state_json=numpy_state,
+        torch_random_state=torch_state,
+        train_batcher_random_state=train_batcher_state,
+        val_batcher_random_state=val_batcher_state,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointResources:
+    """Group mutable objects whose state participates in checkpointing."""
+
+    model: nn.Module
+    optimizer: torch.optim.Optimizer
+    train_batcher: TokenBatcher
+    val_batcher: TokenBatcher
 
 
 def save_checkpoint(
     path: Path,
     *,
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer,
+    resources: CheckpointResources,
     step: int,
     config: ExperimentConfig,
-    train_batcher: TokenBatcher,
-    val_batcher: TokenBatcher,
 ) -> None:
     """Atomically persist training and random state needed for exact resume."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_suffix(path.suffix + ".tmp")
-    payload = {
-        "format_version": 1,
+    payload: CheckpointPayload = {
+        "format_version": _CHECKPOINT_FORMAT_VERSION,
         "step": step,
         "config_yaml": config.to_yaml(),
-        "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-        "python_random_state": random.getstate(),
+        "model_state": resources.model.state_dict(),
+        "optimizer_state": cast(
+            "dict[str, StateValue]",
+            resources.optimizer.state_dict(),
+        ),
+        "python_random_state": cast("PythonRandomState", random.getstate()),
         "numpy_random_state_json": _numpy_random_state_json(),
         "torch_random_state": torch.get_rng_state(),
-        "train_batcher_random_state": train_batcher.capture_random_state(),
-        "val_batcher_random_state": val_batcher.capture_random_state(),
+        "train_batcher_random_state": resources.train_batcher.capture_random_state(),
+        "val_batcher_random_state": resources.val_batcher.capture_random_state(),
     }
     torch.save(payload, temporary_path)
-    temporary_path.replace(path)
+    _ = temporary_path.replace(path)
 
 
 def load_checkpoint(
     path: Path,
     *,
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    train_batcher: TokenBatcher,
-    val_batcher: TokenBatcher,
+    resources: CheckpointResources,
 ) -> ResumeState:
     """Restore model, optimizer, step, global RNGs, and batch samplers."""
     payload = _load_payload(path)
-    model.load_state_dict(payload["model_state"])
-    optimizer.load_state_dict(payload["optimizer_state"])
+    _ = resources.model.load_state_dict(payload["model_state"])
+    resources.optimizer.load_state_dict(payload["optimizer_state"])
     random.setstate(payload["python_random_state"])
-    _restore_numpy_random_state(payload["numpy_random_state_json"])
+    _restore_numpy_random_state(payload["numpy_random_state_json"], path)
     torch.set_rng_state(payload["torch_random_state"])
-    train_batcher.restore_random_state(payload["train_batcher_random_state"])
-    val_batcher.restore_random_state(payload["val_batcher_random_state"])
-    step = payload.get("step")
-    if isinstance(step, bool) or not isinstance(step, int):
-        raise CheckpointFormatError(path, "step must be an integer")
-    return ResumeState(next_step=step + 1)
+    resources.train_batcher.restore_random_state(payload["train_batcher_random_state"])
+    resources.val_batcher.restore_random_state(payload["val_batcher_random_state"])
+    return ResumeState(next_step=payload["step"] + 1)
 
 
 def load_checkpoint_config(path: Path) -> ExperimentConfig:
     """Load the resolved experiment configuration stored in a checkpoint."""
     payload = _load_payload(path)
-    config_yaml = payload.get("config_yaml")
-    if not isinstance(config_yaml, str):
-        raise CheckpointFormatError(path, "config_yaml must be a string")
-    return parse_experiment_config(config_yaml, path)
+    return parse_experiment_config(payload["config_yaml"], path)
 
 
 def load_model_state(path: Path, model: nn.Module) -> None:
     """Load only model weights for inference."""
     payload = _load_payload(path)
-    model.load_state_dict(payload["model_state"])
+    _ = model.load_state_dict(payload["model_state"])

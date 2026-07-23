@@ -1,13 +1,15 @@
 import json
-from dataclasses import replace
-from pathlib import Path
 import subprocess
 import sys
+from dataclasses import replace
+from pathlib import Path
+from typing import cast
 
 import numpy as np
 
-import minigpt.trainer as trainer
-from minigpt.config import (
+from minigpt import trainer
+from minigpt.data import CharTokenizer
+from minigpt.settings import (
     DataSettings,
     ExperimentConfig,
     ModelSettings,
@@ -15,7 +17,8 @@ from minigpt.config import (
     RuntimeSettings,
     TrainingSettings,
 )
-from minigpt.data import CharTokenizer
+
+type MetricValue = int | float | None
 
 PROJECT_ROOT = Path(__file__).parents[1]
 
@@ -81,10 +84,13 @@ def test_run_training_writes_all_observable_artifacts(tmp_path: Path) -> None:
 
     # Then: metrics, samples, TensorBoard events, and latest checkpoint exist.
     metric_lines = result.metrics_path.read_text(encoding="utf-8").splitlines()
-    records = [json.loads(line) for line in metric_lines]
+    records = [cast("dict[str, MetricValue]", json.loads(line)) for line in metric_lines]
     assert [record["step"] for record in records] == [0, 1]
     assert all(record["val_loss"] is not None for record in records)
-    assert all(record["tokens_per_sec"] > 0 for record in records)
+    assert all(
+        isinstance(record["tokens_per_sec"], int | float) and record["tokens_per_sec"] > 0
+        for record in records
+    )
     assert result.samples_path.read_text(encoding="utf-8").count("step=") == 2
     assert result.checkpoint_path.is_file()
     assert any(result.tensorboard_dir.glob("events.out.tfevents.*"))
@@ -105,7 +111,7 @@ def test_run_training_resume_continues_without_duplicate_steps(tmp_path: Path) -
 
     # Then: metrics append only steps two and three.
     records = [
-        json.loads(line)
+        cast("dict[str, MetricValue]", json.loads(line))
         for line in result.metrics_path.read_text(encoding="utf-8").splitlines()
     ]
     assert [record["step"] for record in records] == [0, 1, 2, 3]
@@ -117,10 +123,10 @@ def test_train_cli_runs_one_step_from_yaml(tmp_path: Path) -> None:
     create_processed_data(tmp_path / "processed")
     experiment = tiny_experiment(tmp_path, max_steps=2)
     config_path = tmp_path / "experiment.yaml"
-    config_path.write_text(experiment.to_yaml(), encoding="utf-8")
+    _ = config_path.write_text(experiment.to_yaml(), encoding="utf-8")
 
     # When: the documented train.py surface overrides max_steps.
-    completed = subprocess.run(
+    completed = subprocess.run(  # noqa: S603
         [
             sys.executable,
             "train.py",
@@ -147,7 +153,7 @@ def test_generate_cli_loads_checkpoint_and_appends_text(tmp_path: Path) -> None:
     result = trainer.run_training(experiment)
 
     # When: the documented generate.py surface samples two new characters.
-    completed = subprocess.run(
+    completed = subprocess.run(  # noqa: S603
         [
             sys.executable,
             "generate.py",

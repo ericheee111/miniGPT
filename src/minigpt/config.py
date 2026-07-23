@@ -1,23 +1,24 @@
+"""Load and validate miniGPT experiment configuration files."""
+
 from pathlib import Path
+from typing import Final, cast
 
 import yaml
 
 from minigpt.settings import (
     DataSettings,
     ExperimentConfig,
-    GPTConfig,
     InvalidExperimentConfigError,
-    InvalidModelConfigError,
     ModelSettings,
     OptimizerSettings,
     RuntimeSettings,
     TrainingSettings,
 )
 
-type ConfigValue = (
-    str | int | float | bool | None | list["ConfigValue"] | dict[str, "ConfigValue"]
-)
+type ConfigValue = str | int | float | bool | None | list["ConfigValue"] | dict[str, "ConfigValue"]
 type ConfigMapping = dict[str, ConfigValue]
+
+_MEMORY_SOURCE: Final = Path("<memory>")
 
 
 def _section(document: ConfigMapping, name: str, source: Path) -> ConfigMapping:
@@ -55,19 +56,23 @@ def _string(section: ConfigMapping, key: str, source: Path) -> str:
     return value
 
 
-def _positive(value: int | float, name: str, source: Path) -> None:
+def _positive(value: float, name: str, source: Path) -> None:
     if value <= 0:
         raise InvalidExperimentConfigError(source, f"{name} must be positive")
 
 
-def parse_experiment_config(yaml_text: str, source: Path = Path("<memory>")) -> ExperimentConfig:
+def parse_experiment_config(
+    yaml_text: str,
+    source: Path = _MEMORY_SOURCE,
+) -> ExperimentConfig:
     """Parse and validate an experiment configuration from YAML text."""
     try:
-        document = yaml.safe_load(yaml_text)
+        raw_document = yaml.safe_load(yaml_text)
     except yaml.YAMLError as error:
         raise InvalidExperimentConfigError(source, str(error)) from error
-    if not isinstance(document, dict):
+    if not isinstance(raw_document, dict):
         raise InvalidExperimentConfigError(source, "top-level YAML value must be a mapping")
+    document = cast("ConfigMapping", raw_document)
 
     runtime = _section(document, "runtime", source)
     data = _section(document, "data", source)

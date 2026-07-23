@@ -1,17 +1,17 @@
 import json
-from importlib import import_module
+from math import isclose
 from pathlib import Path
+from typing import cast
 
-import pytest
+from minigpt import config, metrics, optimization
 
-import minigpt.config as config
-import minigpt.metrics as metrics
+type MetricValue = int | float | None
 
 
 def test_load_experiment_config_parses_nested_yaml(tmp_path: Path) -> None:
     # Given: a complete CPU training configuration.
     config_path = tmp_path / "experiment.yaml"
-    config_path.write_text(
+    _ = config_path.write_text(
         """
 runtime:
   seed: 123
@@ -66,8 +66,6 @@ training:
 
 def test_learning_rate_uses_linear_warmup_then_cosine_decay() -> None:
     # Given: a six-step schedule with two warmup steps.
-    optimization = import_module("minigpt.optimization")
-
     # When: every step's learning rate is calculated.
     learning_rates = [
         optimization.learning_rate_at_step(
@@ -81,10 +79,10 @@ def test_learning_rate_uses_linear_warmup_then_cosine_decay() -> None:
     ]
 
     # Then: warmup reaches the peak and cosine decay reaches the minimum.
-    assert learning_rates[0] == pytest.approx(0.5)
-    assert learning_rates[1] == pytest.approx(1.0)
-    assert learning_rates[2] == pytest.approx(1.0)
-    assert learning_rates[-1] == pytest.approx(0.1)
+    assert isclose(learning_rates[0], 0.5)
+    assert isclose(learning_rates[1], 1.0)
+    assert isclose(learning_rates[2], 1.0)
+    assert isclose(learning_rates[-1], 0.1)
     assert learning_rates[2:] == sorted(learning_rates[2:], reverse=True)
 
 
@@ -108,7 +106,10 @@ def test_append_jsonl_writes_all_required_training_metrics(tmp_path: Path) -> No
     metrics.append_jsonl(metrics_path, record)
 
     # Then: the JSON line contains every required field.
-    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    payload = cast(
+        "dict[str, MetricValue]",
+        json.loads(metrics_path.read_text(encoding="utf-8")),
+    )
     assert payload == {
         "step": 3,
         "train_loss": 2.5,

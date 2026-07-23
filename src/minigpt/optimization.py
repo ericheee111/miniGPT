@@ -1,20 +1,28 @@
+"""Provide reproducible seeding, scheduling, and optimizer construction."""
+
+from __future__ import annotations
+
 import math
 import random
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 import torch
 from torch import nn
 
-from minigpt.config import OptimizerSettings
+if TYPE_CHECKING:
+    from minigpt.settings import OptimizerSettings
+
+_DECAY_DIMENSION_THRESHOLD: Final = 2
 
 
 def seed_everything(seed: int, num_threads: int) -> None:
     """Seed Python, NumPy, and PyTorch and configure CPU parallelism."""
     random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+    np.random.seed(seed)  # noqa: NPY002
+    _ = torch.default_generator.manual_seed(seed)
     torch.set_num_threads(num_threads)
-    torch.use_deterministic_algorithms(True)
+    torch.use_deterministic_algorithms(mode=True)
 
 
 def learning_rate_at_step(
@@ -39,12 +47,16 @@ def learning_rate_at_step(
 
 def create_adamw(model: nn.Module, settings: OptimizerSettings) -> torch.optim.AdamW:
     """Create AdamW with decay limited to matrix-like parameters."""
-    decayed_parameters = []
-    non_decayed_parameters = []
+    decayed_parameters: list[nn.Parameter] = []
+    non_decayed_parameters: list[nn.Parameter] = []
     for parameter in model.parameters():
         if not parameter.requires_grad:
             continue
-        destination = decayed_parameters if parameter.ndim >= 2 else non_decayed_parameters
+        destination = (
+            decayed_parameters
+            if parameter.ndim >= _DECAY_DIMENSION_THRESHOLD
+            else non_decayed_parameters
+        )
         destination.append(parameter)
     parameter_groups = [
         {"params": decayed_parameters, "weight_decay": settings.weight_decay},

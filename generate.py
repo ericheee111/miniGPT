@@ -1,12 +1,20 @@
+"""Generate text from a trained miniGPT checkpoint."""
+
+from __future__ import annotations
+
 import argparse
-from collections.abc import Sequence
 from pathlib import Path
+from sys import stdout
+from typing import TYPE_CHECKING
 
 import torch
 
 from minigpt.checkpoint import load_checkpoint_config, load_model_state
 from minigpt.data import CharTokenizer
 from minigpt.model import GPT
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,9 +36,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     tokenizer = CharTokenizer.load(config.data.tokenizer_path)
     model = GPT(config.model.to_gpt_config(config.data.block_size))
     load_model_state(arguments.checkpoint, model)
-    model.eval()
+    _ = model.eval()
     seed = config.runtime.seed if arguments.seed is None else arguments.seed
-    torch.manual_seed(seed)
+    _ = torch.default_generator.manual_seed(seed)
     prompt = torch.tensor([tokenizer.encode(arguments.prompt)], dtype=torch.long)
     generated = model.generate(
         prompt,
@@ -38,7 +46,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         temperature=arguments.temperature,
         top_k=arguments.top_k,
     )
-    print(tokenizer.decode(generated[0].tolist()))
+    token_ids = [int(generated[0, index]) for index in range(generated.shape[1])]
+    _ = stdout.write(tokenizer.decode(token_ids) + "\n")
     return 0
 
 

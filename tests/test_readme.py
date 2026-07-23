@@ -1,0 +1,50 @@
+import re
+from pathlib import Path
+from typing import cast
+
+PROJECT_ROOT = Path(__file__).parents[1]
+README_PATH = PROJECT_ROOT / "README.md"
+REQUIRED_COMMANDS = (
+    "python prepare_data.py",
+    "python train.py",
+    "python generate.py",
+    "python benchmark.py",
+    "python profile_model.py",
+)
+REQUIRED_HEADINGS = (
+    "## 项目概览",
+    "## English Summary",
+    "## Quick Start",
+    "## 核心架构",
+    "## 性能分析",
+    "## Roadmap",
+    "## Resume",
+)
+
+
+def test_readme_documents_stable_user_contracts() -> None:
+    # Given: the repository README.
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    # When: required sections and commands are inspected.
+    # Then: every stable public workflow is documented.
+    assert all(heading in readme for heading in REQUIRED_HEADINGS)
+    assert all(command in readme for command in REQUIRED_COMMANDS)
+    assert "ruff check src tests" in readme
+    assert "basedpyright" in readme
+    assert "pytest" in readme
+
+
+def test_readme_local_markdown_links_exist() -> None:
+    # Given: local Markdown links in the README.
+    readme = README_PATH.read_text(encoding="utf-8")
+    targets = cast(
+        "list[str]",
+        re.findall(r"\[[^\]]+\]\((?!https?://|#)([^)]+)\)", readme),
+    )
+
+    # When: every local target is resolved from the project root.
+    missing = [target for target in targets if not (PROJECT_ROOT / target).exists()]
+
+    # Then: the README contains no broken local links.
+    assert missing == []
