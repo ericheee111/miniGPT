@@ -1,11 +1,14 @@
 """Build isolated synthetic training workloads for CPU performance measurement."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast, final, override
+from typing import TYPE_CHECKING, cast, final
 
 import numpy as np
 import torch
 from torch.profiler import record_function
+from typing_extensions import override
 
 from minigpt.batching import TokenBatcher
 from minigpt.model import GPT
@@ -64,6 +67,7 @@ class TrainingStepWorkload:
             )
         )
         settings = OptimizerSettings(
+            optimizer_type="adamw",
             learning_rate=3e-4,
             min_learning_rate=3e-5,
             weight_decay=0.1,

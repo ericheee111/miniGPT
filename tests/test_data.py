@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -13,7 +13,7 @@ from minigpt import data
 if TYPE_CHECKING:
     from pathlib import Path
 
-type MetadataValue = str | int | float
+MetadataValue: TypeAlias = str | int | float
 
 
 def test_tokenizer_round_trip() -> None:

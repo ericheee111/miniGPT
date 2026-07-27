@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 import psutil
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-type MetricValue = int | float | None
+MetricValue: TypeAlias = int | float | None
 
 
 @dataclass(frozen=True, slots=True)

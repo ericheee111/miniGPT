@@ -1,5 +1,7 @@
 """Capture CPU operator profiles and export human-readable evidence."""
 
+from __future__ import annotations
+
 import csv
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast

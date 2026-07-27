@@ -1,5 +1,7 @@
 """Measure CPU training throughput across a reproducible configuration matrix."""
 
+from __future__ import annotations
+
 import gc
 import sys
 from itertools import product

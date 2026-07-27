@@ -7,16 +7,18 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, Self, cast, override
+from typing import TYPE_CHECKING, Final, Protocol, Self, TypeAlias, cast
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 import numpy as np
+import numpy.typing as npt
+from typing_extensions import override
 
 from minigpt.batching import TokenBatcher
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from types import TracebackType
 
 __all__ = (
@@ -43,7 +45,7 @@ MINIMUM_CORPUS_TOKENS: Final = 2
 DEFAULT_DATA_DIR: Final = Path("data")
 _MEMORY_SOURCE: Final = Path("<memory>")
 
-type JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
 
 
 class _BinaryResponse(Protocol):
@@ -270,8 +272,12 @@ def prepare_tiny_shakespeare(
     metadata_path = processed_dir / "metadata.json"
 
     split_index = int(tokens.size * TRAIN_SPLIT_RATIO)
-    np.save(train_path, tokens[:split_index])
-    np.save(val_path, tokens[split_index:])
+    save_tokens = cast(
+        "Callable[[Path, npt.NDArray[np.uint16]], None]",
+        np.save,
+    )
+    save_tokens(train_path, tokens[:split_index])
+    save_tokens(val_path, tokens[split_index:])
     tokenizer.save(tokenizer_path)
     metadata = {
         "format_version": 1,

@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, TypedDict, cast, override
+from typing import TYPE_CHECKING, Final, TypeAlias, TypedDict, cast
 
 import numpy as np
 import numpy.typing as npt
 import torch
 from torch import Tensor, nn
+from typing_extensions import override
 
 from minigpt.config import parse_experiment_config
 
@@ -30,20 +31,20 @@ _FIELDS_REASON: Final = "checkpoint fields have invalid types"
 _PYTHON_STATE_PARTS: Final = 3
 _UNEXPECTED_NUMPY_STATE: Final = "legacy NumPy random state must be a tuple"
 
-type JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
-type StateValue = (
+JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
+StateValue: TypeAlias = (
     str
     | int
     | float
     | bool
-    | None
     | Tensor
     | list["StateValue"]
     | tuple["StateValue", ...]
     | dict[str | int, "StateValue"]
+    | None
 )
-type PythonRandomState = tuple[int, tuple[int, ...], float | None]
-type NumpyRandomState = tuple[str, npt.NDArray[np.uint32], int, int, float]
+PythonRandomState: TypeAlias = tuple[int, tuple[int, ...], float | None]
+NumpyRandomState: TypeAlias = tuple[str, npt.NDArray[np.uint32], int, int, float]
 
 
 class CheckpointPayload(TypedDict):

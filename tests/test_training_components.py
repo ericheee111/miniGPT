@@ -1,18 +1,18 @@
 import json
 from math import isclose
 from pathlib import Path
-from typing import cast
+from typing import TypeAlias, cast
+
+import pytest
 
 from minigpt import config, metrics, optimization
+from minigpt.settings import InvalidExperimentConfigError
 
-type MetricValue = int | float | None
+MetricValue: TypeAlias = int | float | None
 
 
-def test_load_experiment_config_parses_nested_yaml(tmp_path: Path) -> None:
-    # Given: a complete CPU training configuration.
-    config_path = tmp_path / "experiment.yaml"
-    _ = config_path.write_text(
-        """
+def valid_experiment_yaml() -> str:
+    return """
 runtime:
   seed: 123
   num_threads: 2
@@ -29,6 +29,7 @@ model:
   dropout: 0.1
   bias: false
 optimizer:
+  type: adamw
   learning_rate: 0.001
   min_learning_rate: 0.0001
   weight_decay: 0.01
@@ -38,6 +39,7 @@ optimizer:
 training:
   max_steps: 10
   warmup_steps: 2
+  lr_decay_steps: 8
   eval_interval: 5
   eval_batches: 3
   log_interval: 1
@@ -48,7 +50,14 @@ training:
   output_dir: outputs
   checkpoint_dir: checkpoints
   tensorboard_dir: outputs/tensorboard
-""".strip(),
+""".strip()
+
+
+def test_load_experiment_config_parses_nested_yaml(tmp_path: Path) -> None:
+    # Given: a complete CPU training configuration.
+    config_path = tmp_path / "experiment.yaml"
+    _ = config_path.write_text(
+        valid_experiment_yaml(),
         encoding="utf-8",
     )
 
@@ -60,7 +69,9 @@ training:
     assert experiment.data.block_size == 16
     assert experiment.model.vocab_size is None
     assert experiment.model.n_embd == 32
+    assert experiment.optimizer.optimizer_type == "adamw"
     assert experiment.optimizer.beta2 == 0.95
+    assert experiment.training.lr_decay_steps == 8
     assert experiment.training.checkpoint_dir == Path("checkpoints")
 
 
@@ -73,17 +84,44 @@ def test_learning_rate_uses_linear_warmup_then_cosine_decay() -> None:
             max_learning_rate=1.0,
             min_learning_rate=0.1,
             warmup_steps=2,
-            max_steps=6,
+            lr_decay_steps=6,
         )
-        for step in range(6)
+        for step in range(10)
     ]
 
-    # Then: warmup reaches the peak and cosine decay reaches the minimum.
+    # Then: warmup reaches the peak, cosine reaches the minimum, and the tail stays there.
     assert isclose(learning_rates[0], 0.5)
     assert isclose(learning_rates[1], 1.0)
     assert isclose(learning_rates[2], 1.0)
-    assert isclose(learning_rates[-1], 0.1)
-    assert learning_rates[2:] == sorted(learning_rates[2:], reverse=True)
+    assert isclose(learning_rates[5], 0.1)
+    assert learning_rates[6:] == [0.1, 0.1, 0.1, 0.1]
+
+
+@pytest.mark.parametrize(
+    ("invalid_yaml", "message"),
+    [
+        (
+            valid_experiment_yaml().replace("warmup_steps: 2", "warmup_steps: 8"),
+            "warmup_steps",
+        ),
+        (
+            valid_experiment_yaml().replace("lr_decay_steps: 8", "lr_decay_steps: 11"),
+            "lr_decay_steps",
+        ),
+        (
+            valid_experiment_yaml().replace("type: adamw", "type: sgd"),
+            "optimizer.type",
+        ),
+    ],
+)
+def test_parse_experiment_config_rejects_invalid_schedule_definition(
+    invalid_yaml: str,
+    message: str,
+) -> None:
+    # Given: an experiment whose optimizer or schedule definition is invalid.
+    # When: the YAML crosses the typed configuration boundary.
+    with pytest.raises(InvalidExperimentConfigError, match=message):
+        _ = config.parse_experiment_config(invalid_yaml)
 
 
 def test_append_jsonl_writes_all_required_training_metrics(tmp_path: Path) -> None:

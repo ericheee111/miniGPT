@@ -3,9 +3,10 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 import numpy as np
+import numpy.typing as npt
 
 from minigpt import trainer
 from minigpt.data import CharTokenizer
@@ -18,7 +19,10 @@ from minigpt.settings import (
     TrainingSettings,
 )
 
-type MetricValue = int | float | None
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+MetricValue: TypeAlias = int | float | None
 
 PROJECT_ROOT = Path(__file__).parents[1]
 
@@ -28,8 +32,12 @@ def create_processed_data(directory: Path) -> None:
     tokenizer = CharTokenizer.from_text(text)
     tokens = np.asarray(tokenizer.encode(text), dtype=np.uint16)
     directory.mkdir(parents=True)
-    np.save(directory / "train.npy", tokens[:100])
-    np.save(directory / "val.npy", tokens[100:])
+    save_tokens = cast(
+        "Callable[[Path, npt.NDArray[np.uint16]], None]",
+        np.save,
+    )
+    save_tokens(directory / "train.npy", tokens[:100])
+    save_tokens(directory / "val.npy", tokens[100:])
     tokenizer.save(directory / "tokenizer.json")
 
 
@@ -50,6 +58,7 @@ def tiny_experiment(tmp_path: Path, *, max_steps: int = 2) -> ExperimentConfig:
             bias=False,
         ),
         optimizer=OptimizerSettings(
+            optimizer_type="adamw",
             learning_rate=1e-3,
             min_learning_rate=1e-4,
             weight_decay=0.01,
@@ -60,6 +69,7 @@ def tiny_experiment(tmp_path: Path, *, max_steps: int = 2) -> ExperimentConfig:
         training=TrainingSettings(
             max_steps=max_steps,
             warmup_steps=0,
+            lr_decay_steps=max_steps,
             eval_interval=1,
             eval_batches=1,
             log_interval=1,

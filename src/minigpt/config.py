@@ -1,7 +1,7 @@
 """Load and validate miniGPT experiment configuration files."""
 
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, TypeAlias, cast
 
 import yaml
 
@@ -15,8 +15,10 @@ from minigpt.settings import (
     TrainingSettings,
 )
 
-type ConfigValue = str | int | float | bool | None | list["ConfigValue"] | dict[str, "ConfigValue"]
-type ConfigMapping = dict[str, ConfigValue]
+ConfigValue: TypeAlias = (
+    str | int | float | bool | list["ConfigValue"] | dict[str, "ConfigValue"] | None
+)
+ConfigMapping: TypeAlias = dict[str, ConfigValue]
 
 _MEMORY_SOURCE: Final = Path("<memory>")
 
@@ -66,6 +68,23 @@ def parse_experiment_config(
     source: Path = _MEMORY_SOURCE,
 ) -> ExperimentConfig:
     """Parse and validate an experiment configuration from YAML text."""
+    return _parse_experiment_config(yaml_text, source, legacy_defaults=False)
+
+
+def parse_legacy_experiment_config(
+    yaml_text: str,
+    source: Path,
+) -> ExperimentConfig:
+    """Parse a v1 inference config with deterministic compatibility defaults."""
+    return _parse_experiment_config(yaml_text, source, legacy_defaults=True)
+
+
+def _parse_experiment_config(
+    yaml_text: str,
+    source: Path,
+    *,
+    legacy_defaults: bool,
+) -> ExperimentConfig:
     try:
         raw_document = yaml.safe_load(yaml_text)
     except yaml.YAMLError as error:
@@ -79,6 +98,13 @@ def parse_experiment_config(
     model = _section(document, "model", source)
     optimizer = _section(document, "optimizer", source)
     training = _section(document, "training", source)
+    raw_optimizer_type = optimizer.get("type")
+    if legacy_defaults and raw_optimizer_type is None:
+        optimizer_type = "adamw"
+    else:
+        optimizer_type = _string(optimizer, "type", source)
+    if optimizer_type != "adamw":
+        raise InvalidExperimentConfigError(source, "optimizer.type must be adamw")
     device = _string(runtime, "device", source)
     if device != "cpu":
         raise InvalidExperimentConfigError(source, "runtime.device must be cpu")
@@ -87,6 +113,14 @@ def parse_experiment_config(
         isinstance(raw_vocab_size, bool) or not isinstance(raw_vocab_size, int)
     ):
         raise InvalidExperimentConfigError(source, "model.vocab_size must be an integer or null")
+
+    max_steps = _integer(training, "max_steps", source)
+    warmup_steps = _integer(training, "warmup_steps", source)
+    raw_lr_decay_steps = training.get("lr_decay_steps")
+    if legacy_defaults and raw_lr_decay_steps is None:
+        lr_decay_steps = max_steps
+    else:
+        lr_decay_steps = _integer(training, "lr_decay_steps", source)
 
     experiment = ExperimentConfig(
         runtime=RuntimeSettings(
@@ -108,6 +142,7 @@ def parse_experiment_config(
             bias=_boolean(model, "bias", source),
         ),
         optimizer=OptimizerSettings(
+            optimizer_type="adamw",
             learning_rate=_number(optimizer, "learning_rate", source),
             min_learning_rate=_number(optimizer, "min_learning_rate", source),
             weight_decay=_number(optimizer, "weight_decay", source),
@@ -116,8 +151,9 @@ def parse_experiment_config(
             grad_clip=_number(optimizer, "grad_clip", source),
         ),
         training=TrainingSettings(
-            max_steps=_integer(training, "max_steps", source),
-            warmup_steps=_integer(training, "warmup_steps", source),
+            max_steps=max_steps,
+            warmup_steps=warmup_steps,
+            lr_decay_steps=lr_decay_steps,
             eval_interval=_integer(training, "eval_interval", source),
             eval_batches=_integer(training, "eval_batches", source),
             log_interval=_integer(training, "log_interval", source),
@@ -142,10 +178,14 @@ def parse_experiment_config(
     _positive(experiment.training.sample_tokens, "training.sample_tokens", source)
     _positive(experiment.optimizer.learning_rate, "optimizer.learning_rate", source)
     _positive(experiment.optimizer.grad_clip, "optimizer.grad_clip", source)
-    if experiment.training.warmup_steps < 0:
-        raise InvalidExperimentConfigError(source, "training.warmup_steps must be non-negative")
-    if experiment.training.warmup_steps >= experiment.training.max_steps:
-        raise InvalidExperimentConfigError(source, "warmup_steps must be smaller than max_steps")
+    if not (
+        0
+        <= experiment.training.warmup_steps
+        < experiment.training.lr_decay_steps
+        <= experiment.training.max_steps
+    ):
+        reason = "training steps must satisfy 0 <= warmup_steps < lr_decay_steps <= max_steps"
+        raise InvalidExperimentConfigError(source, reason)
     return experiment
 
 

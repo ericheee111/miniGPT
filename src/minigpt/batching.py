@@ -1,17 +1,21 @@
 """Build reproducible autoregressive token batches."""
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final, cast, final, override
+from typing import Final, TypeAlias, cast, final
 
 import numpy as np
 import numpy.typing as npt
 import torch
 from torch import Tensor
+from typing_extensions import override
 
 _ONE_DIMENSIONAL_REASON: Final = "tokens must be one-dimensional"
 _POSITIVE_BATCH_REASON: Final = "batch_size must be positive"
 _POSITIVE_BLOCK_REASON: Final = "block_size must be positive"
+
+TokenArrayLike: TypeAlias = npt.NDArray[np.uint16] | npt.NDArray[np.int64] | Sequence[int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +38,7 @@ class TokenBatcher:
 
     def __init__(
         self,
-        tokens: npt.ArrayLike,
+        tokens: TokenArrayLike,
         *,
         batch_size: int,
         block_size: int,
@@ -67,16 +71,13 @@ class TokenBatcher:
             size=self._batch_size,
             dtype=np.int64,
         )
-        windows: npt.NDArray[np.int64] = np.stack(
-            [
-                self._tokens[
-                    int(cast("np.int64", starts[index])) : int(cast("np.int64", starts[index]))
-                    + self._block_size
-                    + 1
-                ]
-                for index in range(self._batch_size)
-            ]
+        windows = np.empty(
+            (self._batch_size, self._block_size + 1),
+            dtype=np.int64,
         )
+        for index in range(self._batch_size):
+            start = int(cast("np.int64", starts[index]))
+            windows[index] = self._tokens[start : start + self._block_size + 1]
         x = torch.tensor(windows[:, :-1], dtype=torch.long, device=self._device)
         y = torch.tensor(windows[:, 1:], dtype=torch.long, device=self._device)
         return x, y

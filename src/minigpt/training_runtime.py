@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
-from typing import TYPE_CHECKING, Final, Protocol, cast, final, override
+from typing import TYPE_CHECKING, Final, Protocol, cast, final
 
 import numpy as np
 import numpy.typing as npt
 import torch
 from torch import Tensor
+from typing_extensions import override
 
 from minigpt.batching import TokenBatcher
 from minigpt.checkpoint import CheckpointResources
@@ -185,7 +186,7 @@ def run_training_step(components: TrainingComponents, step: int) -> TrainingMetr
         max_learning_rate=config.optimizer.learning_rate,
         min_learning_rate=config.optimizer.min_learning_rate,
         warmup_steps=training.warmup_steps,
-        max_steps=training.max_steps,
+        lr_decay_steps=training.lr_decay_steps,
     )
     set_learning_rate(components.optimizer, learning_rate)
     step_started = perf_counter()

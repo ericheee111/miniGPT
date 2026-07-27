@@ -1,5 +1,7 @@
 """Persist raw CPU benchmark data and a reader-facing Markdown summary."""
 
+from __future__ import annotations
+
 import csv
 import platform
 import sys

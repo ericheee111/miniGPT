@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, cast, final, override
+from typing import TYPE_CHECKING, cast, final
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional
+from typing_extensions import override
 
 if TYPE_CHECKING:
     from minigpt.settings import GPTConfig

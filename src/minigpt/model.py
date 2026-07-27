@@ -1,11 +1,12 @@
 """Define the miniGPT language model and its validation errors."""
 
 from dataclasses import dataclass
-from typing import Final, cast, final, override
+from typing import Final, cast, final
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional
+from typing_extensions import override
 
 from minigpt.layers import MLP, CausalSelfAttention, LayerNorm, TransformerBlock
 from minigpt.settings import GPTConfig, InvalidModelConfigError

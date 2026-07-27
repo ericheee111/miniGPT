@@ -31,12 +31,12 @@ def learning_rate_at_step(
     max_learning_rate: float,
     min_learning_rate: float,
     warmup_steps: int,
-    max_steps: int,
+    lr_decay_steps: int,
 ) -> float:
-    """Return linear warmup followed by cosine decay to the final step."""
+    """Return linear warmup, cosine decay, then the minimum rate."""
     if warmup_steps > 0 and step < warmup_steps:
         return max_learning_rate * (step + 1) / warmup_steps
-    decay_step_count = max_steps - warmup_steps
+    decay_step_count = lr_decay_steps - warmup_steps
     if decay_step_count <= 1:
         return min_learning_rate
     progress = (step - warmup_steps) / (decay_step_count - 1)

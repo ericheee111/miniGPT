@@ -1,10 +1,13 @@
 """Define validated, serializable settings for miniGPT experiments."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Final, Literal, override
+from typing import Final, Literal
 
 import yaml
+from typing_extensions import override
 
 _VOCAB_SIZE_FIELD: Final = "vocab_size"
 _BLOCK_SIZE_FIELD: Final = "block_size"
@@ -141,6 +144,7 @@ class ModelSettings:
 class OptimizerSettings:
     """Configure AdamW, learning-rate decay, and gradient clipping."""
 
+    optimizer_type: Literal["adamw"]
     learning_rate: float
     min_learning_rate: float
     weight_decay: float
@@ -155,6 +159,7 @@ class TrainingSettings:
 
     max_steps: int
     warmup_steps: int
+    lr_decay_steps: int
     eval_interval: int
     eval_batches: int
     log_interval: int
@@ -213,6 +218,7 @@ class ExperimentConfig:
                 "bias": self.model.bias,
             },
             "optimizer": {
+                "type": self.optimizer.optimizer_type,
                 "learning_rate": self.optimizer.learning_rate,
                 "min_learning_rate": self.optimizer.min_learning_rate,
                 "weight_decay": self.optimizer.weight_decay,
@@ -223,6 +229,7 @@ class ExperimentConfig:
             "training": {
                 "max_steps": self.training.max_steps,
                 "warmup_steps": self.training.warmup_steps,
+                "lr_decay_steps": self.training.lr_decay_steps,
                 "eval_interval": self.training.eval_interval,
                 "eval_batches": self.training.eval_batches,
                 "log_interval": self.training.log_interval,

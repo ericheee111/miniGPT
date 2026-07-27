@@ -36,6 +36,7 @@ def experiment_config(tmp_path: Path) -> ExperimentConfig:
             bias=False,
         ),
         optimizer=OptimizerSettings(
+            optimizer_type="adamw",
             learning_rate=1e-3,
             min_learning_rate=1e-4,
             weight_decay=0.01,
@@ -46,6 +47,7 @@ def experiment_config(tmp_path: Path) -> ExperimentConfig:
         training=TrainingSettings(
             max_steps=4,
             warmup_steps=1,
+            lr_decay_steps=4,
             eval_interval=2,
             eval_batches=1,
             log_interval=1,

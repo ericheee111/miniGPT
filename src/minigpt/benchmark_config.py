@@ -1,13 +1,18 @@
 """Parse and validate CPU benchmark matrix configuration."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import cast, override
+from typing import TypeAlias, cast
 
 import yaml
+from typing_extensions import override
 
-type ConfigValue = str | int | float | bool | None | list["ConfigValue"] | dict[str, "ConfigValue"]
-type ConfigMapping = dict[str, ConfigValue]
+ConfigValue: TypeAlias = (
+    str | int | float | bool | list["ConfigValue"] | dict[str, "ConfigValue"] | None
+)
+ConfigMapping: TypeAlias = dict[str, ConfigValue]
 
 
 @dataclass(frozen=True, slots=True)
