@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, TypeAlias, TypedDict, cast
+from hashlib import sha256
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypedDict, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -13,15 +14,16 @@ import torch
 from torch import Tensor, nn
 from typing_extensions import override
 
-from minigpt.config import parse_experiment_config
+from minigpt.config import parse_experiment_config, parse_legacy_experiment_config
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from minigpt.batching import TokenBatcher
-    from minigpt.settings import ExperimentConfig
+    from minigpt.settings import DataSettings, ExperimentConfig
 
-_CHECKPOINT_FORMAT_VERSION: Final = 1
+_LEGACY_CHECKPOINT_FORMAT_VERSION: Final = 1
+_CHECKPOINT_FORMAT_VERSION: Final = 2
 _MAPPING_REASON: Final = "top-level value must be a mapping"
 _VERSION_REASON: Final = "unsupported format version"
 _STEP_REASON: Final = "step must be an integer"
@@ -30,6 +32,7 @@ _NUMPY_STATE_REASON: Final = "NumPy random state is malformed"
 _FIELDS_REASON: Final = "checkpoint fields have invalid types"
 _PYTHON_STATE_PARTS: Final = 3
 _UNEXPECTED_NUMPY_STATE: Final = "legacy NumPy random state must be a tuple"
+_HASH_CHUNK_BYTES: Final = 1024 * 1024
 
 JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
 StateValue: TypeAlias = (
@@ -47,10 +50,18 @@ PythonRandomState: TypeAlias = tuple[int, tuple[int, ...], float | None]
 NumpyRandomState: TypeAlias = tuple[str, npt.NDArray[np.uint32], int, int, float]
 
 
-class CheckpointPayload(TypedDict):
-    """Describe the top-level fields persisted in a training checkpoint."""
+class DatasetFingerprintsPayload(TypedDict):
+    """Describe persisted dataset SHA-256 values."""
 
-    format_version: int
+    tokenizer_sha256: str
+    train_sha256: str
+    val_sha256: str
+
+
+class CheckpointV1Payload(TypedDict):
+    """Describe legacy fields retained for inference compatibility."""
+
+    format_version: Literal[1]
     step: int
     config_yaml: str
     model_state: dict[str, Tensor]
@@ -60,6 +71,26 @@ class CheckpointPayload(TypedDict):
     torch_random_state: torch.Tensor
     train_batcher_random_state: str
     val_batcher_random_state: str
+
+
+class CheckpointV2Payload(TypedDict):
+    """Describe the complete state persisted for exact training resume."""
+
+    format_version: Literal[2]
+    completed_step: int
+    config_yaml: str
+    model_state: dict[str, Tensor]
+    optimizer_state: dict[str, StateValue]
+    python_random_state: PythonRandomState
+    numpy_random_state_json: str
+    torch_random_state: Tensor
+    train_batcher_random_state: str
+    val_batcher_random_state: str
+    sample_generator_random_state: Tensor
+    dataset_fingerprints: DatasetFingerprintsPayload
+
+
+VersionedCheckpointPayload: TypeAlias = CheckpointV1Payload | CheckpointV2Payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,10 +107,48 @@ class CheckpointFormatError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class LegacyCheckpointResumeError(RuntimeError):
+    """Reject a v1 checkpoint that lacks exact-resume state."""
+
+    path: Path
+
+    @override
+    def __str__(self) -> str:
+        """Explain that legacy checkpoints are inference-only."""
+        return f"checkpoint v1 at {self.path} cannot be used for training resume"
+
+
+@dataclass(frozen=True, slots=True)
 class ResumeState:
     """Describe where the training loop continues after restoration."""
 
     next_step: int
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetFingerprints:
+    """Identify the persisted tokenizer, training data, and validation data."""
+
+    tokenizer_sha256: str
+    train_sha256: str
+    val_sha256: str
+
+
+def _sha256_file(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(_HASH_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def compute_dataset_fingerprints(config: DataSettings) -> DatasetFingerprints:
+    """Hash the exact persisted artifacts that define token meaning and batches."""
+    return DatasetFingerprints(
+        tokenizer_sha256=_sha256_file(config.tokenizer_path),
+        train_sha256=_sha256_file(config.train_path),
+        val_sha256=_sha256_file(config.val_path),
+    )
 
 
 def _numpy_random_state_json() -> str:
@@ -184,34 +253,36 @@ def _validated_python_state(value: StateValue, path: Path) -> PythonRandomState:
     )
 
 
-def _load_payload(path: Path) -> CheckpointPayload:
-    loaded = cast(
-        "StateValue",
-        torch.load(path, map_location="cpu", weights_only=True),
-    )
-    if not isinstance(loaded, dict):
-        raise CheckpointFormatError(path, _MAPPING_REASON)
-    if loaded.get("format_version") != _CHECKPOINT_FORMAT_VERSION:
-        raise CheckpointFormatError(path, _VERSION_REASON)
-    step = loaded.get("step")
+@dataclass(frozen=True, slots=True)
+class _CommonCheckpointFields:
+    config_yaml: str
+    model_state: dict[str, Tensor]
+    optimizer_state: dict[str, StateValue]
+    python_random_state: PythonRandomState
+    numpy_random_state_json: str
+    torch_random_state: Tensor
+    train_batcher_random_state: str
+    val_batcher_random_state: str
+
+
+def _validated_common_fields(
+    loaded: dict[str | int, StateValue],
+    path: Path,
+) -> _CommonCheckpointFields:
     config_yaml = loaded.get("config_yaml")
     numpy_state = loaded.get("numpy_random_state_json")
     torch_state = loaded.get("torch_random_state")
     train_batcher_state = loaded.get("train_batcher_random_state")
     val_batcher_state = loaded.get("val_batcher_random_state")
     if (
-        isinstance(step, bool)
-        or not isinstance(step, int)
-        or not isinstance(config_yaml, str)
+        not isinstance(config_yaml, str)
         or not isinstance(numpy_state, str)
         or not isinstance(torch_state, Tensor)
         or not isinstance(train_batcher_state, str)
         or not isinstance(val_batcher_state, str)
     ):
         raise CheckpointFormatError(path, _FIELDS_REASON)
-    return CheckpointPayload(
-        format_version=_CHECKPOINT_FORMAT_VERSION,
-        step=step,
+    return _CommonCheckpointFields(
         config_yaml=config_yaml,
         model_state=_validated_model_state(loaded.get("model_state"), path),
         optimizer_state=_validated_optimizer_state(loaded.get("optimizer_state"), path),
@@ -223,6 +294,97 @@ def _load_payload(path: Path) -> CheckpointPayload:
     )
 
 
+def _validated_dataset_fingerprints(
+    value: StateValue,
+    path: Path,
+) -> DatasetFingerprintsPayload:
+    if not isinstance(value, dict):
+        raise CheckpointFormatError(path, _FIELDS_REASON)
+    tokenizer_sha256 = value.get("tokenizer_sha256")
+    train_sha256 = value.get("train_sha256")
+    val_sha256 = value.get("val_sha256")
+    if (
+        not isinstance(tokenizer_sha256, str)
+        or not isinstance(train_sha256, str)
+        or not isinstance(val_sha256, str)
+    ):
+        raise CheckpointFormatError(path, _FIELDS_REASON)
+    return DatasetFingerprintsPayload(
+        tokenizer_sha256=tokenizer_sha256,
+        train_sha256=train_sha256,
+        val_sha256=val_sha256,
+    )
+
+
+def _load_v1_payload(
+    loaded: dict[str | int, StateValue],
+    path: Path,
+) -> CheckpointV1Payload:
+    step = loaded.get("step")
+    if isinstance(step, bool) or not isinstance(step, int):
+        raise CheckpointFormatError(path, _STEP_REASON)
+    common = _validated_common_fields(loaded, path)
+    return CheckpointV1Payload(
+        format_version=1,
+        step=step,
+        config_yaml=common.config_yaml,
+        model_state=common.model_state,
+        optimizer_state=common.optimizer_state,
+        python_random_state=common.python_random_state,
+        numpy_random_state_json=common.numpy_random_state_json,
+        torch_random_state=common.torch_random_state,
+        train_batcher_random_state=common.train_batcher_random_state,
+        val_batcher_random_state=common.val_batcher_random_state,
+    )
+
+
+def _load_v2_payload(
+    loaded: dict[str | int, StateValue],
+    path: Path,
+) -> CheckpointV2Payload:
+    completed_step = loaded.get("completed_step")
+    sample_generator_state = loaded.get("sample_generator_random_state")
+    if (
+        isinstance(completed_step, bool)
+        or not isinstance(completed_step, int)
+        or not isinstance(sample_generator_state, Tensor)
+    ):
+        raise CheckpointFormatError(path, _FIELDS_REASON)
+    common = _validated_common_fields(loaded, path)
+    return CheckpointV2Payload(
+        format_version=2,
+        completed_step=completed_step,
+        config_yaml=common.config_yaml,
+        model_state=common.model_state,
+        optimizer_state=common.optimizer_state,
+        python_random_state=common.python_random_state,
+        numpy_random_state_json=common.numpy_random_state_json,
+        torch_random_state=common.torch_random_state,
+        train_batcher_random_state=common.train_batcher_random_state,
+        val_batcher_random_state=common.val_batcher_random_state,
+        sample_generator_random_state=sample_generator_state,
+        dataset_fingerprints=_validated_dataset_fingerprints(
+            loaded.get("dataset_fingerprints"),
+            path,
+        ),
+    )
+
+
+def _load_versioned_payload(path: Path) -> VersionedCheckpointPayload:
+    loaded = cast(
+        "StateValue",
+        torch.load(path, map_location="cpu", weights_only=True),
+    )
+    if not isinstance(loaded, dict):
+        raise CheckpointFormatError(path, _MAPPING_REASON)
+    version = loaded.get("format_version")
+    if version == _LEGACY_CHECKPOINT_FORMAT_VERSION:
+        return _load_v1_payload(loaded, path)
+    if version == _CHECKPOINT_FORMAT_VERSION:
+        return _load_v2_payload(loaded, path)
+    raise CheckpointFormatError(path, _VERSION_REASON)
+
+
 @dataclass(frozen=True, slots=True)
 class CheckpointResources:
     """Group mutable objects whose state participates in checkpointing."""
@@ -231,6 +393,8 @@ class CheckpointResources:
     optimizer: torch.optim.Optimizer
     train_batcher: TokenBatcher
     val_batcher: TokenBatcher
+    sample_generator: torch.Generator
+    dataset_fingerprints: DatasetFingerprints
 
 
 def save_checkpoint(
@@ -243,9 +407,9 @@ def save_checkpoint(
     """Atomically persist training and random state needed for exact resume."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_suffix(path.suffix + ".tmp")
-    payload: CheckpointPayload = {
+    payload: CheckpointV2Payload = {
         "format_version": _CHECKPOINT_FORMAT_VERSION,
-        "step": step,
+        "completed_step": step,
         "config_yaml": config.to_yaml(),
         "model_state": resources.model.state_dict(),
         "optimizer_state": cast(
@@ -257,6 +421,12 @@ def save_checkpoint(
         "torch_random_state": torch.get_rng_state(),
         "train_batcher_random_state": resources.train_batcher.capture_random_state(),
         "val_batcher_random_state": resources.val_batcher.capture_random_state(),
+        "sample_generator_random_state": resources.sample_generator.get_state(),
+        "dataset_fingerprints": DatasetFingerprintsPayload(
+            tokenizer_sha256=resources.dataset_fingerprints.tokenizer_sha256,
+            train_sha256=resources.dataset_fingerprints.train_sha256,
+            val_sha256=resources.dataset_fingerprints.val_sha256,
+        ),
     }
     torch.save(payload, temporary_path)
     _ = temporary_path.replace(path)
@@ -268,7 +438,9 @@ def load_checkpoint(
     resources: CheckpointResources,
 ) -> ResumeState:
     """Restore model, optimizer, step, global RNGs, and batch samplers."""
-    payload = _load_payload(path)
+    payload = _load_versioned_payload(path)
+    if payload["format_version"] == _LEGACY_CHECKPOINT_FORMAT_VERSION:
+        raise LegacyCheckpointResumeError(path)
     _ = resources.model.load_state_dict(payload["model_state"])
     resources.optimizer.load_state_dict(payload["optimizer_state"])
     random.setstate(payload["python_random_state"])
@@ -276,16 +448,19 @@ def load_checkpoint(
     torch.set_rng_state(payload["torch_random_state"])
     resources.train_batcher.restore_random_state(payload["train_batcher_random_state"])
     resources.val_batcher.restore_random_state(payload["val_batcher_random_state"])
-    return ResumeState(next_step=payload["step"] + 1)
+    _ = resources.sample_generator.set_state(payload["sample_generator_random_state"])
+    return ResumeState(next_step=payload["completed_step"] + 1)
 
 
 def load_checkpoint_config(path: Path) -> ExperimentConfig:
     """Load the resolved experiment configuration stored in a checkpoint."""
-    payload = _load_payload(path)
+    payload = _load_versioned_payload(path)
+    if payload["format_version"] == _LEGACY_CHECKPOINT_FORMAT_VERSION:
+        return parse_legacy_experiment_config(payload["config_yaml"], path)
     return parse_experiment_config(payload["config_yaml"], path)
 
 
 def load_model_state(path: Path, model: nn.Module) -> None:
     """Load only model weights for inference."""
-    payload = _load_payload(path)
+    payload = _load_versioned_payload(path)
     _ = model.load_state_dict(payload["model_state"])

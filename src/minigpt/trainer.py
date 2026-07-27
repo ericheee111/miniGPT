@@ -24,8 +24,6 @@ from minigpt.training_runtime import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from minigpt.data import CharTokenizer
-    from minigpt.model import GPT
     from minigpt.settings import ExperimentConfig, TrainingSettings
 
 _LOGGER: Final = logging.getLogger(__name__)
@@ -61,10 +59,11 @@ class _OutputPaths:
 def _append_sample(
     path: Path,
     step: int,
-    model: GPT,
-    tokenizer: CharTokenizer,
+    components: TrainingComponents,
     settings: TrainingSettings,
 ) -> None:
+    model = components.model
+    tokenizer = components.tokenizer
     was_training = model.training
     _ = model.eval()
     prompt_ids = torch.tensor([tokenizer.encode(settings.sample_prompt)], dtype=torch.long)
@@ -73,6 +72,7 @@ def _append_sample(
         max_new_tokens=settings.sample_tokens,
         temperature=_SAMPLE_TEMPERATURE,
         top_k=min(_SAMPLE_TOP_K, tokenizer.vocab_size),
+        generator=components.sample_generator,
     )
     _ = model.train(was_training)
     token_ids = [int(generated[0, index]) for index in range(generated.shape[1])]
@@ -126,8 +126,7 @@ def _record_step_events(
         _append_sample(
             paths.samples,
             metrics.step,
-            components.model,
-            components.tokenizer,
+            components,
             training,
         )
     if _event_due(metrics.step, training.checkpoint_interval, training.max_steps):

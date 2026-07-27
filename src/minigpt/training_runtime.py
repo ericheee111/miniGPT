@@ -13,12 +13,17 @@ from torch import Tensor
 from typing_extensions import override
 
 from minigpt.batching import TokenBatcher
-from minigpt.checkpoint import CheckpointResources
+from minigpt.checkpoint import (
+    CheckpointResources,
+    DatasetFingerprints,
+    compute_dataset_fingerprints,
+)
 from minigpt.data import CharTokenizer
 from minigpt.metrics import TrainingMetrics, cpu_memory_mb
 from minigpt.model import GPT
 from minigpt.optimization import (
     create_adamw,
+    create_sample_generator,
     learning_rate_at_step,
     seed_everything,
     set_learning_rate,
@@ -114,6 +119,8 @@ class TrainingComponents:
     optimizer: torch.optim.AdamW
     train_batcher: TokenBatcher
     val_batcher: TokenBatcher
+    sample_generator: torch.Generator
+    dataset_fingerprints: DatasetFingerprints
     checkpoint_resources: CheckpointResources
 
 
@@ -160,11 +167,15 @@ def build_training_components(config: ExperimentConfig) -> TrainingComponents:
     )
     model = GPT(resolved.model.to_gpt_config(resolved.data.block_size))
     optimizer = create_adamw(model, resolved.optimizer)
+    sample_generator = create_sample_generator(resolved.runtime.seed)
+    dataset_fingerprints = compute_dataset_fingerprints(resolved.data)
     resources = CheckpointResources(
         model=model,
         optimizer=optimizer,
         train_batcher=train_batcher,
         val_batcher=val_batcher,
+        sample_generator=sample_generator,
+        dataset_fingerprints=dataset_fingerprints,
     )
     return TrainingComponents(
         config=resolved,
@@ -173,6 +184,8 @@ def build_training_components(config: ExperimentConfig) -> TrainingComponents:
         optimizer=optimizer,
         train_batcher=train_batcher,
         val_batcher=val_batcher,
+        sample_generator=sample_generator,
+        dataset_fingerprints=dataset_fingerprints,
         checkpoint_resources=resources,
     )
 
