@@ -3,7 +3,7 @@
 > CPU-first GPT Training and Profiling Lab
 > 从零实现、可复现、可断点续训、可性能分析的字符级 GPT 工程。
 
-**Python 3.14 only · PyTorch CPU · Windows-first · Strict typing · Reproducible training**
+**Python 3.11–3.14 · PyTorch CPU · Windows-first + Linux CI · Strict typing · Exact resume**
 
 ## 项目概览
 
@@ -15,8 +15,8 @@ TensorBoard、基准测试和 PyTorch Profiler 串成一条可验证的工程链
 项目优先解决三个问题：
 
 - **模型原理可解释**：关键网络结构均在 `src/minigpt/` 内实现，张量形状与因果遮罩清晰可查。
-- **实验可以复现**：配置、模型、优化器、训练步数和 Python/NumPy/PyTorch/batcher RNG
-  都进入 checkpoint。
+- **实验可以复现**：checkpoint format v2 保存完整实验定义、模型、优化器、完成步数、
+  Python/NumPy/PyTorch 全局 RNG、train/val batcher RNG 和独立 sample generator RNG。
 - **性能可以测量**：基准测试区分预热与计时，输出重复测量、吞吐、离散程度和内存；
   Profiler trace 可以在 Chrome Trace 或 Perfetto 中检查算子级时间线。
 
@@ -29,8 +29,8 @@ miniGPT is a CPU-first character-level GPT training lab implemented with PyTorch
 hand-written Transformer stack, deterministic data preparation, YAML-driven experiments, exact
 checkpoint resume, JSONL metrics, TensorBoard logging, repeatable CPU benchmarks, and PyTorch
 Profiler traces. The repository is intentionally small enough to study end to end while keeping
-production-minded boundaries: Python 3.14, strict static typing, explicit serialization validation,
-and four local quality gates.
+production-minded boundaries: Python 3.11 through Python 3.14, strict static typing, explicit
+serialization validation, and the same four quality gates on Windows and Linux CI.
 
 ## 功能与边界
 
@@ -40,7 +40,7 @@ and four local quality gates.
 - 自定义 LayerNorm、causal self-attention、MLP、pre-norm residual blocks。
 - AdamW 参数分组、线性 warmup、余弦衰减和梯度裁剪。
 - 验证集评估、定期采样、JSONL 指标与 TensorBoard。
-- 模型、优化器、配置、step 和全部 RNG 状态的精确 checkpoint。
+- checkpoint format v2、SHA-256 数据身份校验与 bit-exact 训练恢复。
 - 训练恢复、独立生成 CLI、CPU benchmark 和 operator profiler。
 - Ruff `ALL`、basedpyright `all` 与严格 pytest。
 
@@ -52,8 +52,8 @@ and four local quality gates.
 
 ## 环境要求与安装
 
-- Windows 11 / PowerShell（代码本身尽量保持平台无关）。
-- **Python 3.14.x**；`pyproject.toml` 会拒绝 3.13 及更早版本。
+- Windows 11 / PowerShell 是主要开发环境；GitHub Actions 同时验证 Linux。
+- **Python 3.11、3.12、3.13 或 3.14**；`pyproject.toml` 声明 `>=3.11,<3.15`。
 - CPU 版 PyTorch 2.12 或项目声明的兼容版本。
 
 ```powershell
@@ -118,10 +118,16 @@ python train.py --config configs/char_gpt.yaml
 python train.py --config configs/char_gpt_smoke.yaml
 ```
 
-从 checkpoint 继续，并覆盖总步数：
+临时运行到绝对边界 `K`（exclusive；执行 step `0` 到 `K - 1`）：
 
 ```powershell
-python train.py --config configs/char_gpt_smoke.yaml --resume checkpoints/smoke/latest.pt --max-steps 4
+python train.py --config configs/char_gpt.yaml --run-until-step 250
+```
+
+使用同一份完整实验配置继续到另一个运行边界：
+
+```powershell
+python train.py --config configs/char_gpt.yaml --resume checkpoints/char_gpt/latest.pt --run-until-step 500
 ```
 
 生成文本：
@@ -130,9 +136,31 @@ python train.py --config configs/char_gpt_smoke.yaml --resume checkpoints/smoke/
 python generate.py --checkpoint checkpoints/smoke/latest.pt --prompt "ROMEO:" --max-new-tokens 64 --temperature 0.8 --top-k 20 --seed 1337
 ```
 
-checkpoint 使用临时文件后原子替换，保存模型和优化器 state dict、解析后的 YAML 配置、
-当前 step、torch RNG、Python RNG、NumPy 全局 RNG，以及训练/验证 batcher 的独立 RNG。
-恢复后从 `saved_step + 1` 开始，因此不会重复已有 metrics step。
+配置中的 `training.max_steps` 是完整实验计划，`training.lr_decay_steps` 是独立的学习率
+调度 horizon；`--run-until-step` 只决定本次进程在哪里退出，不改写 checkpoint 中的实验
+定义。validation 和 sample 仅由全局绝对 step 与各自 interval 触发。正常进程退出会保证
+保存 checkpoint，但不会为了退出额外运行 validation 或 sample。
+
+checkpoint format v2 使用临时文件后原子替换，至少保存并验证：
+
+- model state、optimizer state、`completed_step` 和完整解析配置；
+- Python、NumPy、PyTorch 全局 RNG；
+- train batcher、validation batcher 和独立 sample generator RNG；
+- `tokenizer.json`、`train.npy`、`val.npy` 的 SHA-256 fingerprint；
+- checkpoint format version。
+
+恢复前会比较模型、tokenizer/vocabulary、数据身份、batch/block size、AdamW 参数、
+learning-rate schedule、`lr_decay_steps`、seed 和其他影响训练轨迹的配置。输出/TensorBoard
+目录、日志与 checkpoint 频率可以改变。由于采样使用独立 generator，`sample_interval`、
+`sample_tokens` 和 `sample_prompt` 的变化不会改变模型参数轨迹，但会改变样本文件内容和
+后续样本流。
+
+| Checkpoint | 读取配置 | 加载模型/生成 | 恢复训练 |
+|---|---:|---:|---:|
+| v1 | 支持（补齐确定性的旧字段默认值） | 支持 | 禁止，抛 `LegacyCheckpointResumeError` |
+| v2 | 支持 | 支持 | 支持，先严格验证配置与数据身份 |
+
+本阶段不提供 v1 的“尽力迁移”或不精确恢复开关；v1 仅用于推理。
 
 ## TensorBoard 与训练产物
 
@@ -158,8 +186,8 @@ tensorboard --logdir outputs/smoke/tensorboard
 | `runtime` | seed、CPU 线程数和设备 |
 | `data` | token 文件目录、block size、batch size |
 | `model` | layer/head/embedding/dropout/bias |
-| `optimizer` | AdamW、学习率范围、betas、weight decay、grad clip |
-| `training` | 总步数、评估/日志/checkpoint/sample 周期和输出目录 |
+| `optimizer` | `type: adamw`、学习率范围、betas、weight decay、grad clip |
+| `training` | `max_steps`、`lr_decay_steps`、评估/日志/checkpoint/sample 周期和输出目录 |
 
 `model.vocab_size` 可以为 `null`，训练时会从 `tokenizer.json` 解析并校验；checkpoint
 保存的是已经解析的完整配置。
@@ -240,9 +268,10 @@ Intel Core i7-14700（20 physical / 28 logical cores）。
 
 ### Smoke 训练证据
 
-初始 2-step smoke run 的 loss 从 `4.3636` 下降到 `4.2493`，验证 loss 从 `4.2396`
-到 `4.2283`；随后从 checkpoint 恢复并延长到 step 3，metrics 保持 `[0, 1, 2, 3]`
-连续且无重复。两步 smoke 仅证明链路可运行和恢复状态一致，不代表模型已经收敛。
+自动化 exact-resume 测试用同一份完整实验配置比较连续运行与在非调度点退出后恢复：
+模型每个 tensor、optimizer 状态、下一批 train/validation token、后续 sample generator
+输出、学习率、loss 和 metrics step 均完全相同，且 step 不重复、不丢失。`step_time_ms`、
+`tokens_per_sec`、RSS 等 wall-clock/系统指标会自然波动，不要求相同。
 
 ## 项目结构
 
@@ -273,7 +302,7 @@ miniGPT/
 
 ## 质量门禁与验证
 
-必须使用 Python 3.14，并按以下顺序执行：
+本地在任一受支持 Python 版本上按以下顺序执行：
 
 ```powershell
 ruff format src tests
@@ -293,6 +322,7 @@ python profile_model.py --help
 ```
 
 测试遵循 Given/When/Then 结构；网络相关测试用 `file://` 本地语料，不依赖真实 HTTP。
+`.github/workflows/quality.yml` 在 Windows/Python 3.14 与 Linux/Python 3.11 上执行相同门禁。
 
 ## Roadmap
 
@@ -300,7 +330,7 @@ python profile_model.py --help
 - 增加 BPE tokenizer，并保持 checkpoint/tokenizer 版本兼容。
 - 增加 mixed precision 与 CUDA benchmark，同时保留 CPU baseline。
 - 增加梯度累积、数据加载 worker 和更长训练实验。
-- 建立 CI 矩阵；当前仓库的完成信号仍是本地四道门禁。
+- 扩展 CI 到更多 PyTorch/Python 组合，同时保留当前跨平台最小矩阵。
 
 ## Resume
 
@@ -308,22 +338,22 @@ python profile_model.py --help
 
 - 从零实现字符级 GPT，包括自定义 LayerNorm、因果多头自注意力、MLP、残差
   Transformer Block、交叉熵训练与 temperature/top-k 自回归采样。
-- 设计可精确恢复的训练系统，原子保存模型、AdamW、配置、step 及
-  Python/NumPy/PyTorch/数据采样 RNG 状态，避免断点续训重复 step。
+- 设计 checkpoint v2 精确恢复系统，原子保存模型、AdamW、完整配置、数据 SHA-256、
+  completed step 及全部全局/批处理/采样 RNG，恢复前严格校验实验身份。
 - 构建 CPU 性能工程链路，使用重复 benchmark、吞吐/CV/RSS 指标与 PyTorch Profiler
   scope 定位数据、前反向和优化器阶段开销。
-- 在 Python 3.14 下执行 Ruff `ALL`、basedpyright `all` 和严格 pytest 门禁，并对
-  YAML/JSON/checkpoint 第三方边界做运行时验证与静态类型隔离。
+- 在 Python 3.11–3.14 下执行 Ruff `ALL`、basedpyright `all` 和严格 pytest 门禁，并在
+  Windows/Linux CI 中验证可移植性。
 
 English resume bullets:
 
 - Implemented a character-level GPT from first principles in PyTorch, including custom
   normalization, causal multi-head attention, feed-forward blocks, autoregressive loss, and
   temperature/top-k sampling.
-- Built exact-resume checkpointing for model, AdamW, configuration, step, and independent
-  Python/NumPy/PyTorch/data-sampler RNG states with atomic file replacement.
+- Built versioned exact-resume checkpointing for model, AdamW, resolved configuration, SHA-256
+  dataset identity, completed step, and global/batcher/sample RNG states with atomic replacement.
 - Created a repeatable CPU performance workflow with warmups, repeated measurements,
   throughput/CV/RSS reporting, and PyTorch Profiler scopes for data, forward/backward, and
   optimizer phases.
-- Enforced Python 3.14 quality gates with Ruff ALL, basedpyright all, strict pytest, and typed
-  validation at YAML, JSON, tensor, and checkpoint boundaries.
+- Enforced Python 3.11–3.14 quality gates with Ruff ALL, basedpyright all, strict pytest,
+  Windows/Linux CI, and typed validation at YAML, JSON, tensor, and checkpoint boundaries.

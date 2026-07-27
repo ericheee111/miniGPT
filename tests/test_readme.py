@@ -20,6 +20,17 @@ REQUIRED_HEADINGS = (
     "## Roadmap",
     "## Resume",
 )
+STAGE_6_CONTRACTS = (
+    "Python 3.11",
+    "Python 3.14",
+    "lr_decay_steps",
+    "--run-until-step",
+    "checkpoint format v2",
+    "v1",
+    "LegacyCheckpointResumeError",
+    "Windows",
+    "Linux",
+)
 
 
 def test_readme_documents_stable_user_contracts() -> None:
@@ -33,6 +44,15 @@ def test_readme_documents_stable_user_contracts() -> None:
     assert "ruff check src tests" in readme
     assert "basedpyright" in readme
     assert "pytest" in readme
+
+
+def test_readme_documents_stage_6_resume_and_portability_contracts() -> None:
+    # Given: the repository README after correctness and portability hardening.
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    # When/Then: each proven public contract is present and the old override is absent.
+    assert all(contract in readme for contract in STAGE_6_CONTRACTS)
+    assert "--resume checkpoints/smoke/latest.pt --max-steps" not in readme
 
 
 def test_readme_local_markdown_links_exist() -> None:
