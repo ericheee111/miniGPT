@@ -84,7 +84,7 @@ class TrainingStepWorkload:
         """Execute one uninstrumented forward/backward/optimizer training step."""
         inputs, targets = self.batcher.next_batch()
         self.optimizer.zero_grad(set_to_none=True)
-        _, loss = self.model.forward(inputs, targets)
+        _, loss = cast("tuple[torch.Tensor, torch.Tensor | None]", self.model(inputs, targets))
         if loss is None:
             raise InvalidBenchmarkStateError(MISSING_LOSS_REASON)
         backward = cast("Callable[[], object | None]", loss.backward)
@@ -99,7 +99,7 @@ class TrainingStepWorkload:
             inputs, targets = self.batcher.next_batch()
         with record_function("forward_backward"):
             self.optimizer.zero_grad(set_to_none=True)
-            _, loss = self.model.forward(inputs, targets)
+            _, loss = cast("tuple[torch.Tensor, torch.Tensor | None]", self.model(inputs, targets))
             if loss is None:
                 raise InvalidBenchmarkStateError(MISSING_LOSS_REASON)
             backward = cast("Callable[[], object | None]", loss.backward)

@@ -1,7 +1,7 @@
 """Define the miniGPT language model and its validation errors."""
 
 from dataclasses import dataclass
-from typing import Final, final, override
+from typing import Final, cast, final, override
 
 import torch
 from torch import Tensor, nn
@@ -21,6 +21,7 @@ __all__ = (
     "LayerNorm",
     "TokenIdOutOfRangeError",
     "TransformerBlock",
+    "UnexpectedTransformerBlockError",
 )
 
 _INPUT_NAME: Final = "input"
@@ -76,6 +77,21 @@ class InvalidGenerationConfigError(ValueError):
     def __str__(self) -> str:
         """Render the failed generation constraint."""
         return f"invalid generation configuration: {self.reason}"
+
+
+@dataclass(frozen=True, slots=True)
+class UnexpectedTransformerBlockError(RuntimeError):
+    """Report an unexpected module in the Transformer stack."""
+
+    index: int
+    actual_type: str
+
+    @override
+    def __str__(self) -> str:
+        """Render the invalid block position and type."""
+        return (
+            f"unexpected GPT block {self.index}: expected TransformerBlock, got {self.actual_type}"
+        )
 
 
 @final
@@ -137,15 +153,18 @@ class GPT(nn.Module):
                 )
 
         positions = torch.arange(time_steps, device=token_ids.device)
-        token_embeddings = self.token_embedding.forward(token_ids)
-        position_embeddings = self.position_embedding.forward(positions)
-        hidden_states = self.embedding_dropout.forward(token_embeddings + position_embeddings)
-        for module in self.blocks:
+        token_embeddings = cast("Tensor", self.token_embedding(token_ids))
+        position_embeddings = cast("Tensor", self.position_embedding(positions))
+        hidden_states = cast(
+            "Tensor",
+            self.embedding_dropout(token_embeddings + position_embeddings),
+        )
+        for index, module in enumerate(self.blocks):
             if not isinstance(module, TransformerBlock):
-                continue
-            hidden_states = module.forward(hidden_states)
-        normalized = self.final_norm.forward(hidden_states)
-        logits = self.lm_head.forward(normalized)
+                raise UnexpectedTransformerBlockError(index, type(module).__name__)
+            hidden_states = cast("Tensor", module(hidden_states))
+        normalized = cast("Tensor", self.final_norm(hidden_states))
+        logits = cast("Tensor", self.lm_head(normalized))
 
         loss: Tensor | None = None
         if targets is not None:
@@ -180,7 +199,7 @@ class GPT(nn.Module):
         generated = token_ids
         for _ in range(max_new_tokens):
             model_input = generated[:, -self.config.block_size :]
-            logits, _ = self.forward(model_input)
+            logits, _ = cast("tuple[Tensor, Tensor | None]", self(model_input))
             next_token_logits = logits[:, -1, :] / temperature
             if top_k is not None:
                 retained_count = min(top_k, self.config.vocab_size)

@@ -124,7 +124,7 @@ def evaluate(model: GPT, batcher: TokenBatcher, batch_count: int) -> float:
     losses: list[float] = []
     for _ in range(batch_count):
         inputs, targets = batcher.next_batch()
-        _, loss = model.forward(inputs, targets)
+        _, loss = cast("tuple[Tensor, Tensor | None]", model(inputs, targets))
         if loss is None:
             raise InvalidTrainingStateError(_VALIDATION_LOSS_REASON)
         losses.append(tensor_scalar(loss))
@@ -195,7 +195,10 @@ def run_training_step(components: TrainingComponents, step: int) -> TrainingMetr
 
     forward_backward_started = perf_counter()
     components.optimizer.zero_grad(set_to_none=True)
-    _, loss = components.model.forward(inputs, targets)
+    _, loss = cast(
+        "tuple[Tensor, Tensor | None]",
+        components.model(inputs, targets),
+    )
     if loss is None:
         raise InvalidTrainingStateError(_TRAINING_LOSS_REASON)
     _backward(loss)

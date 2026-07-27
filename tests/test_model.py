@@ -1,7 +1,18 @@
+from typing import cast
+
 import pytest
 import torch
+from torch import Tensor, nn
 
 from minigpt import model
+
+
+def call_gpt(
+    gpt: model.GPT,
+    token_ids: Tensor,
+    targets: Tensor | None = None,
+) -> tuple[Tensor, Tensor | None]:
+    return cast("tuple[Tensor, Tensor | None]", gpt(token_ids, targets))
 
 
 def tiny_config() -> model.GPTConfig:
@@ -27,7 +38,7 @@ def test_layer_norm_normalizes_last_dimension() -> None:
     )
 
     # When: normalization is applied across the embedding dimension.
-    normalized = layer_norm.forward(hidden_states)
+    normalized = cast("Tensor", layer_norm(hidden_states))
 
     # Then: each token vector has approximately zero mean and unit variance.
     assert torch.allclose(normalized.mean(dim=-1), torch.zeros(2, 2), atol=1e-6)
@@ -40,7 +51,7 @@ def test_gpt_forward_returns_expected_logits_shape() -> None:
     token_ids = torch.tensor([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=torch.long)
 
     # When: a forward pass runs without training targets.
-    logits, loss = gpt.forward(token_ids)
+    logits, loss = call_gpt(gpt, token_ids)
 
     # Then: every position has one logit per vocabulary item and no loss is computed.
     assert logits.shape == (2, 4, 11)
@@ -54,12 +65,55 @@ def test_gpt_forward_returns_finite_scalar_loss() -> None:
     targets = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=torch.long)
 
     # When: the model evaluates the language-model objective.
-    _, loss = gpt.forward(token_ids, targets)
+    _, loss = call_gpt(gpt, token_ids, targets)
 
     # Then: cross entropy reduces all batch/time positions to one finite scalar.
     assert loss is not None
     assert loss.shape == ()
     assert torch.isfinite(loss)
+
+
+def test_gpt_calls_transformer_block_through_module_protocol() -> None:
+    # Given: a GPT block with a registered forward hook.
+    gpt = model.GPT(tiny_config())
+    token_ids = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
+    hook_outputs: list[Tensor] = []
+
+    def record_output(
+        module: nn.Module,
+        inputs: tuple[object, ...],
+        output: object,
+    ) -> None:
+        del module, inputs
+        if not isinstance(output, Tensor):
+            msg = "TransformerBlock hook output must be a tensor"
+            raise TypeError(msg)
+        hook_outputs.append(output)
+
+    handle = gpt.blocks[0].register_forward_hook(record_output)
+    try:
+        # When: execution enters through GPT.__call__.
+        _ = call_gpt(gpt, token_ids)
+    finally:
+        handle.remove()
+
+    # Then: the nested block hook observes its output.
+    assert len(hook_outputs) == 1
+    assert hook_outputs[0].shape == (1, 4, 8)
+
+
+def test_gpt_rejects_unexpected_module_list_entry() -> None:
+    # Given: a GPT whose first block was replaced by an unrelated module.
+    gpt = model.GPT(tiny_config())
+    gpt.blocks[0] = nn.Identity()
+    token_ids = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
+
+    # When: execution reaches the invalid architecture.
+    with pytest.raises(RuntimeError, match=r"block 0.*Identity") as error_info:
+        _ = call_gpt(gpt, token_ids)
+
+    # Then: a dedicated error reports the corrupted block instead of silently skipping it.
+    assert type(error_info.value).__name__ == "UnexpectedTransformerBlockError"
 
 
 def test_gpt_rejects_out_of_range_token_id() -> None:
@@ -69,7 +123,7 @@ def test_gpt_rejects_out_of_range_token_id() -> None:
 
     # When: the invalid input crosses the model boundary.
     with pytest.raises(model.TokenIdOutOfRangeError, match=r"11.*vocabulary size 11"):
-        _ = gpt.forward(token_ids)
+        _ = call_gpt(gpt, token_ids)
 
 
 def test_gpt_generate_appends_requested_tokens_with_temperature_and_top_k() -> None:
@@ -97,8 +151,8 @@ def test_causal_mask_prevents_future_tokens_affecting_prefix_logits() -> None:
     second = torch.tensor([[1, 2, 8, 9]], dtype=torch.long)
 
     # When: both sequences pass through the model.
-    first_logits, _ = gpt.forward(first)
-    second_logits, _ = gpt.forward(second)
+    first_logits, _ = call_gpt(gpt, first)
+    second_logits, _ = call_gpt(gpt, second)
 
     # Then: logits at prefix positions cannot depend on positions to their right.
     assert torch.allclose(first_logits[:, :2], second_logits[:, :2], atol=1e-6)

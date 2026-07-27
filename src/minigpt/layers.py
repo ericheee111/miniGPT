@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, final, override
+from typing import TYPE_CHECKING, cast, final, override
 
 import torch
 from torch import Tensor, nn
@@ -76,7 +76,7 @@ class CausalSelfAttention(nn.Module):
     def forward(self, hidden_states: Tensor) -> Tensor:
         """Transform [B,T,C] states through scaled dot-product attention."""
         batch_size, time_steps, channels = hidden_states.shape
-        projected_qkv = self.qkv_projection.forward(hidden_states)
+        projected_qkv = cast("Tensor", self.qkv_projection(hidden_states))
         query = projected_qkv[..., : self.n_embd]
         key = projected_qkv[..., self.n_embd : 2 * self.n_embd]
         value = projected_qkv[..., 2 * self.n_embd :]
@@ -92,12 +92,12 @@ class CausalSelfAttention(nn.Module):
             torch.finfo(attention_scores.dtype).min,
         )
         attention_weights = functional.softmax(attention_scores, dim=-1)
-        attention_weights = self.attention_dropout.forward(attention_weights)
+        attention_weights = cast("Tensor", self.attention_dropout(attention_weights))
 
         context = attention_weights @ value
         context = context.transpose(1, 2).contiguous().view(batch_size, time_steps, channels)
-        projected = self.output_projection.forward(context)
-        return self.residual_dropout.forward(projected)
+        projected = cast("Tensor", self.output_projection(context))
+        return cast("Tensor", self.residual_dropout(projected))
 
 
 @final
@@ -124,10 +124,10 @@ class MLP(nn.Module):
     @override
     def forward(self, hidden_states: Tensor) -> Tensor:
         """Apply the position-wise feed-forward network."""
-        hidden_states = self.input_projection.forward(hidden_states)
-        hidden_states = self.activation.forward(hidden_states)
-        projected = self.output_projection.forward(hidden_states)
-        return self.dropout.forward(projected)
+        hidden_states = cast("Tensor", self.input_projection(hidden_states))
+        hidden_states = cast("Tensor", self.activation(hidden_states))
+        projected = cast("Tensor", self.output_projection(hidden_states))
+        return cast("Tensor", self.dropout(projected))
 
 
 @final
@@ -145,7 +145,7 @@ class TransformerBlock(nn.Module):
     @override
     def forward(self, hidden_states: Tensor) -> Tensor:
         """Apply both residual branches without changing tensor shape."""
-        attention_input = self.attention_norm.forward(hidden_states)
-        hidden_states = hidden_states + self.attention.forward(attention_input)
-        mlp_input = self.mlp_norm.forward(hidden_states)
-        return hidden_states + self.mlp.forward(mlp_input)
+        attention_input = cast("Tensor", self.attention_norm(hidden_states))
+        hidden_states = hidden_states + cast("Tensor", self.attention(attention_input))
+        mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
+        return hidden_states + cast("Tensor", self.mlp(mlp_input))
