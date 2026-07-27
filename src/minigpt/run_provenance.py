@@ -38,6 +38,7 @@ _GIT_UNAVAILABLE_REASON: Final = "Git executable is unavailable"
 _PREVIOUS_SEGMENT_REASON: Final = "previous segment did not complete"
 _RESUME_REQUIRED_REASON: Final = "subsequent segment requires a resume checkpoint"
 _COMMIT_CHANGED_REASON: Final = "Git commit changed"
+_BRANCH_CHANGED_REASON: Final = "Git branch changed"
 _CONFIG_PATH_CHANGED_REASON: Final = "config path changed"
 _CONFIG_HASH_CHANGED_REASON: Final = "config SHA-256 changed"
 _ENVIRONMENT_CHANGED_REASON: Final = "software or CPU environment changed"
@@ -504,6 +505,8 @@ def _validate_existing_identity(
         raise IncompatibleRunProvenanceError(_RESUME_REQUIRED_REASON)
     if provenance.git.commit_sha != current.git.commit_sha:
         raise IncompatibleRunProvenanceError(_COMMIT_CHANGED_REASON)
+    if provenance.git.branch != current.git.branch:
+        raise IncompatibleRunProvenanceError(_BRANCH_CHANGED_REASON)
     if provenance.config_path != current.config_path:
         raise IncompatibleRunProvenanceError(_CONFIG_PATH_CHANGED_REASON)
     if provenance.source_config_sha256 != current.source_config_sha256:

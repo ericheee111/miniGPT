@@ -288,6 +288,43 @@ def test_resume_rejects_changed_commit_config_or_data_identity(tmp_path: Path) -
         )
 
 
+def test_resume_rejects_same_commit_on_different_branch(tmp_path: Path) -> None:
+    # Given: one completed segment and the same commit checked out under another branch name.
+    repository, config_path, config = prepare_repository(tmp_path)
+    provenance_path = repository / "outputs" / "reference" / "run.json"
+    checkpoint_path = save_v2_checkpoint(repository, config, completed_step=0)
+    segment = begin_run_segment(
+        provenance_path,
+        config_path=config_path,
+        config=config,
+        invocation=RunInvocation(
+            argv=("--config", "reference.yaml", "--run-until-step", "1"),
+            run_until_step=1,
+            resume_path=None,
+        ),
+    )
+    complete_run_segment(
+        provenance_path,
+        segment=segment,
+        checkpoint_path=checkpoint_path,
+        final_step=0,
+    )
+    _ = run_git(repository, "checkout", "-b", "alternate-branch")
+
+    # When/Then: the run journal preserves the recorded branch identity.
+    with pytest.raises(IncompatibleRunProvenanceError, match="branch"):
+        _ = begin_run_segment(
+            provenance_path,
+            config_path=config_path,
+            config=config,
+            invocation=RunInvocation(
+                argv=("--config", "reference.yaml", "--resume", str(checkpoint_path)),
+                run_until_step=None,
+                resume_path=checkpoint_path,
+            ),
+        )
+
+
 def test_failed_segment_records_end_without_claiming_completion(tmp_path: Path) -> None:
     # Given: a clean first segment recorded as running.
     repository, config_path, config = prepare_repository(tmp_path)

@@ -51,6 +51,7 @@ from minigpt.training_report import (
     load_metric_records,
     select_representative_samples,
     summarize_training,
+    throughput_reference_line,
     validate_reference_sources,
 )
 
@@ -500,6 +501,47 @@ def test_cross_artifact_validation_rejects_wrong_learning_rate(tmp_path: Path) -
         _ = validate_reference_sources(fixture.inputs)
 
 
+@pytest.mark.parametrize(
+    ("step", "val_loss"),
+    [
+        (1, None),
+        (0, 3.7),
+    ],
+)
+def test_cross_artifact_validation_enforces_validation_schedule(
+    tmp_path: Path,
+    step: int,
+    val_loss: float | None,
+) -> None:
+    # Given: a scheduled validation is missing or an unscheduled value is fabricated.
+    fixture = prepare_evidence_fixture(tmp_path)
+    records = [
+        {
+            **metric_record(
+                current_step,
+                train_loss=4.0 - current_step * 0.25,
+                val_loss=3.5 - current_step * 0.1 if current_step in {1, 3} else None,
+                learning_rate=learning_rate_at_step(
+                    current_step,
+                    max_learning_rate=1e-3,
+                    min_learning_rate=1e-4,
+                    warmup_steps=0,
+                    lr_decay_steps=4,
+                ),
+            ),
+            "val_loss": val_loss
+            if current_step == step
+            else (3.5 - current_step * 0.1 if current_step in {1, 3} else None),
+        }
+        for current_step in range(4)
+    ]
+    write_metrics(fixture.inputs.metrics_path, records)
+
+    # When/Then: validation evidence must occur exactly on configured absolute steps.
+    with pytest.raises(TrainingEvidenceError, match="validation schedule"):
+        _ = validate_reference_sources(fixture.inputs)
+
+
 def test_cross_artifact_validation_rejects_metrics_count_mismatch(tmp_path: Path) -> None:
     # Given: otherwise valid metrics with the final global step removed.
     fixture = prepare_evidence_fixture(tmp_path)
@@ -511,6 +553,33 @@ def test_cross_artifact_validation_rejects_metrics_count_mismatch(tmp_path: Path
 
     # When/Then: the report cannot silently accept a shortened experiment.
     with pytest.raises(TrainingEvidenceError, match="metric count"):
+        _ = validate_reference_sources(fixture.inputs)
+
+
+def test_cross_artifact_validation_requires_material_train_loss_reduction(
+    tmp_path: Path,
+) -> None:
+    # Given: complete evidence whose final train loss is not materially below its initial value.
+    fixture = prepare_evidence_fixture(tmp_path)
+    records = [
+        metric_record(
+            step,
+            train_loss=4.0 - step * 0.05,
+            val_loss=3.5 - step * 0.1 if step in {1, 3} else None,
+            learning_rate=learning_rate_at_step(
+                step,
+                max_learning_rate=1e-3,
+                min_learning_rate=1e-4,
+                warmup_steps=0,
+                lr_decay_steps=4,
+            ),
+        )
+        for step in range(4)
+    ]
+    write_metrics(fixture.inputs.metrics_path, records)
+
+    # When/Then: a weak or failed optimization run cannot be published as reference evidence.
+    with pytest.raises(TrainingEvidenceError, match="materially lower"):
         _ = validate_reference_sources(fixture.inputs)
 
 
@@ -603,6 +672,29 @@ def test_cross_artifact_validation_requires_completed_resume(tmp_path: Path) -> 
         _ = validate_reference_sources(fixture.inputs)
 
 
+def test_cross_artifact_validation_rejects_broken_resume_hash_chain(tmp_path: Path) -> None:
+    # Given: a sidecar whose second segment names a checkpoint other than the first output.
+    fixture = prepare_evidence_fixture(tmp_path)
+    provenance_document = cast(
+        "JsonValue",
+        json.loads(fixture.inputs.provenance_path.read_text(encoding="utf-8")),
+    )
+    assert isinstance(provenance_document, dict)
+    raw_segments = provenance_document["segments"]
+    assert isinstance(raw_segments, list)
+    second = raw_segments[1]
+    assert isinstance(second, dict)
+    second["resume_checkpoint_sha256"] = "0" * 64
+    _ = fixture.inputs.provenance_path.write_text(
+        json.dumps(provenance_document),
+        encoding="utf-8",
+    )
+
+    # When/Then: non-null text alone cannot prove that the process consumed the prior checkpoint.
+    with pytest.raises(TrainingEvidenceError, match="resume checkpoint SHA-256"):
+        _ = validate_reference_sources(fixture.inputs)
+
+
 def test_cross_artifact_validation_requires_final_scheduled_sample(tmp_path: Path) -> None:
     # Given: valid evidence whose final scheduled sample is absent.
     fixture = prepare_evidence_fixture(tmp_path)
@@ -646,7 +738,64 @@ def test_training_series_preserve_observed_steps_and_values(tmp_path: Path) -> N
         (2, 102.0),
         (3, 103.0),
     )
+    assert throughput_reference_line(series) == ("median tokens/s: 101.50", 101.5)
     assert title == f"Loss — reference @ {evidence.provenance.git.commit_sha[:8]}"
+
+
+def assert_file_identity(repository: Path, raw_identity: JsonValue) -> None:
+    assert isinstance(raw_identity, dict)
+    assert set(raw_identity) == {"path", "sha256", "size_bytes"}
+    relative_path = raw_identity["path"]
+    digest = raw_identity["sha256"]
+    size_bytes = raw_identity["size_bytes"]
+    assert isinstance(relative_path, str)
+    assert isinstance(digest, str)
+    assert isinstance(size_bytes, int)
+    artifact_path = repository / relative_path
+    assert digest == hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    assert size_bytes == artifact_path.stat().st_size
+
+
+def assert_manifest_contract(
+    fixture: EvidenceFixture,
+    manifest_path: Path,
+    environment: dict[str, JsonValue],
+) -> None:
+    manifest = cast(
+        "JsonValue",
+        json.loads(manifest_path.read_text(encoding="utf-8")),
+    )
+    assert isinstance(manifest, dict)
+    manifest_artifacts = manifest["artifacts"]
+    assert isinstance(manifest_artifacts, list)
+    assert len(manifest_artifacts) == 8
+    for raw_item in manifest_artifacts:
+        assert_file_identity(fixture.repository, raw_item)
+    generator = manifest["generator"]
+    assert isinstance(generator, dict)
+    assert generator == {
+        "name": "minigpt.training_report",
+        "version": 1,
+        "git_sha": environment["git_commit_sha"],
+    }
+    assert manifest["checkpoint_format_version"] == 2
+    assert manifest["final_completed_step"] == 3
+    sources = manifest["sources"]
+    assert isinstance(sources, dict)
+    assert set(sources) == {
+        "checkpoint",
+        "config",
+        "metrics",
+        "provenance",
+        "samples",
+        "tokenizer",
+        "train_data",
+        "validation_data",
+    }
+    for source_name, raw_source in sources.items():
+        assert isinstance(source_name, str)
+        assert_file_identity(fixture.repository, raw_source)
+    assert manifest["resolved_config_sha256"] == environment["resolved_config_sha256"]
 
 
 def test_report_generator_writes_complete_verified_evidence_package(tmp_path: Path) -> None:
@@ -708,35 +857,13 @@ def test_report_generator_writes_complete_verified_evidence_package(tmp_path: Pa
     assert environment["git_dirty"] is False
     assert environment["checkpoint_format_version"] == 2
 
-    manifest = cast(
-        "JsonValue",
-        json.loads(artifacts.manifest.read_text(encoding="utf-8")),
-    )
-    assert isinstance(manifest, dict)
-    manifest_artifacts = manifest["artifacts"]
-    assert isinstance(manifest_artifacts, list)
-    assert len(manifest_artifacts) == 8
-    for raw_item in manifest_artifacts:
-        assert isinstance(raw_item, dict)
-        relative_path = raw_item["path"]
-        digest = raw_item["sha256"]
-        size_bytes = raw_item["size_bytes"]
-        assert isinstance(relative_path, str)
-        assert isinstance(digest, str)
-        assert isinstance(size_bytes, int)
-        artifact_path = output_dir / relative_path
-        assert digest == hashlib.sha256(artifact_path.read_bytes()).hexdigest()
-        assert size_bytes == artifact_path.stat().st_size
-    assert manifest["generator_git_sha"] == environment["git_commit_sha"]
-    source_fingerprints = manifest["source_fingerprints"]
-    assert isinstance(source_fingerprints, dict)
-    assert source_fingerprints["checkpoint_sha256"]
-    assert source_fingerprints["metrics_sha256"]
-    assert source_fingerprints["config_sha256"]
+    assert_manifest_contract(fixture, artifacts.manifest, environment)
 
     readme = artifacts.readme.read_text(encoding="utf-8")
     assert "first / middle / final scheduled samples" in readme
     assert "checkpoint resume: yes" in readme
+    assert "Deterministic local-structure observation" in readme
+    assert "excludes validation, sampling, checkpoint, logging" in readme
     assert fixture.inputs.checkpoint_path.name in readme
     assert artifacts.loss_curve.stat().st_size > 0
     assert artifacts.learning_rate_curve.stat().st_size > 0

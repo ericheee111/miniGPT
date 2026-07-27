@@ -89,6 +89,16 @@ class _PlotModule(Protocol):
 
     def legend(self) -> None: ...
 
+    def axhline(
+        self,
+        y: float,
+        *,
+        color: str,
+        linestyle: str,
+        linewidth: float,
+        label: str,
+    ) -> None: ...
+
     def close(self, figure: _Figure) -> None: ...
 
 
@@ -124,6 +134,7 @@ _SAMPLE_TOP_K: Final = 20
 _REPORT_SCHEMA_VERSION: Final = 1
 _FIGURE_SIZE: Final = (12.0, 6.75)
 _FIGURE_DPI: Final = 120
+_MATERIAL_LOSS_RATIO: Final = 0.9
 _CSV_FIELDS: Final = (
     "step",
     "train_loss",
@@ -434,6 +445,11 @@ def _validate_repository(inputs: ReportInputs, provenance: RunProvenance) -> Non
             inputs.provenance_path,
             "Git commit differs from run provenance",
         )
+    if git.branch != provenance.git.branch:
+        raise TrainingEvidenceError(
+            inputs.provenance_path,
+            "Git branch differs from run provenance",
+        )
     relative_config_path = inputs.config_path.resolve().relative_to(repository_root).as_posix()
     if relative_config_path != provenance.config_path:
         raise TrainingEvidenceError(
@@ -497,6 +513,10 @@ def _validate_metrics(
     if len(metrics) != config.training.max_steps:
         raise TrainingEvidenceError(path, "metric count differs from configured max_steps")
     for record in metrics:
+        validation_due = (record.step + 1) % config.training.eval_interval == 0
+        if (record.val_loss is not None) != validation_due:
+            reason = f"step {record.step} validation schedule does not match eval_interval"
+            raise TrainingEvidenceError(path, reason)
         expected = learning_rate_at_step(
             record.step,
             max_learning_rate=config.optimizer.learning_rate,
@@ -510,6 +530,12 @@ def _validate_metrics(
                 f"differs from configured schedule {expected}"
             )
             raise TrainingEvidenceError(path, reason)
+    if metrics[-1].train_loss > metrics[0].train_loss * _MATERIAL_LOSS_RATIO:
+        reason = (
+            "final train loss must be materially lower than initial loss "
+            f"(at most {_MATERIAL_LOSS_RATIO:.0%})"
+        )
+        raise TrainingEvidenceError(path, reason)
 
 
 def _validate_samples(
@@ -554,6 +580,20 @@ def _validate_provenance(
             inputs.provenance_path,
             "every run segment must be completed",
         )
+    if provenance.segments[0].resume_checkpoint_sha256 is not None:
+        raise TrainingEvidenceError(
+            inputs.provenance_path,
+            "first run segment cannot have a resume checkpoint SHA-256",
+        )
+    for previous, current in pairwise(provenance.segments):
+        if (
+            previous.checkpoint_sha256 is None
+            or current.resume_checkpoint_sha256 != previous.checkpoint_sha256
+        ):
+            raise TrainingEvidenceError(
+                inputs.provenance_path,
+                "resume checkpoint SHA-256 does not match the preceding segment output",
+            )
     final_segment = provenance.segments[-1]
     if final_segment.final_completed_step != metadata.completed_step:
         raise TrainingEvidenceError(
@@ -618,6 +658,12 @@ def build_training_series(records: tuple[MetricRecord, ...]) -> TrainingSeries:
 def figure_title(metric_name: str, experiment_name: str, commit_sha: str) -> str:
     """Build a stable title containing experiment and source identity."""
     return f"{metric_name} — {experiment_name} @ {commit_sha[:8]}"
+
+
+def throughput_reference_line(series: TrainingSeries) -> tuple[str, float]:
+    """Return the stable labeled median used by the throughput figure."""
+    median = statistics.median(value for _, value in series.tokens_per_sec)
+    return f"median tokens/s: {median:.2f}", median
 
 
 def _write_metrics_csv(path: Path, records: tuple[MetricRecord, ...]) -> None:
@@ -685,6 +731,25 @@ def _plot_single_series(
     _PLOT.plot(steps, values, label=label, linewidth=1.5)
     _PLOT.xlabel("global step")
     _PLOT.ylabel(y_axis_label)
+    _PLOT.grid(visible=True, alpha=0.25)
+    _PLOT.legend()
+    _save_figure(path, title)
+
+
+def _plot_throughput(path: Path, series: TrainingSeries, title: str) -> None:
+    _ = _PLOT.figure(figsize=_FIGURE_SIZE)
+    steps, values = zip(*series.tokens_per_sec, strict=True)
+    _PLOT.plot(steps, values, label="optimization-step tokens/s", linewidth=1.0)
+    median_label, median = throughput_reference_line(series)
+    _PLOT.axhline(
+        median,
+        color="black",
+        linestyle="--",
+        linewidth=1.25,
+        label=median_label,
+    )
+    _PLOT.xlabel("global step")
+    _PLOT.ylabel("tokens/s")
     _PLOT.grid(visible=True, alpha=0.25)
     _PLOT.legend()
     _save_figure(path, title)
@@ -763,6 +828,22 @@ def _command_lines(provenance: RunProvenance) -> str:
 
 def _sample_markdown(label: str, sample: GeneratedSample) -> str:
     return f"### {label} (step {sample.step})\n\n```text\n{sample.text}\n```"
+
+
+def _word_like_run_count(text: str) -> int:
+    return len(re.findall(r"(?<![A-Za-z])[A-Za-z]{2,}(?![A-Za-z])", text))
+
+
+def _local_structure_observation(baseline: str, final: str) -> str:
+    baseline_runs = _word_like_run_count(baseline)
+    final_runs = _word_like_run_count(final)
+    comparison = "more" if final_runs > baseline_runs else "no more"
+    return (
+        "**Deterministic local-structure observation:** the final sample contains "
+        f"{final_runs} alphabetic runs of at least two characters versus {baseline_runs} "
+        f"in the untrained baseline ({comparison} by this fixed heuristic). "
+        "This is evidence about local word-like structure, not fluency or generalization."
+    )
 
 
 def _result_row(
@@ -887,14 +968,17 @@ configured fixed prompt, sample seed, temperature, and top-k. No sample was sele
 
 {_sample_markdown("Final scheduled sample", final)}
 
+{_local_structure_observation(baseline_sample, final.text)}
+
 The complete unedited scheduled sample file is [generated_samples.txt](generated_samples.txt).
 
 ## Limitations
 
 This is one small CPU-only character-model training run on Tiny Shakespeare. Lower training loss
 does not by itself demonstrate generalization, model quality, statistical significance, or
-hardware performance. Throughput includes the normal training path and scheduled validation
-overhead, so it must not be compared with a dedicated benchmark.
+hardware performance. Reported throughput times batch acquisition, forward/backward, and the
+optimizer update; it excludes validation, sampling, checkpoint, logging, and other event overhead.
+It therefore must not be compared with a dedicated benchmark.
 
 ## Reproduce
 
@@ -909,9 +993,22 @@ overhead, so it must not be compared with a dedicated benchmark.
 """
 
 
-def _artifact_document(path: Path, root: Path) -> dict[str, JsonValue]:
+def _repository_relative(path: Path, repository_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(repository_root.resolve()).as_posix()
+    except ValueError as error:
+        reason = f"artifact path is outside repository: {path}"
+        raise TrainingEvidenceError(path, reason) from error
+
+
+def _file_identity_document(
+    path: Path,
+    *,
+    repository_path: Path,
+    repository_root: Path,
+) -> dict[str, JsonValue]:
     return {
-        "path": path.relative_to(root).as_posix(),
+        "path": _repository_relative(repository_path, repository_root),
         "sha256": _sha256_file(path),
         "size_bytes": path.stat().st_size,
     }
@@ -921,27 +1018,47 @@ def _manifest_document(
     data: ValidatedReportData,
     inputs: ReportInputs,
     artifact_paths: tuple[Path, ...],
-    output_dir: Path,
+    temporary_output_dir: Path,
+    published_output_dir: Path,
 ) -> dict[str, JsonValue]:
-    fingerprints = data.metadata.dataset_fingerprints
+    repository_root = inputs.repository_root
+    data_directory = _resolved_data_directory(data.config, repository_root)
+    source_paths = {
+        "checkpoint": inputs.checkpoint_path,
+        "config": inputs.config_path,
+        "metrics": inputs.metrics_path,
+        "provenance": inputs.provenance_path,
+        "samples": inputs.samples_path,
+        "tokenizer": data_directory / "tokenizer.json",
+        "train_data": data_directory / "train.npy",
+        "validation_data": data_directory / "val.npy",
+    }
     return {
         "schema_version": _REPORT_SCHEMA_VERSION,
-        "generator_git_sha": data.provenance.git.commit_sha,
+        "generator": {
+            "name": "minigpt.training_report",
+            "version": _REPORT_SCHEMA_VERSION,
+            "git_sha": data.provenance.git.commit_sha,
+        },
+        "checkpoint_format_version": data.metadata.format_version,
+        "final_completed_step": data.metadata.completed_step,
+        "resolved_config_sha256": data.provenance.resolved_config_sha256,
         "manifest_self_excluded": True,
         "artifacts": [
-            _artifact_document(path, output_dir)
+            _file_identity_document(
+                path,
+                repository_path=published_output_dir / path.relative_to(temporary_output_dir),
+                repository_root=repository_root,
+            )
             for path in sorted(artifact_paths, key=lambda item: item.name)
         ],
-        "source_fingerprints": {
-            "config_sha256": _sha256_file(inputs.config_path),
-            "metrics_sha256": _sha256_file(inputs.metrics_path),
-            "samples_sha256": _sha256_file(inputs.samples_path),
-            "checkpoint_sha256": data.checkpoint_sha256,
-            "provenance_sha256": _sha256_file(inputs.provenance_path),
-            "resolved_config_sha256": data.provenance.resolved_config_sha256,
-            "tokenizer_sha256": fingerprints.tokenizer_sha256,
-            "train_sha256": fingerprints.train_sha256,
-            "val_sha256": fingerprints.val_sha256,
+        "sources": {
+            name: _file_identity_document(
+                path,
+                repository_path=path,
+                repository_root=repository_root,
+            )
+            for name, path in sorted(source_paths.items())
         },
     }
 
@@ -964,6 +1081,7 @@ def _generate_into_directory(
     data: ValidatedReportData,
     inputs: ReportInputs,
     directory: Path,
+    published_output_dir: Path,
 ) -> None:
     paths = _temporary_artifact_paths(directory)
     series = build_training_series(data.metrics)
@@ -994,12 +1112,10 @@ def _generate_into_directory(
         label="learning rate",
         y_axis_label="learning rate",
     )
-    _plot_single_series(
+    _plot_throughput(
         paths.throughput_curve,
-        series.tokens_per_sec,
-        title=figure_title("Measured throughput", experiment, commit_sha),
-        label="tokens/s",
-        y_axis_label="tokens/s",
+        series,
+        figure_title("Measured throughput", experiment, commit_sha),
     )
     artifact_paths = (
         paths.readme,
@@ -1013,7 +1129,13 @@ def _generate_into_directory(
     )
     _write_json(
         paths.manifest,
-        _manifest_document(data, inputs, artifact_paths, directory),
+        _manifest_document(
+            data,
+            inputs,
+            artifact_paths,
+            directory,
+            published_output_dir,
+        ),
     )
 
 
@@ -1030,7 +1152,7 @@ def generate_training_report(inputs: ReportInputs, output_dir: Path) -> ReportAr
         )
     )
     try:
-        _generate_into_directory(data, inputs, temporary)
+        _generate_into_directory(data, inputs, temporary, output_dir)
         _ = temporary.replace(output_dir)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
