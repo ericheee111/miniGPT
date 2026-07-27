@@ -194,7 +194,8 @@ def find_repository_root(path: Path) -> Path:
     return Path(root).resolve()
 
 
-def _read_git_identity(repository_root: Path) -> GitIdentity:
+def read_git_identity(repository_root: Path) -> GitIdentity:
+    """Read the current commit, branch, and dirty state without changing Git."""
     commit_sha = _run_git(repository_root, "rev-parse", "HEAD")
     branch = _run_git(repository_root, "branch", "--show-current")
     dirty = bool(_run_git(repository_root, "status", "--porcelain"))
@@ -546,7 +547,7 @@ def begin_run_segment(
 ) -> RunSegment:
     """Validate clean provenance and atomically record a running segment."""
     repository_root = find_repository_root(config_path)
-    git = _read_git_identity(repository_root)
+    git = read_git_identity(repository_root)
     if git.dirty:
         raise DirtyReferenceRunError(repository_root)
     relative_config_path = _relative_path(config_path, repository_root)
