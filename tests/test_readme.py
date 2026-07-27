@@ -31,6 +31,7 @@ STAGE_6_CONTRACTS = (
     "Windows",
     "Linux",
 )
+REFERENCE_RESULT_LINK = "docs/results/reference-training/README.md"
 
 
 def test_readme_documents_stable_user_contracts() -> None:
@@ -53,6 +54,15 @@ def test_readme_documents_stage_6_resume_and_portability_contracts() -> None:
     # When/Then: each proven public contract is present and the old override is absent.
     assert all(contract in readme for contract in STAGE_6_CONTRACTS)
     assert "--resume checkpoints/smoke/latest.pt --max-steps" not in readme
+
+
+def test_readme_links_generated_reference_training_evidence() -> None:
+    # Given: the repository README and mechanically generated Stage 7A evidence.
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    # When/Then: the overview links the generated source of truth without copying its metrics.
+    assert f"]({REFERENCE_RESULT_LINK})" in readme
+    assert (PROJECT_ROOT / REFERENCE_RESULT_LINK).is_file()
 
 
 def test_readme_local_markdown_links_exist() -> None:

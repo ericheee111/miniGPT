@@ -59,6 +59,17 @@ if TYPE_CHECKING:
 
 JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
 
+PROJECT_ROOT = Path(__file__).parents[1]
+REFERENCE_RESULT_DIRECTORY = Path("docs/results/reference-training")
+REFERENCE_TEXT_ARTIFACT_EOL = {
+    "README.md": "crlf",
+    "artifact_manifest.json": "crlf",
+    "environment.json": "crlf",
+    "generated_samples.txt": "crlf",
+    "metrics.csv": "lf",
+    "resolved_config.yaml": "crlf",
+}
+
 
 def metric_record(
     step: int,
@@ -784,7 +795,7 @@ def test_report_cli_generates_package_from_explicit_sources(tmp_path: Path) -> N
     # Given: valid evidence and the repository's typed report CLI.
     fixture = prepare_evidence_fixture(tmp_path)
     output_dir = fixture.repository / "outputs" / "cli-report"
-    cli_path = Path(__file__).parents[1] / "report_training.py"
+    cli_path = PROJECT_ROOT / "report_training.py"
 
     # When: all sources are passed explicitly in a separate process.
     completed = subprocess.run(  # noqa: S603
@@ -813,3 +824,35 @@ def test_report_cli_generates_package_from_explicit_sources(tmp_path: Path) -> N
     assert completed.returncode == 0, completed.stderr
     assert str(output_dir / "README.md") in completed.stdout
     assert str(output_dir / "artifact_manifest.json") in completed.stdout
+
+
+def test_committed_report_text_artifacts_preserve_generated_line_endings() -> None:
+    # Given: generated artifacts whose hashes cover their original Windows newline bytes.
+    artifact_paths = [
+        (REFERENCE_RESULT_DIRECTORY / name).as_posix() for name in REFERENCE_TEXT_ARTIFACT_EOL
+    ]
+
+    # When: Git's checkout attributes are resolved for every committed text artifact.
+    command = [
+        "git",
+        "-C",
+        str(PROJECT_ROOT),
+        "check-attr",
+        "eol",
+        "--",
+        *artifact_paths,
+    ]
+    completed = subprocess.run(  # noqa: S603
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    # Then: core.autocrlf cannot rewrite evidence bytes and invalidate the manifest.
+    lines = completed.stdout.splitlines()
+    assert len(lines) == len(artifact_paths)
+    expected_eol = [
+        f": eol: {REFERENCE_TEXT_ARTIFACT_EOL[name]}" for name in REFERENCE_TEXT_ARTIFACT_EOL
+    ]
+    assert all(line.endswith(expected) for line, expected in zip(lines, expected_eol, strict=True))

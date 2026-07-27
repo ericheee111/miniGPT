@@ -1,0 +1,58 @@
+{
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "5ffb1bd1b5f3bb3aa57adf7e1c65497bc88fac3a7c1f66367add12fb777924aa",
+      "size_bytes": 4425
+    },
+    {
+      "path": "environment.json",
+      "sha256": "f10312c9d6ec9cfc995192f4e58f327a8022068f5a49ce8b3ed6858c43db27a0",
+      "size_bytes": 1194
+    },
+    {
+      "path": "generated_samples.txt",
+      "sha256": "1258e41e4a3d74b7c670064577b11ea674ea11fd78277718917cd2b12ba63556",
+      "size_bytes": 2273
+    },
+    {
+      "path": "learning_rate_curve.png",
+      "sha256": "bf793faad62d5e111f9ea8616f094f0d950cf782ffdfec687d7429bac956b2cd",
+      "size_bytes": 57573
+    },
+    {
+      "path": "loss_curve.png",
+      "sha256": "62289c354cbbf8a583988e607f9e8892009ed741582f98c0d86aada2587cb96c",
+      "size_bytes": 70751
+    },
+    {
+      "path": "metrics.csv",
+      "sha256": "8acbb054fd1c9aa8c837942f172ca2bb5bf47f12e7ebea8827673b4d9ebe86b7",
+      "size_bytes": 422948
+    },
+    {
+      "path": "resolved_config.yaml",
+      "sha256": "2318bd65b8eddde586fabd180afd6d2e45a193607936f2458807794feb0dcc02",
+      "size_bytes": 742
+    },
+    {
+      "path": "throughput_curve.png",
+      "sha256": "4352600be36dec58620c13f89e7959411fb2f9dcce1e013f54a8456bf9aaed9a",
+      "size_bytes": 129294
+    }
+  ],
+  "generator_git_sha": "7180b28be8c6cc1a6da07ee59821d7c2ef2a5e83",
+  "manifest_self_excluded": true,
+  "schema_version": 1,
+  "source_fingerprints": {
+    "checkpoint_sha256": "023c344c3ff30fbf7d00f72dc68bed6ddecada57544e27bc8baa228585247ff8",
+    "config_sha256": "c4dddfc3f8a49e41594b78ba75b444c84cc0abfa0d8b5dfce4c3d300fe5a2d3e",
+    "metrics_sha256": "9798f477cc7e3489de3b8a547edf46cc3914815df07435dc47f276bcb1b2caab",
+    "provenance_sha256": "429f1071f89c616c42a9df44d6e230c773c8e16a64b5de9a961abc8cd9989b6f",
+    "resolved_config_sha256": "d422b1cc92d4c1be75a886cfefc7762b02bd1f2da811c3ffdd9a22111a81423d",
+    "samples_sha256": "1258e41e4a3d74b7c670064577b11ea674ea11fd78277718917cd2b12ba63556",
+    "tokenizer_sha256": "12defdf2541e792c2e8c6916ac78c7cd6a13ac01dcf0755454d2765cc03e13fa",
+    "train_sha256": "9ae0938d1da7f7354913221c3cfc8e4fe710ccc56ede1632ea1b10f2a940ac74",
+    "val_sha256": "2f925087c373af1f6dcb577556c2c017c405da6f38cf9f1bb3554ded69a69d77"
+  }
+}
