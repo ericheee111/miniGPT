@@ -187,6 +187,7 @@ class GPT(nn.Module):
         max_new_tokens: int,
         temperature: float = 1.0,
         top_k: int | None = None,
+        generator: torch.Generator | None = None,
     ) -> Tensor:
         """Autoregressively append sampled token IDs to a prompt."""
         self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
@@ -211,6 +212,10 @@ class GPT(nn.Module):
                     -torch.inf,
                 )
             probabilities = functional.softmax(next_token_logits, dim=-1)
-            next_token = torch.multinomial(probabilities, num_samples=1)
+            next_token = torch.multinomial(
+                probabilities,
+                num_samples=1,
+                generator=generator,
+            )
             generated = torch.cat((generated, next_token), dim=1)
         return generated

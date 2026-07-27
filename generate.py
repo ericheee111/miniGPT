@@ -38,13 +38,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_model_state(arguments.checkpoint, model)
     _ = model.eval()
     seed = config.runtime.seed if arguments.seed is None else arguments.seed
-    _ = torch.default_generator.manual_seed(seed)
+    generator = torch.Generator(device="cpu")
+    _ = generator.manual_seed(seed)
     prompt = torch.tensor([tokenizer.encode(arguments.prompt)], dtype=torch.long)
     generated = model.generate(
         prompt,
         max_new_tokens=arguments.max_new_tokens,
         temperature=arguments.temperature,
         top_k=arguments.top_k,
+        generator=generator,
     )
     token_ids = [int(generated[0, index]) for index in range(generated.shape[1])]
     _ = stdout.write(tokenizer.decode(token_ids) + "\n")

@@ -142,6 +142,46 @@ def test_gpt_generate_appends_requested_tokens_with_temperature_and_top_k() -> N
     assert int(generated.max()) < 11
 
 
+def test_generate_uses_explicit_generator_without_consuming_global_rng() -> None:
+    # Given: a model, a local sample generator, and a captured global RNG state.
+    _ = torch.default_generator.manual_seed(23)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2]], dtype=torch.long)
+    sample_generator = torch.Generator(device="cpu")
+    _ = sample_generator.manual_seed(29)
+    global_state = torch.get_rng_state().clone()
+
+    # When: generation samples through the explicit generator.
+    _ = gpt.generate(
+        prompt,
+        max_new_tokens=4,
+        generator=sample_generator,
+    )
+
+    # Then: global Torch randomness is unchanged.
+    assert torch.equal(torch.get_rng_state(), global_state)
+
+
+def test_generate_reproduces_tokens_with_equal_local_generator_states() -> None:
+    # Given: one eval model and two independent generators with the same seed.
+    _ = torch.default_generator.manual_seed(31)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2]], dtype=torch.long)
+    first_generator = torch.Generator(device="cpu")
+    second_generator = torch.Generator(device="cpu")
+    _ = first_generator.manual_seed(37)
+    _ = second_generator.manual_seed(37)
+
+    # When: both generators drive the same sampling request.
+    first = gpt.generate(prompt, max_new_tokens=5, generator=first_generator)
+    second = gpt.generate(prompt, max_new_tokens=5, generator=second_generator)
+
+    # Then: local generator state fully determines the sampled continuation.
+    assert torch.equal(first, second)
+
+
 def test_causal_mask_prevents_future_tokens_affecting_prefix_logits() -> None:
     # Given: two sequences with the same prefix but different future tokens.
     _ = torch.default_generator.manual_seed(11)

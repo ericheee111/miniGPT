@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from minigpt.settings import OptimizerSettings
 
 _DECAY_DIMENSION_THRESHOLD: Final = 2
+_SAMPLE_SEED_OFFSET: Final = 2
 
 
 def seed_everything(seed: int, num_threads: int) -> None:
@@ -23,6 +24,13 @@ def seed_everything(seed: int, num_threads: int) -> None:
     _ = torch.default_generator.manual_seed(seed)
     torch.set_num_threads(num_threads)
     torch.use_deterministic_algorithms(mode=True)
+
+
+def create_sample_generator(seed: int) -> torch.Generator:
+    """Create the independent CPU generator used for observable text samples."""
+    generator = torch.Generator(device="cpu")
+    _ = generator.manual_seed(seed + _SAMPLE_SEED_OFFSET)
+    return generator
 
 
 def learning_rate_at_step(
