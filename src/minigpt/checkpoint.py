@@ -163,6 +163,16 @@ class DatasetFingerprints:
     val_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class CheckpointMetadata:
+    """Expose immutable v2 identity without restoring mutable training state."""
+
+    format_version: int
+    completed_step: int
+    config: ExperimentConfig
+    dataset_fingerprints: DatasetFingerprints
+
+
 def _sha256_file(path: Path) -> str:
     digest = sha256()
     with path.open("rb") as stream:
@@ -574,6 +584,24 @@ def load_checkpoint_config(path: Path) -> ExperimentConfig:
     if payload["format_version"] == _LEGACY_CHECKPOINT_FORMAT_VERSION:
         return parse_legacy_experiment_config(payload["config_yaml"], path)
     return parse_experiment_config(payload["config_yaml"], path)
+
+
+def load_checkpoint_metadata(path: Path) -> CheckpointMetadata:
+    """Load validated v2 identity and completion metadata without restoring state."""
+    payload = _load_versioned_payload(path)
+    if payload["format_version"] == _LEGACY_CHECKPOINT_FORMAT_VERSION:
+        raise LegacyCheckpointResumeError(path)
+    fingerprints = payload["dataset_fingerprints"]
+    return CheckpointMetadata(
+        format_version=payload["format_version"],
+        completed_step=payload["completed_step"],
+        config=parse_experiment_config(payload["config_yaml"], path),
+        dataset_fingerprints=DatasetFingerprints(
+            tokenizer_sha256=fingerprints["tokenizer_sha256"],
+            train_sha256=fingerprints["train_sha256"],
+            val_sha256=fingerprints["val_sha256"],
+        ),
+    )
 
 
 def load_model_state(path: Path, model: nn.Module) -> None:

@@ -507,3 +507,37 @@ def test_resume_allows_operational_and_sampling_config_changes(tmp_path: Path) -
 
     # Then: the same experiment trajectory resumes at the next step.
     assert resume_state.next_step == 2
+
+
+def test_checkpoint_metadata_exposes_validated_v2_identity(tmp_path: Path) -> None:
+    # Given: a v2 checkpoint saved at completed step one.
+    config, resources, checkpoint_path = save_test_checkpoint(tmp_path)
+
+    # When: read-only checkpoint metadata is loaded.
+    metadata = checkpoint.load_checkpoint_metadata(checkpoint_path)
+
+    # Then: completion, resolved config, and all dataset identities are preserved.
+    assert metadata.format_version == 2
+    assert metadata.completed_step == 1
+    assert metadata.config == config
+    assert metadata.dataset_fingerprints == resources.dataset_fingerprints
+
+
+def test_checkpoint_metadata_rejects_v1_training_evidence(tmp_path: Path) -> None:
+    # Given: a legacy inference-only checkpoint.
+    write_dataset_artifacts(tmp_path)
+    config = experiment_config(tmp_path)
+    model = GPT(config.model.to_gpt_config(config.data.block_size))
+    resources = build_checkpoint_resources(
+        config,
+        model=model,
+        optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
+        train_batcher=TokenBatcher(np.arange(32), batch_size=2, block_size=4, seed=1),
+        val_batcher=TokenBatcher(np.arange(32), batch_size=2, block_size=4, seed=2),
+    )
+    checkpoint_path = tmp_path / "legacy.pt"
+    write_v1_checkpoint(checkpoint_path, config=config, resources=resources)
+
+    # When/Then: v1 cannot serve as reference-training evidence.
+    with pytest.raises(checkpoint.LegacyCheckpointResumeError):
+        _ = checkpoint.load_checkpoint_metadata(checkpoint_path)
