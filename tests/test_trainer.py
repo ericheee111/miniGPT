@@ -46,6 +46,15 @@ def create_processed_data(directory: Path) -> None:
     tokenizer.save(directory / "tokenizer.json")
 
 
+def run_git(repository: Path, *arguments: str) -> None:
+    _ = subprocess.run(  # noqa: S603
+        ["git", "-C", str(repository), *arguments],  # noqa: S607
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def tiny_experiment(tmp_path: Path, *, max_steps: int = 2) -> ExperimentConfig:
     return ExperimentConfig(
         runtime=RuntimeSettings(seed=17, num_threads=1, device="cpu"),
@@ -219,6 +228,50 @@ def test_train_cli_exposes_only_the_process_boundary() -> None:
     assert completed.returncode == 0, completed.stderr
     assert "--run-until-step" in completed.stdout
     assert "--max-steps" not in completed.stdout
+
+
+def test_train_cli_records_completed_reference_provenance(tmp_path: Path) -> None:
+    # Given: a clean temporary repository containing a tiny canonical experiment.
+    create_processed_data(tmp_path / "processed")
+    experiment = tiny_experiment(tmp_path)
+    config_path = tmp_path / "reference.yaml"
+    _ = config_path.write_text(experiment.to_yaml(), encoding="utf-8")
+    _ = (tmp_path / ".gitignore").write_text(
+        "processed/\noutputs/\ncheckpoints/\ntensorboard/\n",
+        encoding="utf-8",
+    )
+    run_git(tmp_path, "init")
+    run_git(tmp_path, "config", "user.email", "tests@example.com")
+    run_git(tmp_path, "config", "user.name", "miniGPT tests")
+    run_git(tmp_path, "add", ".gitignore", "reference.yaml")
+    run_git(tmp_path, "commit", "-m", "reference fixture")
+    provenance_path = tmp_path / "outputs" / "run_provenance.json"
+
+    # When: the real training CLI runs one bounded segment with provenance enabled.
+    completed = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "train.py"),
+            "--config",
+            str(config_path),
+            "--run-until-step",
+            "1",
+            "--provenance",
+            str(provenance_path),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Then: the command succeeds and records one completed segment at step zero.
+    assert completed.returncode == 0, completed.stderr
+    document = cast("dict[str, object]", json.loads(provenance_path.read_text(encoding="utf-8")))
+    segments = cast("list[dict[str, object]]", document["segments"])
+    assert len(segments) == 1
+    assert segments[0]["status"] == "completed"
+    assert segments[0]["final_completed_step"] == 0
 
 
 @pytest.mark.parametrize("boundary", [0, 3])
