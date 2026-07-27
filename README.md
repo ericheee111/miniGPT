@@ -79,6 +79,17 @@ python generate.py --checkpoint checkpoints/smoke/latest.pt --prompt "ROMEO:" --
 [训练 smoke 配置](configs/char_gpt_smoke.yaml)；第一次运行数据命令会下载 Tiny
 Shakespeare，之后复用 `data/raw/input.txt`。
 
+### Reference training 证据
+
+[CPU reference training 自动生成报告](docs/results/reference-training/README.md)记录了一次
+CPU-only、2800-step 的完整训练：它使用固定 canonical 配置，经过一次 checkpoint v2
+中断恢复，并提交了环境清单、resolved config、逐步 metrics CSV、未润色样本、三张图和
+artifact manifest。checkpoint 二进制不进入 Git；报告用 SHA-256 绑定本地 checkpoint、
+数据、tokenizer、配置和原始训练日志。
+
+这份结果用于证明训练链路可复现、可审查，不是硬件 benchmark，也不声称小型字符模型
+已经具备通用语言能力。
+
 ## 数据准备
 
 ```powershell

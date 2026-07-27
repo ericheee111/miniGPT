@@ -1,0 +1,96 @@
+{
+  "artifacts": [
+    {
+      "path": "docs/results/reference-training/README.md",
+      "sha256": "48290ecdb775bb589bdfa75b4d6a32a97ecd6cf27dbbb6ae3c62d786bce3d4d0",
+      "size_bytes": 4794
+    },
+    {
+      "path": "docs/results/reference-training/environment.json",
+      "sha256": "c59ec6b2de6bf2a9554ecc0e98cb04375f89165ca4ebe6d98864b239d8f0768e",
+      "size_bytes": 1194
+    },
+    {
+      "path": "docs/results/reference-training/generated_samples.txt",
+      "sha256": "1258e41e4a3d74b7c670064577b11ea674ea11fd78277718917cd2b12ba63556",
+      "size_bytes": 2273
+    },
+    {
+      "path": "docs/results/reference-training/learning_rate_curve.png",
+      "sha256": "ff28eb2a2fa61518dabce46439c978794de84d6e03a5151e17bed4a675ea8d19",
+      "size_bytes": 57446
+    },
+    {
+      "path": "docs/results/reference-training/loss_curve.png",
+      "sha256": "385ffec7a247ee67c6a2e7df1338a8cc4fe1751abc2517b2bb8fc8998863b7af",
+      "size_bytes": 70644
+    },
+    {
+      "path": "docs/results/reference-training/metrics.csv",
+      "sha256": "350e6650a8c76771960364f40b16699124d3749d9b57d49f4eb368b46aa29957",
+      "size_bytes": 424026
+    },
+    {
+      "path": "docs/results/reference-training/resolved_config.yaml",
+      "sha256": "2318bd65b8eddde586fabd180afd6d2e45a193607936f2458807794feb0dcc02",
+      "size_bytes": 742
+    },
+    {
+      "path": "docs/results/reference-training/throughput_curve.png",
+      "sha256": "5d88e507ccf9eb9528b61391d64e18050b2e098a1e6748fd7eb5a67fd5576ff7",
+      "size_bytes": 151342
+    }
+  ],
+  "checkpoint_format_version": 2,
+  "final_completed_step": 2799,
+  "generator": {
+    "git_sha": "ed7da8722d6fed89b1b05ed99c8fc7ca4e6231d6",
+    "name": "minigpt.training_report",
+    "version": 1
+  },
+  "manifest_self_excluded": true,
+  "resolved_config_sha256": "d422b1cc92d4c1be75a886cfefc7762b02bd1f2da811c3ffdd9a22111a81423d",
+  "schema_version": 1,
+  "sources": {
+    "checkpoint": {
+      "path": "checkpoints/reference/latest.pt",
+      "sha256": "023c344c3ff30fbf7d00f72dc68bed6ddecada57544e27bc8baa228585247ff8",
+      "size_bytes": 9905931
+    },
+    "config": {
+      "path": "configs/char_gpt_reference.yaml",
+      "sha256": "c4dddfc3f8a49e41594b78ba75b444c84cc0abfa0d8b5dfce4c3d300fe5a2d3e",
+      "size_bytes": 707
+    },
+    "metrics": {
+      "path": "outputs/reference/metrics.jsonl",
+      "sha256": "024806277467ecf6047b9ac4ba1244f5dbde128576bd8d134c9f8380ae631035",
+      "size_bytes": 936209
+    },
+    "provenance": {
+      "path": "outputs/reference/run_provenance.json",
+      "sha256": "772668c9335e87582847e93f215b13815c4af69554d7ddd15a3b00868d3bc45e",
+      "size_bytes": 2444
+    },
+    "samples": {
+      "path": "outputs/reference/samples.txt",
+      "sha256": "1258e41e4a3d74b7c670064577b11ea674ea11fd78277718917cd2b12ba63556",
+      "size_bytes": 2273
+    },
+    "tokenizer": {
+      "path": "data/processed/tokenizer.json",
+      "sha256": "12defdf2541e792c2e8c6916ac78c7cd6a13ac01dcf0755454d2765cc03e13fa",
+      "size_bytes": 697
+    },
+    "train_data": {
+      "path": "data/processed/train.npy",
+      "sha256": "9ae0938d1da7f7354913221c3cfc8e4fe710ccc56ede1632ea1b10f2a940ac74",
+      "size_bytes": 2007836
+    },
+    "validation_data": {
+      "path": "data/processed/val.npy",
+      "sha256": "2f925087c373af1f6dcb577556c2c017c405da6f38cf9f1bb3554ded69a69d77",
+      "size_bytes": 223208
+    }
+  }
+}

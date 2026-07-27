@@ -983,3 +983,50 @@ def test_committed_report_text_artifacts_preserve_generated_line_endings() -> No
         f": eol: {REFERENCE_TEXT_ARTIFACT_EOL[name]}" for name in REFERENCE_TEXT_ARTIFACT_EOL
     ]
     assert all(line.endswith(expected) for line, expected in zip(lines, expected_eol, strict=True))
+
+
+def test_committed_reference_manifest_verifies_reviewable_evidence() -> None:
+    # Given: the compact evidence package committed without its large raw sources.
+    manifest_path = PROJECT_ROOT / REFERENCE_RESULT_DIRECTORY / "artifact_manifest.json"
+    manifest = cast(
+        "JsonValue",
+        json.loads(manifest_path.read_text(encoding="utf-8")),
+    )
+    assert isinstance(manifest, dict)
+    artifacts = manifest["artifacts"]
+    sources = manifest["sources"]
+    generator = manifest["generator"]
+    assert isinstance(artifacts, list)
+    assert isinstance(sources, dict)
+    assert isinstance(generator, dict)
+
+    # When/Then: every committed artifact matches its declared identity and raw inputs remain bound
+    # by durable repository-relative paths, sizes, and SHA-256 values.
+    assert len(artifacts) == 8
+    for raw_artifact in artifacts:
+        assert_file_identity(PROJECT_ROOT, raw_artifact)
+    assert set(sources) == {
+        "checkpoint",
+        "config",
+        "metrics",
+        "provenance",
+        "samples",
+        "tokenizer",
+        "train_data",
+        "validation_data",
+    }
+    for raw_source in sources.values():
+        assert isinstance(raw_source, dict)
+        assert set(raw_source) == {"path", "sha256", "size_bytes"}
+        assert isinstance(raw_source["path"], str)
+        assert isinstance(raw_source["sha256"], str)
+        assert len(raw_source["sha256"]) == 64
+        assert isinstance(raw_source["size_bytes"], int)
+        assert raw_source["size_bytes"] > 0
+    assert generator == {
+        "name": "minigpt.training_report",
+        "version": 1,
+        "git_sha": "ed7da8722d6fed89b1b05ed99c8fc7ca4e6231d6",
+    }
+    assert manifest["checkpoint_format_version"] == 2
+    assert manifest["final_completed_step"] == 2799
