@@ -273,15 +273,6 @@ Intel Core i7-14700（20 physical / 28 logical cores）。
 输出、学习率、loss 和 metrics step 均完全相同，且 step 不重复、不丢失。`step_time_ms`、
 `tokens_per_sec`、RSS 等 wall-clock/系统指标会自然波动，不要求相同。
 
-### Reference training 证据
-
-[CPU reference training 自动生成报告](docs/results/reference-training/README.md)记录了一次
-从 clean Git SHA 开始、在非调度 step 正常退出并由 checkpoint v2 恢复到完整训练计划的
-真实运行。报告、resolved config、原始指标 CSV、未润色 samples、环境清单、三张曲线和
-artifact manifest 均由同一工具生成；根 README 不复制实验数字，以该报告及其 SHA-256
-manifest 为唯一结果来源。Canonical 实验定义见
-[char_gpt_reference.yaml](configs/char_gpt_reference.yaml)。
-
 ## 项目结构
 
 ```text
