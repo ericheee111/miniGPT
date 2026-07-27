@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 import re
+import shutil
 import statistics
+import subprocess
+import tempfile
 from dataclasses import dataclass, replace
 from hashlib import sha256
+from importlib import import_module
 from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
+import matplotlib as mpl
 import numpy as np
 import numpy.typing as npt
+import torch
 from typing_extensions import override
 
 from minigpt.checkpoint import (
@@ -23,7 +30,8 @@ from minigpt.checkpoint import (
 )
 from minigpt.config import load_experiment_config
 from minigpt.data import CharTokenizer
-from minigpt.optimization import learning_rate_at_step
+from minigpt.model import GPT
+from minigpt.optimization import create_sample_generator, learning_rate_at_step, seed_everything
 from minigpt.run_provenance import (
     RunProvenance,
     find_repository_root,
@@ -33,6 +41,59 @@ from minigpt.run_provenance import (
 
 if TYPE_CHECKING:
     from minigpt.settings import ExperimentConfig
+
+
+class _Figure(Protocol):
+    def suptitle(self, title: str) -> None: ...
+
+    def tight_layout(self) -> None: ...
+
+    def savefig(
+        self,
+        path: Path,
+        *,
+        dpi: int,
+        metadata: dict[str, str],
+    ) -> None: ...
+
+
+class _PlotModule(Protocol):
+    def figure(self, *, figsize: tuple[float, float]) -> _Figure: ...
+
+    def gcf(self) -> _Figure: ...
+
+    def plot(
+        self,
+        steps: tuple[int, ...],
+        values: tuple[float, ...],
+        *,
+        label: str,
+        linewidth: float,
+    ) -> None: ...
+
+    def scatter(
+        self,
+        steps: tuple[int, ...],
+        values: tuple[float, ...],
+        *,
+        label: str,
+        marker: str,
+        s: int,
+    ) -> None: ...
+
+    def xlabel(self, label: str) -> None: ...
+
+    def ylabel(self, label: str) -> None: ...
+
+    def grid(self, *, visible: bool, alpha: float) -> None: ...
+
+    def legend(self) -> None: ...
+
+    def close(self, figure: _Figure) -> None: ...
+
+
+mpl.use("Agg")
+_PLOT = cast("_PlotModule", cast("object", import_module("matplotlib.pyplot")))
 
 JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
 
@@ -58,6 +119,23 @@ _INCREASING_SAMPLES_REASON: Final = "sample steps must be strictly increasing"
 _VALIDATION_REQUIRED_REASON: Final = "metrics must contain at least one validation loss"
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
 _MINIMUM_RESUME_SEGMENTS: Final = 2
+_SAMPLE_TEMPERATURE: Final = 0.8
+_SAMPLE_TOP_K: Final = 20
+_REPORT_SCHEMA_VERSION: Final = 1
+_FIGURE_SIZE: Final = (12.0, 6.75)
+_FIGURE_DPI: Final = 120
+_CSV_FIELDS: Final = (
+    "step",
+    "train_loss",
+    "val_loss",
+    "learning_rate",
+    "step_time_ms",
+    "tokens_per_sec",
+    "data_time_ms",
+    "forward_backward_time_ms",
+    "optimizer_time_ms",
+    "cpu_memory_mb",
+)
 
 
 @dataclass(slots=True)
@@ -71,6 +149,18 @@ class TrainingEvidenceError(ValueError):
     def __str__(self) -> str:
         """Render the invalid evidence path and exact reason."""
         return f"invalid training evidence {self.path}: {self.reason}"
+
+
+@dataclass(slots=True)
+class ReportOutputExistsError(FileExistsError):
+    """Reject generation into a directory that may contain mixed evidence."""
+
+    path: Path
+
+    @override
+    def __str__(self) -> str:
+        """Render the destination that must remain untouched."""
+        return f"training report output already exists: {self.path}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +228,31 @@ class ValidatedReportData:
     train_token_count: int
     val_token_count: int
     checkpoint_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingSeries:
+    """Expose unsmoothed numerical series used by report figures."""
+
+    train_loss: tuple[tuple[int, float], ...]
+    validation_loss: tuple[tuple[int, float], ...]
+    learning_rate: tuple[tuple[int, float], ...]
+    tokens_per_sec: tuple[tuple[int, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReportArtifacts:
+    """Locate every generated compact reference-training artifact."""
+
+    readme: Path
+    environment: Path
+    resolved_config: Path
+    metrics_csv: Path
+    loss_curve: Path
+    learning_rate_curve: Path
+    throughput_curve: Path
+    generated_samples: Path
+    manifest: Path
 
 
 def _mapping(value: JsonValue, path: Path, line_number: int) -> dict[str, JsonValue]:
@@ -486,3 +601,438 @@ def validate_reference_sources(inputs: ReportInputs) -> ValidatedReportData:
         val_token_count=val_token_count,
         checkpoint_sha256=checkpoint_sha256,
     )
+
+
+def build_training_series(records: tuple[MetricRecord, ...]) -> TrainingSeries:
+    """Build exact observed figure points without smoothing or interpolation."""
+    return TrainingSeries(
+        train_loss=tuple((record.step, record.train_loss) for record in records),
+        validation_loss=tuple(
+            (record.step, record.val_loss) for record in records if record.val_loss is not None
+        ),
+        learning_rate=tuple((record.step, record.learning_rate) for record in records),
+        tokens_per_sec=tuple((record.step, record.tokens_per_sec) for record in records),
+    )
+
+
+def figure_title(metric_name: str, experiment_name: str, commit_sha: str) -> str:
+    """Build a stable title containing experiment and source identity."""
+    return f"{metric_name} — {experiment_name} @ {commit_sha[:8]}"
+
+
+def _write_metrics_csv(path: Path, records: tuple[MetricRecord, ...]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=_CSV_FIELDS, lineterminator="\n")
+        writer.writeheader()
+        for record in records:
+            writer.writerow(
+                {
+                    "step": record.step,
+                    "train_loss": record.train_loss,
+                    "val_loss": record.val_loss,
+                    "learning_rate": record.learning_rate,
+                    "step_time_ms": record.step_time_ms,
+                    "tokens_per_sec": record.tokens_per_sec,
+                    "data_time_ms": record.data_time_ms,
+                    "forward_backward_time_ms": record.forward_backward_time_ms,
+                    "optimizer_time_ms": record.optimizer_time_ms,
+                    "cpu_memory_mb": record.cpu_memory_mb,
+                }
+            )
+
+
+def _save_figure(path: Path, title: str) -> None:
+    figure = _PLOT.gcf()
+    figure.suptitle(title)
+    figure.tight_layout()
+    figure.savefig(
+        path,
+        dpi=_FIGURE_DPI,
+        metadata={"Software": f"miniGPT {title.rsplit(' ', maxsplit=1)[-1]}"},
+    )
+    _PLOT.close(figure)
+
+
+def _plot_loss(path: Path, series: TrainingSeries, title: str) -> None:
+    _ = _PLOT.figure(figsize=_FIGURE_SIZE)
+    train_steps, train_values = zip(*series.train_loss, strict=True)
+    validation_steps, validation_values = zip(*series.validation_loss, strict=True)
+    _PLOT.plot(train_steps, train_values, label="train loss", linewidth=1.5)
+    _PLOT.scatter(
+        validation_steps,
+        validation_values,
+        label="validation loss (observed)",
+        marker="o",
+        s=24,
+    )
+    _PLOT.xlabel("global step")
+    _PLOT.ylabel("cross-entropy loss")
+    _PLOT.grid(visible=True, alpha=0.25)
+    _PLOT.legend()
+    _save_figure(path, title)
+
+
+def _plot_single_series(
+    path: Path,
+    points: tuple[tuple[int, float], ...],
+    *,
+    title: str,
+    label: str,
+    y_axis_label: str,
+) -> None:
+    _ = _PLOT.figure(figsize=_FIGURE_SIZE)
+    steps, values = zip(*points, strict=True)
+    _PLOT.plot(steps, values, label=label, linewidth=1.5)
+    _PLOT.xlabel("global step")
+    _PLOT.ylabel(y_axis_label)
+    _PLOT.grid(visible=True, alpha=0.25)
+    _PLOT.legend()
+    _save_figure(path, title)
+
+
+def _baseline_sample(data: ValidatedReportData) -> tuple[str, int]:
+    config = data.config
+    seed_everything(config.runtime.seed, config.runtime.num_threads)
+    model = GPT(config.model.to_gpt_config(config.data.block_size))
+    _ = model.eval()
+    prompt = torch.tensor(
+        [data.tokenizer.encode(config.training.sample_prompt)],
+        dtype=torch.long,
+    )
+    generated = model.generate(
+        prompt,
+        max_new_tokens=config.training.sample_tokens,
+        temperature=_SAMPLE_TEMPERATURE,
+        top_k=min(_SAMPLE_TOP_K, data.tokenizer.vocab_size),
+        generator=create_sample_generator(config.runtime.seed),
+    )
+    token_ids = [int(generated[0, index]) for index in range(generated.shape[1])]
+    return data.tokenizer.decode(token_ids), model.parameter_count()
+
+
+def _environment_document(
+    data: ValidatedReportData,
+    model_parameter_count: int,
+) -> dict[str, JsonValue]:
+    provenance = data.provenance
+    environment = provenance.environment
+    fingerprints = data.metadata.dataset_fingerprints
+    return {
+        "schema_version": _REPORT_SCHEMA_VERSION,
+        "experiment_name": provenance.experiment_name,
+        "git_commit_sha": provenance.git.commit_sha,
+        "git_branch": provenance.git.branch,
+        "git_dirty": provenance.git.dirty,
+        "run_started_at_utc": provenance.started_at_utc,
+        "run_ended_at_utc": provenance.ended_at_utc,
+        "operating_system": environment.operating_system,
+        "machine": environment.machine,
+        "python_version": environment.python_version,
+        "pytorch_version": environment.pytorch_version,
+        "numpy_version": environment.numpy_version,
+        "cpu_name": environment.cpu_name,
+        "physical_cores": environment.physical_cores,
+        "logical_cores": environment.logical_cores,
+        "torch_num_threads": environment.torch_num_threads,
+        "cuda_available": environment.cuda_available,
+        "dataset_fingerprints": {
+            "tokenizer_sha256": fingerprints.tokenizer_sha256,
+            "train_sha256": fingerprints.train_sha256,
+            "val_sha256": fingerprints.val_sha256,
+        },
+        "checkpoint_format_version": data.metadata.format_version,
+        "checkpoint_sha256": data.checkpoint_sha256,
+        "model_parameter_count": model_parameter_count,
+        "resolved_config_sha256": data.provenance.resolved_config_sha256,
+    }
+
+
+def _write_json(path: Path, document: dict[str, JsonValue]) -> None:
+    _ = path.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _command_lines(provenance: RunProvenance) -> str:
+    return "\n".join(
+        f"python train.py {subprocess.list2cmdline(list(segment.argv))}"
+        for segment in provenance.segments
+    )
+
+
+def _sample_markdown(label: str, sample: GeneratedSample) -> str:
+    return f"### {label} (step {sample.step})\n\n```text\n{sample.text}\n```"
+
+
+def _result_row(
+    label: str,
+    initial: float,
+    final: float,
+    best: float,
+    *,
+    precision: int,
+) -> str:
+    return f"| {label} | {initial:.{precision}f} | {final:.{precision}f} | {best:.{precision}f} |"
+
+
+def _markdown_report(
+    data: ValidatedReportData,
+    *,
+    baseline_sample: str,
+    model_parameter_count: int,
+) -> str:
+    config = data.config
+    summary = data.summary
+    first, middle, final = select_representative_samples(data.samples)
+    checkpoint_name = data.config.training.checkpoint_dir / "latest.pt"
+    result_rows = "\n".join(
+        (
+            _result_row(
+                "train cross-entropy",
+                summary.initial_train_loss,
+                summary.final_train_loss,
+                summary.best_train_loss,
+                precision=6,
+            ),
+            _result_row(
+                "validation cross-entropy",
+                summary.initial_val_loss,
+                summary.final_val_loss,
+                summary.best_val_loss,
+                precision=6,
+            ),
+            _result_row(
+                "train character perplexity",
+                character_perplexity(summary.initial_train_loss),
+                character_perplexity(summary.final_train_loss),
+                character_perplexity(summary.best_train_loss),
+                precision=4,
+            ),
+            _result_row(
+                "validation character perplexity",
+                character_perplexity(summary.initial_val_loss),
+                character_perplexity(summary.final_val_loss),
+                character_perplexity(summary.best_val_loss),
+                precision=4,
+            ),
+        )
+    )
+    return f"""# CPU Reference Training Evidence
+
+This report is generated from validated raw artifacts. Its purpose is to provide a reproducible,
+reviewable training example—not a hardware benchmark.
+
+## Experiment identity
+
+- experiment: `{data.provenance.experiment_name}`
+- Git SHA: `{data.provenance.git.commit_sha}`
+- clean worktree at training time: `{str(not data.provenance.git.dirty).lower()}`
+- checkpoint format: v{data.metadata.format_version}
+- checkpoint: `{checkpoint_name.as_posix()}`
+- checkpoint SHA-256: `{data.checkpoint_sha256}`
+- checkpoint resume: yes ({len(data.provenance.segments)} completed process segments)
+- resolved config SHA-256: `{data.provenance.resolved_config_sha256}`
+
+## Model and data
+
+- character-level GPT: {config.model.n_layer} layers, {config.model.n_head} heads,
+  embedding width {config.model.n_embd}, block size {config.data.block_size}
+- trainable parameters: {model_parameter_count:,}
+- vocabulary size: {config.model.vocab_size}
+- batch size: {config.data.batch_size}
+- Tiny Shakespeare train tokens: {data.train_token_count:,}
+- Tiny Shakespeare validation tokens: {data.val_token_count:,}
+
+## Full training commands
+
+```powershell
+{_command_lines(data.provenance)}
+```
+
+Both processes used the same complete experiment config. The first process ended at its
+`--run-until-step` boundary; the second restored checkpoint v2 and completed `max_steps`.
+
+## Results
+
+| metric | initial | final | best |
+|---|---:|---:|---:|
+{result_rows}
+
+- total optimization steps: {summary.total_steps:,}
+- median measured tokens/s: {summary.median_tokens_per_sec:.2f}
+- peak process RSS: {summary.peak_cpu_memory_mb:.2f} MiB
+- validation values are plotted only at their observed scheduled steps
+
+![Train and validation loss](loss_curve.png)
+
+![Learning rate](learning_rate_curve.png)
+
+![Measured throughput](throughput_curve.png)
+
+## Generated text
+
+Selection rule: untrained baseline plus **first / middle / final scheduled samples**, using the
+configured fixed prompt, sample seed, temperature, and top-k. No sample was selected for fluency.
+
+### Untrained baseline (step -1)
+
+```text
+{baseline_sample}
+```
+
+{_sample_markdown("First scheduled sample", first)}
+
+{_sample_markdown("Middle scheduled sample", middle)}
+
+{_sample_markdown("Final scheduled sample", final)}
+
+The complete unedited scheduled sample file is [generated_samples.txt](generated_samples.txt).
+
+## Limitations
+
+This is one small CPU-only character-model training run on Tiny Shakespeare. Lower training loss
+does not by itself demonstrate generalization, model quality, statistical significance, or
+hardware performance. Throughput includes the normal training path and scheduled validation
+overhead, so it must not be compared with a dedicated benchmark.
+
+## Reproduce
+
+1. Install `.[dev,report]` and prepare Tiny Shakespeare with
+   `python prepare_data.py --data-dir data`.
+2. Run the two commands recorded above from Git SHA `{data.provenance.git.commit_sha}`.
+3. Run `python report_training.py` with the config, metrics, samples, checkpoint, provenance, and
+   a new output directory.
+4. Compare source and generated file hashes in
+   [artifact_manifest.json](artifact_manifest.json). The checkpoint is intentionally not committed;
+   its SHA-256 above binds the report to the retained local binary.
+"""
+
+
+def _artifact_document(path: Path, root: Path) -> dict[str, JsonValue]:
+    return {
+        "path": path.relative_to(root).as_posix(),
+        "sha256": _sha256_file(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def _manifest_document(
+    data: ValidatedReportData,
+    inputs: ReportInputs,
+    artifact_paths: tuple[Path, ...],
+    output_dir: Path,
+) -> dict[str, JsonValue]:
+    fingerprints = data.metadata.dataset_fingerprints
+    return {
+        "schema_version": _REPORT_SCHEMA_VERSION,
+        "generator_git_sha": data.provenance.git.commit_sha,
+        "manifest_self_excluded": True,
+        "artifacts": [
+            _artifact_document(path, output_dir)
+            for path in sorted(artifact_paths, key=lambda item: item.name)
+        ],
+        "source_fingerprints": {
+            "config_sha256": _sha256_file(inputs.config_path),
+            "metrics_sha256": _sha256_file(inputs.metrics_path),
+            "samples_sha256": _sha256_file(inputs.samples_path),
+            "checkpoint_sha256": data.checkpoint_sha256,
+            "provenance_sha256": _sha256_file(inputs.provenance_path),
+            "resolved_config_sha256": data.provenance.resolved_config_sha256,
+            "tokenizer_sha256": fingerprints.tokenizer_sha256,
+            "train_sha256": fingerprints.train_sha256,
+            "val_sha256": fingerprints.val_sha256,
+        },
+    }
+
+
+def _temporary_artifact_paths(directory: Path) -> ReportArtifacts:
+    return ReportArtifacts(
+        readme=directory / "README.md",
+        environment=directory / "environment.json",
+        resolved_config=directory / "resolved_config.yaml",
+        metrics_csv=directory / "metrics.csv",
+        loss_curve=directory / "loss_curve.png",
+        learning_rate_curve=directory / "learning_rate_curve.png",
+        throughput_curve=directory / "throughput_curve.png",
+        generated_samples=directory / "generated_samples.txt",
+        manifest=directory / "artifact_manifest.json",
+    )
+
+
+def _generate_into_directory(
+    data: ValidatedReportData,
+    inputs: ReportInputs,
+    directory: Path,
+) -> None:
+    paths = _temporary_artifact_paths(directory)
+    series = build_training_series(data.metrics)
+    baseline_sample, parameter_count = _baseline_sample(data)
+    _ = paths.resolved_config.write_text(data.config.to_yaml(), encoding="utf-8")
+    _write_metrics_csv(paths.metrics_csv, data.metrics)
+    _ = shutil.copyfile(inputs.samples_path, paths.generated_samples)
+    _write_json(paths.environment, _environment_document(data, parameter_count))
+    _ = paths.readme.write_text(
+        _markdown_report(
+            data,
+            baseline_sample=baseline_sample,
+            model_parameter_count=parameter_count,
+        ),
+        encoding="utf-8",
+    )
+    experiment = data.provenance.experiment_name
+    commit_sha = data.provenance.git.commit_sha
+    _plot_loss(
+        paths.loss_curve,
+        series,
+        figure_title("Train and validation loss", experiment, commit_sha),
+    )
+    _plot_single_series(
+        paths.learning_rate_curve,
+        series.learning_rate,
+        title=figure_title("Learning rate", experiment, commit_sha),
+        label="learning rate",
+        y_axis_label="learning rate",
+    )
+    _plot_single_series(
+        paths.throughput_curve,
+        series.tokens_per_sec,
+        title=figure_title("Measured throughput", experiment, commit_sha),
+        label="tokens/s",
+        y_axis_label="tokens/s",
+    )
+    artifact_paths = (
+        paths.readme,
+        paths.environment,
+        paths.resolved_config,
+        paths.metrics_csv,
+        paths.loss_curve,
+        paths.learning_rate_curve,
+        paths.throughput_curve,
+        paths.generated_samples,
+    )
+    _write_json(
+        paths.manifest,
+        _manifest_document(data, inputs, artifact_paths, directory),
+    )
+
+
+def generate_training_report(inputs: ReportInputs, output_dir: Path) -> ReportArtifacts:
+    """Validate sources and atomically generate the complete evidence package."""
+    if output_dir.exists():
+        raise ReportOutputExistsError(output_dir)
+    data = validate_reference_sources(inputs)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_dir.name}-",
+            dir=output_dir.parent,
+        )
+    )
+    try:
+        _generate_into_directory(data, inputs, temporary)
+        _ = temporary.replace(output_dir)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return _temporary_artifact_paths(output_dir)

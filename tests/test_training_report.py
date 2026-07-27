@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 import math
 import subprocess
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, cast
 
 import numpy as np
@@ -37,8 +41,12 @@ from minigpt.settings import (
 )
 from minigpt.training_report import (
     ReportInputs,
+    ReportOutputExistsError,
     TrainingEvidenceError,
+    build_training_series,
     character_perplexity,
+    figure_title,
+    generate_training_report,
     load_generated_samples,
     load_metric_records,
     select_representative_samples,
@@ -48,7 +56,6 @@ from minigpt.training_report import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
 
@@ -596,3 +603,213 @@ def test_cross_artifact_validation_requires_final_scheduled_sample(tmp_path: Pat
     # When/Then: the sample schedule is enforced without fabricating a point.
     with pytest.raises(TrainingEvidenceError, match="sample"):
         _ = validate_reference_sources(fixture.inputs)
+
+
+def test_training_series_preserve_observed_steps_and_values(tmp_path: Path) -> None:
+    # Given: metrics with validation observed only at scheduled steps.
+    fixture = prepare_evidence_fixture(tmp_path)
+    evidence = validate_reference_sources(fixture.inputs)
+
+    # When: pure plotting series and a title are derived.
+    series = build_training_series(evidence.metrics)
+    title = figure_title(
+        "Loss",
+        evidence.provenance.experiment_name,
+        evidence.provenance.git.commit_sha,
+    )
+
+    # Then: no value is smoothed or interpolated and provenance appears in the title.
+    assert series.train_loss == (
+        (0, 4.0),
+        (1, 3.75),
+        (2, 3.5),
+        (3, 3.25),
+    )
+    assert series.validation_loss == ((1, 3.4), (3, 3.2))
+    assert series.learning_rate == tuple(
+        (record.step, record.learning_rate) for record in evidence.metrics
+    )
+    assert series.tokens_per_sec == (
+        (0, 100.0),
+        (1, 101.0),
+        (2, 102.0),
+        (3, 103.0),
+    )
+    assert title == f"Loss — reference @ {evidence.provenance.git.commit_sha[:8]}"
+
+
+def test_report_generator_writes_complete_verified_evidence_package(tmp_path: Path) -> None:
+    # Given: complete validated source evidence and a new ignored destination.
+    fixture = prepare_evidence_fixture(tmp_path)
+    output_dir = fixture.repository / "outputs" / "generated-report"
+
+    # When: the report is generated without hand-entered conclusions.
+    artifacts = generate_training_report(fixture.inputs, output_dir)
+
+    # Then: all required compact artifacts exist.
+    artifact_paths = (
+        artifacts.readme,
+        artifacts.environment,
+        artifacts.resolved_config,
+        artifacts.metrics_csv,
+        artifacts.loss_curve,
+        artifacts.learning_rate_curve,
+        artifacts.throughput_curve,
+        artifacts.generated_samples,
+        artifacts.manifest,
+    )
+    assert all(path.is_file() for path in artifact_paths)
+    assert artifacts.generated_samples.read_bytes() == fixture.inputs.samples_path.read_bytes()
+
+    with artifacts.metrics_csv.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert [int(row["step"]) for row in rows] == [0, 1, 2, 3]
+    assert [float(row["train_loss"]) for row in rows] == [4.0, 3.75, 3.5, 3.25]
+    assert rows[0]["val_loss"] == ""
+    assert float(rows[1]["val_loss"]) == 3.4
+
+    environment = cast(
+        "JsonValue",
+        json.loads(artifacts.environment.read_text(encoding="utf-8")),
+    )
+    assert isinstance(environment, dict)
+    expected_environment_keys = {
+        "experiment_name",
+        "git_commit_sha",
+        "git_dirty",
+        "run_started_at_utc",
+        "run_ended_at_utc",
+        "operating_system",
+        "python_version",
+        "pytorch_version",
+        "numpy_version",
+        "cpu_name",
+        "physical_cores",
+        "logical_cores",
+        "torch_num_threads",
+        "cuda_available",
+        "dataset_fingerprints",
+        "checkpoint_format_version",
+        "model_parameter_count",
+        "resolved_config_sha256",
+    }
+    assert expected_environment_keys <= set(environment)
+    assert environment["git_dirty"] is False
+    assert environment["checkpoint_format_version"] == 2
+
+    manifest = cast(
+        "JsonValue",
+        json.loads(artifacts.manifest.read_text(encoding="utf-8")),
+    )
+    assert isinstance(manifest, dict)
+    manifest_artifacts = manifest["artifacts"]
+    assert isinstance(manifest_artifacts, list)
+    assert len(manifest_artifacts) == 8
+    for raw_item in manifest_artifacts:
+        assert isinstance(raw_item, dict)
+        relative_path = raw_item["path"]
+        digest = raw_item["sha256"]
+        size_bytes = raw_item["size_bytes"]
+        assert isinstance(relative_path, str)
+        assert isinstance(digest, str)
+        assert isinstance(size_bytes, int)
+        artifact_path = output_dir / relative_path
+        assert digest == hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        assert size_bytes == artifact_path.stat().st_size
+    assert manifest["generator_git_sha"] == environment["git_commit_sha"]
+    source_fingerprints = manifest["source_fingerprints"]
+    assert isinstance(source_fingerprints, dict)
+    assert source_fingerprints["checkpoint_sha256"]
+    assert source_fingerprints["metrics_sha256"]
+    assert source_fingerprints["config_sha256"]
+
+    readme = artifacts.readme.read_text(encoding="utf-8")
+    assert "first / middle / final scheduled samples" in readme
+    assert "checkpoint resume: yes" in readme
+    assert fixture.inputs.checkpoint_path.name in readme
+    assert artifacts.loss_curve.stat().st_size > 0
+    assert artifacts.learning_rate_curve.stat().st_size > 0
+    assert artifacts.throughput_curve.stat().st_size > 0
+
+
+def test_report_generator_rejects_existing_destination(tmp_path: Path) -> None:
+    # Given: valid evidence and a destination that already contains unrelated bytes.
+    fixture = prepare_evidence_fixture(tmp_path)
+    output_dir = fixture.repository / "outputs" / "existing-report"
+    output_dir.mkdir(parents=True)
+    marker = output_dir / "keep.txt"
+    _ = marker.write_text("do not mix", encoding="utf-8")
+
+    # When/Then: report generation refuses to merge or overwrite evidence.
+    with pytest.raises(ReportOutputExistsError):
+        _ = generate_training_report(fixture.inputs, output_dir)
+    assert marker.read_text(encoding="utf-8") == "do not mix"
+
+
+def test_report_regeneration_is_stable_for_text_artifacts(tmp_path: Path) -> None:
+    # Given: one immutable source set and two fresh ignored destinations.
+    fixture = prepare_evidence_fixture(tmp_path)
+    first = generate_training_report(
+        fixture.inputs,
+        fixture.repository / "outputs" / "report-a",
+    )
+    second = generate_training_report(
+        fixture.inputs,
+        fixture.repository / "outputs" / "report-b",
+    )
+
+    # When: deterministic text artifacts are compared.
+    first_text_paths = (
+        first.readme,
+        first.environment,
+        first.resolved_config,
+        first.metrics_csv,
+        first.generated_samples,
+    )
+    second_text_paths = (
+        second.readme,
+        second.environment,
+        second.resolved_config,
+        second.metrics_csv,
+        second.generated_samples,
+    )
+
+    # Then: repeated generation preserves exact report conclusions and source text.
+    assert [path.read_bytes() for path in first_text_paths] == [
+        path.read_bytes() for path in second_text_paths
+    ]
+
+
+def test_report_cli_generates_package_from_explicit_sources(tmp_path: Path) -> None:
+    # Given: valid evidence and the repository's typed report CLI.
+    fixture = prepare_evidence_fixture(tmp_path)
+    output_dir = fixture.repository / "outputs" / "cli-report"
+    cli_path = Path(__file__).parents[1] / "report_training.py"
+
+    # When: all sources are passed explicitly in a separate process.
+    completed = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            str(cli_path),
+            "--config",
+            str(fixture.inputs.config_path),
+            "--metrics",
+            str(fixture.inputs.metrics_path),
+            "--samples",
+            str(fixture.inputs.samples_path),
+            "--checkpoint",
+            str(fixture.inputs.checkpoint_path),
+            "--provenance",
+            str(fixture.inputs.provenance_path),
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    # Then: the CLI reports the durable Markdown and manifest paths.
+    assert completed.returncode == 0, completed.stderr
+    assert str(output_dir / "README.md") in completed.stdout
+    assert str(output_dir / "artifact_manifest.json") in completed.stdout
