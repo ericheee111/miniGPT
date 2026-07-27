@@ -160,3 +160,38 @@ def test_append_jsonl_writes_all_required_training_metrics(tmp_path: Path) -> No
         "optimizer_time_ms": 4.0,
         "cpu_memory_mb": 256.0,
     }
+
+
+def test_canonical_cpu_reference_config_has_fixed_experiment_semantics() -> None:
+    # Given: the canonical config selected mechanically from the Stage 7A calibration.
+    config_path = Path(__file__).parents[1] / "configs" / "char_gpt_reference.yaml"
+
+    # When: the experiment definition is loaded.
+    experiment = config.load_experiment_config(config_path)
+    training = experiment.training
+
+    # Then: architecture, schedule horizon, event cadence, and output identity stay fixed.
+    assert experiment.data.block_size == 128
+    assert experiment.data.batch_size == 16
+    assert experiment.model.n_layer == 4
+    assert experiment.model.n_head == 4
+    assert experiment.model.n_embd == 128
+    assert experiment.model.dropout == 0.1
+    assert experiment.model.bias is False
+    assert training.max_steps == 2800
+    assert training.warmup_steps == 140
+    assert training.lr_decay_steps == training.max_steps
+    assert training.eval_interval == 140
+    assert training.checkpoint_interval == 280
+    assert training.sample_interval == 280
+    assert training.max_steps % training.eval_interval == 0
+    assert training.max_steps % training.checkpoint_interval == 0
+    assert training.max_steps % training.sample_interval == 0
+    assert training.output_dir == Path("outputs/reference")
+    assert training.checkpoint_dir == Path("checkpoints/reference")
+    assert training.tensorboard_dir == Path("outputs/reference/tensorboard")
+
+    run_until_step = training.max_steps // 2 + training.eval_interval // 2
+    assert 0 < run_until_step < training.max_steps
+    assert run_until_step % training.eval_interval != 0
+    assert run_until_step % training.sample_interval != 0
