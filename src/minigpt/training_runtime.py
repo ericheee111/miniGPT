@@ -231,7 +231,7 @@ def run_training_step(components: TrainingComponents, step: int) -> TrainingMetr
     token_count = config.data.batch_size * config.data.block_size
     tokens_per_sec = token_count / (step_time_ms / _MILLISECONDS_PER_SECOND)
     val_loss = None
-    if (step + 1) % training.eval_interval == 0 or step == training.max_steps - 1:
+    if (step + 1) % training.eval_interval == 0:
         val_loss = evaluate(components.model, components.val_batcher, training.eval_batches)
     return TrainingMetrics(
         step=step,

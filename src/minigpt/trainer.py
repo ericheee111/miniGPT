@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from typing_extensions import override
 
 from minigpt.checkpoint import load_checkpoint, save_checkpoint
 from minigpt.metrics import TrainingMetrics, append_jsonl
@@ -47,6 +48,23 @@ class TrainingResult:
     samples_path: Path
     checkpoint_path: Path
     tensorboard_dir: Path
+
+
+@dataclass(slots=True)
+class InvalidRunBoundaryError(ValueError):
+    """Reject a process boundary outside the remaining experiment range."""
+
+    boundary: int
+    start_step: int
+    max_steps: int
+
+    @override
+    def __str__(self) -> str:
+        """Render the exclusive range required for this process."""
+        return (
+            "invalid run boundary "
+            f"{self.boundary}: expected {self.start_step} < boundary <= {self.max_steps}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,8 +121,8 @@ def _write_tensorboard(writer: ScalarWriter, metrics: TrainingMetrics) -> None:
     writer.add_scalar("system/cpu_memory_mb", metrics.cpu_memory_mb, metrics.step)
 
 
-def _event_due(step: int, interval: int, max_steps: int) -> bool:
-    return (step + 1) % interval == 0 or step == max_steps - 1
+def _scheduled_event_due(step: int, interval: int) -> bool:
+    return (step + 1) % interval == 0
 
 
 def _prepare_fresh_outputs(paths: _OutputPaths) -> None:
@@ -118,18 +136,19 @@ def _record_step_events(
     metrics: TrainingMetrics,
     paths: _OutputPaths,
     writer: ScalarWriter,
-) -> None:
+) -> bool:
     training = components.config.training
     append_jsonl(paths.metrics, metrics)
     _write_tensorboard(writer, metrics)
-    if _event_due(metrics.step, training.sample_interval, training.max_steps):
+    if _scheduled_event_due(metrics.step, training.sample_interval):
         _append_sample(
             paths.samples,
             metrics.step,
             components,
             training,
         )
-    if _event_due(metrics.step, training.checkpoint_interval, training.max_steps):
+    checkpoint_saved = _scheduled_event_due(metrics.step, training.checkpoint_interval)
+    if checkpoint_saved:
         save_checkpoint(
             paths.checkpoint,
             resources=components.checkpoint_resources,
@@ -137,7 +156,7 @@ def _record_step_events(
             config=components.config,
         )
         writer.flush()
-    if _event_due(metrics.step, training.log_interval, training.max_steps):
+    if _scheduled_event_due(metrics.step, training.log_interval):
         validation_text = "n/a" if metrics.val_loss is None else f"{metrics.val_loss:.4f}"
         _LOGGER.info(
             "step=%d train_loss=%.4f val_loss=%s tokens_per_sec=%.1f",
@@ -146,14 +165,19 @@ def _record_step_events(
             validation_text,
             metrics.tokens_per_sec,
         )
+    return checkpoint_saved
 
 
 def run_training(
     config: ExperimentConfig,
     *,
     resume_path: Path | None = None,
+    run_until_step: int | None = None,
 ) -> TrainingResult:
     """Run CPU training, evaluation, logging, sampling, and checkpointing."""
+    boundary = config.training.max_steps if run_until_step is None else run_until_step
+    if boundary <= 0 or boundary > config.training.max_steps:
+        raise InvalidRunBoundaryError(boundary, 0, config.training.max_steps)
     components = build_training_components(config)
     training = components.config.training
     paths = _OutputPaths(
@@ -170,6 +194,8 @@ def run_training(
         ).next_step
     else:
         _prepare_fresh_outputs(paths)
+    if boundary <= start_step:
+        raise InvalidRunBoundaryError(boundary, start_step, training.max_steps)
 
     training.output_dir.mkdir(parents=True, exist_ok=True)
     training.tensorboard_dir.mkdir(parents=True, exist_ok=True)
@@ -177,12 +203,21 @@ def run_training(
         SummaryWriter(log_dir=str(training.tensorboard_dir), purge_step=start_step)
     )
     final_step = start_step - 1
+    final_step_checkpointed = False
     try:
         _ = components.model.train()
-        for step in range(start_step, training.max_steps):
+        for step in range(start_step, boundary):
             metrics = run_training_step(components, step)
-            _record_step_events(components, metrics, paths, writer)
+            final_step_checkpointed = _record_step_events(components, metrics, paths, writer)
             final_step = step
+        if not final_step_checkpointed:
+            save_checkpoint(
+                paths.checkpoint,
+                resources=components.checkpoint_resources,
+                step=final_step,
+                config=components.config,
+            )
+            writer.flush()
     finally:
         writer.close()
 

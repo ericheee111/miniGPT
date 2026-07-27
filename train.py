@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 from pathlib import Path
 from sys import stdout
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from minigpt.config import load_experiment_config
 from minigpt.trainer import run_training
@@ -18,31 +17,33 @@ if TYPE_CHECKING:
 def build_parser() -> argparse.ArgumentParser:
     """Create the training command-line parser."""
     parser = argparse.ArgumentParser(description="Train the CPU-first character GPT.")
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--resume", type=Path)
-    parser.add_argument("--max-steps", type=int)
+    _ = parser.add_argument("--config", type=Path, required=True)
+    _ = parser.add_argument("--resume", type=Path)
+    _ = parser.add_argument(
+        "--run-until-step",
+        type=int,
+        help="exclusive absolute step boundary for this process",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Load configuration, apply bounded overrides, and run training."""
+    """Load configuration and run training to the requested process boundary."""
     arguments = build_parser().parse_args(argv)
-    config = load_experiment_config(arguments.config)
-    if arguments.max_steps is not None:
-        if arguments.max_steps <= 0:
-            build_parser().error("--max-steps must be positive")
-        if arguments.max_steps <= config.training.warmup_steps:
-            build_parser().error("--max-steps must be greater than warmup_steps")
-        config = replace(
-            config,
-            training=replace(config.training, max_steps=arguments.max_steps),
-        )
-    result = run_training(config, resume_path=arguments.resume)
-    _ = stdout.write(
-        f"metrics={result.metrics_path}\n"
-        f"checkpoint={result.checkpoint_path}\n"
-        f"tensorboard={result.tensorboard_dir}\n"
+    config = load_experiment_config(cast("Path", arguments.config))
+    result = run_training(
+        config,
+        resume_path=cast("Path | None", arguments.resume),
+        run_until_step=cast("int | None", arguments.run_until_step),
     )
+    output = "\n".join(
+        (
+            f"metrics={result.metrics_path}",
+            f"checkpoint={result.checkpoint_path}",
+            f"tensorboard={result.tensorboard_dir}",
+        )
+    )
+    _ = stdout.write(f"{output}\n")
     return 0
 
 
