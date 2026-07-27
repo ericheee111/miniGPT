@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from hashlib import sha256
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import numpy as np
 import pytest
@@ -23,6 +24,30 @@ from minigpt.settings import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+_IMMUTABLE_CONFIG_FIELDS: Final = (
+    "runtime.seed",
+    "runtime.num_threads",
+    "data.block_size",
+    "data.batch_size",
+    "model.vocab_size",
+    "model.n_layer",
+    "model.n_head",
+    "model.n_embd",
+    "model.dropout",
+    "model.bias",
+    "optimizer.learning_rate",
+    "optimizer.min_learning_rate",
+    "optimizer.weight_decay",
+    "optimizer.beta1",
+    "optimizer.beta2",
+    "optimizer.grad_clip",
+    "training.max_steps",
+    "training.warmup_steps",
+    "training.lr_decay_steps",
+    "training.eval_interval",
+    "training.eval_batches",
+)
 
 
 def experiment_config(tmp_path: Path) -> ExperimentConfig:
@@ -125,6 +150,123 @@ def write_v1_checkpoint(
     torch.save(legacy_payload, path)
 
 
+def _change_runtime_field(config: ExperimentConfig, field: str) -> ExperimentConfig:
+    settings = config.runtime
+    match field:
+        case "runtime.seed":
+            settings = replace(settings, seed=8)
+        case "runtime.num_threads":
+            settings = replace(settings, num_threads=2)
+        case _:
+            raise AssertionError(field)
+    return replace(config, runtime=settings)
+
+
+def _change_data_field(config: ExperimentConfig, field: str) -> ExperimentConfig:
+    settings = config.data
+    match field:
+        case "data.block_size":
+            settings = replace(settings, block_size=5)
+        case "data.batch_size":
+            settings = replace(settings, batch_size=3)
+        case _:
+            raise AssertionError(field)
+    return replace(config, data=settings)
+
+
+def _change_model_field(config: ExperimentConfig, field: str) -> ExperimentConfig:
+    settings = config.model
+    match field:
+        case "model.vocab_size":
+            settings = replace(settings, vocab_size=12)
+        case "model.n_layer":
+            settings = replace(settings, n_layer=2)
+        case "model.n_head":
+            settings = replace(settings, n_head=2)
+        case "model.n_embd":
+            settings = replace(settings, n_embd=16)
+        case "model.dropout":
+            settings = replace(settings, dropout=0.1)
+        case "model.bias":
+            settings = replace(settings, bias=True)
+        case _:
+            raise AssertionError(field)
+    return replace(config, model=settings)
+
+
+def _change_optimizer_field(config: ExperimentConfig, field: str) -> ExperimentConfig:
+    settings = config.optimizer
+    match field:
+        case "optimizer.learning_rate":
+            settings = replace(settings, learning_rate=2e-3)
+        case "optimizer.min_learning_rate":
+            settings = replace(settings, min_learning_rate=2e-4)
+        case "optimizer.weight_decay":
+            settings = replace(settings, weight_decay=0.02)
+        case "optimizer.beta1":
+            settings = replace(settings, beta1=0.8)
+        case "optimizer.beta2":
+            settings = replace(settings, beta2=0.9)
+        case "optimizer.grad_clip":
+            settings = replace(settings, grad_clip=0.5)
+        case _:
+            raise AssertionError(field)
+    return replace(config, optimizer=settings)
+
+
+def _change_training_field(config: ExperimentConfig, field: str) -> ExperimentConfig:
+    settings = config.training
+    match field:
+        case "training.max_steps":
+            settings = replace(settings, max_steps=5)
+        case "training.warmup_steps":
+            settings = replace(settings, warmup_steps=0)
+        case "training.lr_decay_steps":
+            settings = replace(settings, lr_decay_steps=3)
+        case "training.eval_interval":
+            settings = replace(settings, eval_interval=3)
+        case "training.eval_batches":
+            settings = replace(settings, eval_batches=2)
+        case _:
+            raise AssertionError(field)
+    return replace(config, training=settings)
+
+
+def change_immutable_field(config: ExperimentConfig, field: str) -> ExperimentConfig:
+    if field.startswith("runtime."):
+        return _change_runtime_field(config, field)
+    if field.startswith("data."):
+        return _change_data_field(config, field)
+    if field.startswith("model."):
+        return _change_model_field(config, field)
+    if field.startswith("optimizer."):
+        return _change_optimizer_field(config, field)
+    return _change_training_field(config, field)
+
+
+def save_test_checkpoint(
+    tmp_path: Path,
+) -> tuple[ExperimentConfig, CheckpointResources, Path]:
+    write_dataset_artifacts(tmp_path)
+    config = experiment_config(tmp_path)
+    model = GPT(config.model.to_gpt_config(config.data.block_size))
+    resources = build_checkpoint_resources(
+        config,
+        model=model,
+        optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
+        train_batcher=TokenBatcher(np.arange(32), batch_size=2, block_size=4, seed=1),
+        val_batcher=TokenBatcher(np.arange(32), batch_size=2, block_size=4, seed=2),
+    )
+    checkpoint_path = tmp_path / "latest.pt"
+    checkpoint.save_checkpoint(
+        checkpoint_path,
+        resources=resources,
+        step=1,
+        config=config,
+    )
+    return config, resources, checkpoint_path
+
+
 def test_compute_dataset_fingerprints_hashes_each_persisted_artifact(tmp_path: Path) -> None:
     # Given: three persisted dataset artifacts with independently known bytes.
     tokenizer_bytes = b'{"version": 1, "vocabulary": ["a"]}\n'
@@ -173,6 +315,7 @@ def test_checkpoint_restores_model_optimizer_and_step(tmp_path: Path) -> None:
     resume_state = checkpoint.load_checkpoint(
         checkpoint_path,
         resources=resources,
+        config=config,
     )
 
     # Then: parameters and the next training step are restored.
@@ -220,6 +363,7 @@ def test_checkpoint_restores_random_and_batcher_states(tmp_path: Path) -> None:
     _ = checkpoint.load_checkpoint(
         checkpoint_path,
         resources=resources,
+        config=config,
     )
 
     # Then: subsequent random values and sampled batches are identical.
@@ -267,6 +411,99 @@ def test_v1_checkpoint_supports_config_and_model_loading_only(tmp_path: Path) ->
     # When/Then: training resume rejects v1 before mutating the current model.
     current_parameter = next(gpt.parameters()).detach().clone()
     with pytest.raises(RuntimeError, match=r"v1.*training resume") as error_info:
-        _ = checkpoint.load_checkpoint(checkpoint_path, resources=resources)
+        _ = checkpoint.load_checkpoint(checkpoint_path, resources=resources, config=config)
     assert type(error_info.value).__name__ == "LegacyCheckpointResumeError"
     assert torch.equal(next(gpt.parameters()), current_parameter)
+
+
+@pytest.mark.parametrize("field", _IMMUTABLE_CONFIG_FIELDS)
+def test_resume_rejects_each_immutable_config_change_before_mutation(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    # Given: a v2 checkpoint and live state changed after it was saved.
+    config, resources, checkpoint_path = save_test_checkpoint(tmp_path)
+    with torch.no_grad():
+        _ = next(resources.model.parameters()).add_(1.0)
+    parameter_before_load = next(resources.model.parameters()).detach().clone()
+    generator_before_load = resources.sample_generator.get_state().clone()
+
+    # When/Then: each trajectory-defining change is named and rejected before mutation.
+    with pytest.raises(ValueError, match=field.replace(".", r"\.")):
+        _ = checkpoint.load_checkpoint(
+            checkpoint_path,
+            resources=resources,
+            config=change_immutable_field(config, field),
+        )
+    assert torch.equal(next(resources.model.parameters()), parameter_before_load)
+    assert torch.equal(resources.sample_generator.get_state(), generator_before_load)
+
+
+@pytest.mark.parametrize(
+    ("artifact_name", "expected_field"),
+    [
+        ("tokenizer.json", "dataset.tokenizer_sha256"),
+        ("train.npy", "dataset.train_sha256"),
+        ("val.npy", "dataset.val_sha256"),
+    ],
+)
+def test_resume_rejects_each_dataset_fingerprint_change_before_mutation(
+    tmp_path: Path,
+    artifact_name: str,
+    expected_field: str,
+) -> None:
+    # Given: a v2 checkpoint whose current dataset artifact has changed.
+    config, resources, checkpoint_path = save_test_checkpoint(tmp_path)
+    _ = (tmp_path / artifact_name).write_bytes(b"changed")
+    changed_resources = replace(
+        resources,
+        dataset_fingerprints=checkpoint.compute_dataset_fingerprints(config.data),
+    )
+    parameter_before_load = next(resources.model.parameters()).detach().clone()
+
+    # When/Then: the exact changed identity is rejected before model mutation.
+    with pytest.raises(ValueError, match=expected_field.replace(".", r"\.")):
+        _ = checkpoint.load_checkpoint(
+            checkpoint_path,
+            resources=changed_resources,
+            config=config,
+        )
+    assert torch.equal(next(resources.model.parameters()), parameter_before_load)
+
+
+def test_resume_allows_operational_and_sampling_config_changes(tmp_path: Path) -> None:
+    # Given: byte-identical data in a new directory and changed non-trajectory settings.
+    config, resources, checkpoint_path = save_test_checkpoint(tmp_path)
+    copied_data = tmp_path / "copied-data"
+    copied_data.mkdir()
+    for artifact_name in ("tokenizer.json", "train.npy", "val.npy"):
+        _ = (copied_data / artifact_name).write_bytes((tmp_path / artifact_name).read_bytes())
+    changed_config = replace(
+        config,
+        data=replace(config.data, directory=copied_data),
+        training=replace(
+            config.training,
+            output_dir=tmp_path / "different-output",
+            checkpoint_dir=tmp_path / "different-checkpoints",
+            tensorboard_dir=tmp_path / "different-runs",
+            log_interval=2,
+            checkpoint_interval=3,
+            sample_interval=3,
+            sample_tokens=5,
+            sample_prompt="b",
+        ),
+    )
+    changed_resources = replace(
+        resources,
+        dataset_fingerprints=checkpoint.compute_dataset_fingerprints(changed_config.data),
+    )
+
+    # When: only allowlisted operational and isolated-sampling fields change.
+    resume_state = checkpoint.load_checkpoint(
+        checkpoint_path,
+        resources=changed_resources,
+        config=changed_config,
+    )
+
+    # Then: the same experiment trajectory resumes at the next step.
+    assert resume_state.next_step == 2

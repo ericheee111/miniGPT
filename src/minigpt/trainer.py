@@ -166,6 +166,7 @@ def run_training(
         start_step = load_checkpoint(
             resume_path,
             resources=components.checkpoint_resources,
+            config=components.config,
         ).next_step
     else:
         _prepare_fresh_outputs(paths)

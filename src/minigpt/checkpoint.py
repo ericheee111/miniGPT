@@ -48,6 +48,7 @@ StateValue: TypeAlias = (
 )
 PythonRandomState: TypeAlias = tuple[int, tuple[int, ...], float | None]
 NumpyRandomState: TypeAlias = tuple[str, npt.NDArray[np.uint32], int, int, float]
+ConfigValue: TypeAlias = str | int | float | bool | None
 
 
 class DatasetFingerprintsPayload(TypedDict):
@@ -116,6 +117,34 @@ class LegacyCheckpointResumeError(RuntimeError):
     def __str__(self) -> str:
         """Explain that legacy checkpoints are inference-only."""
         return f"checkpoint v1 at {self.path} cannot be used for training resume"
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeConfigMismatch:
+    """Describe one trajectory-defining value that differs at resume."""
+
+    field: str
+    checkpoint_value: str
+    current_value: str
+
+
+@dataclass(slots=True)
+class IncompatibleResumeConfigError(ValueError):
+    """Report all configuration and data-identity mismatches found before resume."""
+
+    mismatches: tuple[ResumeConfigMismatch, ...]
+
+    @override
+    def __str__(self) -> str:
+        """Render every incompatible dotted field and its two values."""
+        details = "; ".join(
+            (
+                f"{mismatch.field}: checkpoint={mismatch.checkpoint_value}, "
+                f"current={mismatch.current_value}"
+            )
+            for mismatch in self.mismatches
+        )
+        return f"incompatible resume configuration: {details}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +426,86 @@ class CheckpointResources:
     dataset_fingerprints: DatasetFingerprints
 
 
+def _immutable_config_values(
+    config: ExperimentConfig,
+) -> tuple[tuple[str, ConfigValue], ...]:
+    return (
+        ("runtime.seed", config.runtime.seed),
+        ("runtime.num_threads", config.runtime.num_threads),
+        ("runtime.device", config.runtime.device),
+        ("data.block_size", config.data.block_size),
+        ("data.batch_size", config.data.batch_size),
+        ("model.vocab_size", config.model.vocab_size),
+        ("model.n_layer", config.model.n_layer),
+        ("model.n_head", config.model.n_head),
+        ("model.n_embd", config.model.n_embd),
+        ("model.dropout", config.model.dropout),
+        ("model.bias", config.model.bias),
+        ("optimizer.type", config.optimizer.optimizer_type),
+        ("optimizer.learning_rate", config.optimizer.learning_rate),
+        ("optimizer.min_learning_rate", config.optimizer.min_learning_rate),
+        ("optimizer.weight_decay", config.optimizer.weight_decay),
+        ("optimizer.beta1", config.optimizer.beta1),
+        ("optimizer.beta2", config.optimizer.beta2),
+        ("optimizer.grad_clip", config.optimizer.grad_clip),
+        ("training.max_steps", config.training.max_steps),
+        ("training.warmup_steps", config.training.warmup_steps),
+        ("training.lr_decay_steps", config.training.lr_decay_steps),
+        ("training.eval_interval", config.training.eval_interval),
+        ("training.eval_batches", config.training.eval_batches),
+    )
+
+
+def _fingerprint_values(
+    fingerprints: DatasetFingerprints | DatasetFingerprintsPayload,
+) -> tuple[tuple[str, str], ...]:
+    if isinstance(fingerprints, DatasetFingerprints):
+        return (
+            ("dataset.tokenizer_sha256", fingerprints.tokenizer_sha256),
+            ("dataset.train_sha256", fingerprints.train_sha256),
+            ("dataset.val_sha256", fingerprints.val_sha256),
+        )
+    return (
+        ("dataset.tokenizer_sha256", fingerprints["tokenizer_sha256"]),
+        ("dataset.train_sha256", fingerprints["train_sha256"]),
+        ("dataset.val_sha256", fingerprints["val_sha256"]),
+    )
+
+
+def _validate_resume_compatibility(
+    payload: CheckpointV2Payload,
+    current_config: ExperimentConfig,
+    current_fingerprints: DatasetFingerprints,
+    path: Path,
+) -> None:
+    checkpoint_config = parse_experiment_config(payload["config_yaml"], path)
+    mismatches: list[ResumeConfigMismatch] = []
+    current_config_values = dict(_immutable_config_values(current_config))
+    for field, checkpoint_value in _immutable_config_values(checkpoint_config):
+        current_value = current_config_values[field]
+        if checkpoint_value != current_value:
+            mismatches.append(
+                ResumeConfigMismatch(
+                    field=field,
+                    checkpoint_value=str(checkpoint_value),
+                    current_value=str(current_value),
+                )
+            )
+    current_fingerprint_values = dict(_fingerprint_values(current_fingerprints))
+    for field, checkpoint_value in _fingerprint_values(payload["dataset_fingerprints"]):
+        current_value = current_fingerprint_values[field]
+        if checkpoint_value != current_value:
+            mismatches.append(
+                ResumeConfigMismatch(
+                    field=field,
+                    checkpoint_value=checkpoint_value,
+                    current_value=current_value,
+                )
+            )
+    if mismatches:
+        raise IncompatibleResumeConfigError(tuple(mismatches))
+
+
 def save_checkpoint(
     path: Path,
     *,
@@ -436,11 +545,18 @@ def load_checkpoint(
     path: Path,
     *,
     resources: CheckpointResources,
+    config: ExperimentConfig,
 ) -> ResumeState:
     """Restore model, optimizer, step, global RNGs, and batch samplers."""
     payload = _load_versioned_payload(path)
     if payload["format_version"] == _LEGACY_CHECKPOINT_FORMAT_VERSION:
         raise LegacyCheckpointResumeError(path)
+    _validate_resume_compatibility(
+        payload,
+        config,
+        resources.dataset_fingerprints,
+        path,
+    )
     _ = resources.model.load_state_dict(payload["model_state"])
     resources.optimizer.load_state_dict(payload["optimizer_state"])
     random.setstate(payload["python_random_state"])

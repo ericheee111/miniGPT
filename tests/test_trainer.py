@@ -7,8 +7,10 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 
 import numpy as np
 import numpy.typing as npt
+import pytest
 
 from minigpt import trainer
+from minigpt.checkpoint import IncompatibleResumeConfigError
 from minigpt.data import CharTokenizer
 from minigpt.settings import (
     DataSettings,
@@ -106,8 +108,8 @@ def test_run_training_writes_all_observable_artifacts(tmp_path: Path) -> None:
     assert any(result.tensorboard_dir.glob("events.out.tfevents.*"))
 
 
-def test_run_training_resume_continues_without_duplicate_steps(tmp_path: Path) -> None:
-    # Given: a completed two-step run and a four-step continuation target.
+def test_run_training_resume_rejects_changed_experiment_horizon(tmp_path: Path) -> None:
+    # Given: a completed two-step experiment and a changed four-step definition.
     create_processed_data(tmp_path / "processed")
     initial = tiny_experiment(tmp_path)
     initial_result = trainer.run_training(initial)
@@ -116,16 +118,9 @@ def test_run_training_resume_continues_without_duplicate_steps(tmp_path: Path) -
         training=replace(initial.training, max_steps=4),
     )
 
-    # When: training resumes from latest.pt.
-    result = trainer.run_training(resumed, resume_path=initial_result.checkpoint_path)
-
-    # Then: metrics append only steps two and three.
-    records = [
-        cast("dict[str, MetricValue]", json.loads(line))
-        for line in result.metrics_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [record["step"] for record in records] == [0, 1, 2, 3]
-    assert result.final_step == 3
+    # When/Then: resume rejects redefining max_steps.
+    with pytest.raises(IncompatibleResumeConfigError, match=r"training\.max_steps"):
+        _ = trainer.run_training(resumed, resume_path=initial_result.checkpoint_path)
 
 
 def test_train_cli_runs_one_step_from_yaml(tmp_path: Path) -> None:
