@@ -1065,11 +1065,11 @@ def test_compare_runs_accepts_valid_worker_declared_and_parent_only_failures(
     assert "candidate run status is partial" in comparison.reasons
 
 
-def test_compare_runs_accepts_parent_classified_invalid_response_with_zero_return_code(
+def test_compare_runs_accepts_exact_parent_invalid_response_with_zero_return_code(
     tmp_path: Path,
 ) -> None:
     """Accept production-shaped invalid child output after the child exits successfully."""
-    # Given: the parent classifies malformed stdout after a zero-return-code child process.
+    # Given: malformed zero-exit stdout leaves only parent-owned failure evidence in the raw record.
     baseline, candidate = _write_partial_failure_package(tmp_path, worker_declared=False)
     raw_path = candidate.parent / "raw_replicates.jsonl"
     raw_records = cast(
@@ -1077,7 +1077,15 @@ def test_compare_runs_accepts_parent_classified_invalid_response_with_zero_retur
         [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
     )
     raw_records[-1].update(
-        {"return_code": 0, "error_type": "InvalidWorkerResponse", "message": "malformed stdout"}
+        {
+            "worker_pid": None,
+            "started_at_utc": None,
+            "ended_at_utc": None,
+            "return_code": 0,
+            "error_type": "InvalidWorkerResponse",
+            "message": "Expecting value: line 1 column 1 (char 0)",
+            "worker_response": None,
+        }
     )
     _ = raw_path.write_text(
         "".join(json.dumps(record) + "\n" for record in raw_records),
@@ -1085,12 +1093,20 @@ def test_compare_runs_accepts_parent_classified_invalid_response_with_zero_retur
         newline="\n",
     )
     _rehash_manifest_artifact(candidate, raw_path)
+    order_path = candidate.parent / "execution_order.json"
+    order = cast("list[dict[str, JsonValue]]", json.loads(order_path.read_text(encoding="utf-8")))
+    order[-1].update({"status": "error", "worker_pid": None})
+    _ = order_path.write_text(
+        json.dumps(order, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    _rehash_manifest_artifact(candidate, order_path)
 
     # When: strict comparison loads parent-only failure evidence.
     comparison = compare_runs(baseline, candidate)
 
     # Then: the partial run remains valid evidence but cannot receive a performance verdict.
     assert comparison.verdict == "not_comparable"
+    assert "candidate run status is partial" in comparison.reasons
 
 
 def test_compare_runs_rejects_zero_return_code_when_a_worker_declared_failure_exists(
