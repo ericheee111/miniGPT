@@ -33,7 +33,7 @@ cases:
     block_size: 32
     batch_size: 2
 profile:
-  enabled: false
+  enabled: true
   case_name: tiny_t1_s32_b2
   warmup_steps: 1
   active_steps: 2

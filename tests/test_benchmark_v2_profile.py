@@ -27,17 +27,30 @@ _CLI_PATH = _REPOSITORY_ROOT / "profile_benchmark_v2.py"
 _SMOKE_CONFIG_PATH = _REPOSITORY_ROOT / "configs" / "benchmark_v2_smoke.yaml"
 
 
+def test_repository_smoke_config_enables_tiny_separate_profile() -> None:
+    """Keep the checked-in smoke profile runnable through its separate CLI."""
+    # Given: the repository's authoritative Benchmark v2 smoke configuration.
+    config = load_benchmark_v2_config(_SMOKE_CONFIG_PATH)
+
+    # When: its optional profiler settings are read.
+    profile = config.profile
+
+    # Then: the tiny profile run is explicitly enabled with a bounded workload.
+    assert profile.enabled is True
+    assert profile.case_name == "tiny_t1_s32_b2"
+    assert profile.warmup_steps == 1
+    assert profile.active_steps == 2
+
+
 def _profile_config_in_temporary_output(tmp_path: Path) -> Path:
-    """Copy the smoke config and enable only its configured tiny profile case."""
+    """Copy the profile-enabled smoke config while redirecting its output."""
     copied_config = tmp_path / "benchmark_v2_profile_smoke.yaml"
     _ = shutil.copy2(_SMOKE_CONFIG_PATH, copied_config)
     source = copied_config.read_text(encoding="utf-8")
     source = source.replace(
         "output_root: reports/benchmark-v2", f"output_root: {(tmp_path / 'reports').as_posix()}"
     )
-    _ = copied_config.write_text(
-        source.replace("enabled: false", "enabled: true"), encoding="utf-8"
-    )
+    _ = copied_config.write_text(source, encoding="utf-8")
     return copied_config
 
 
@@ -133,9 +146,13 @@ def test_profile_run_rejects_an_existing_identity_directory(tmp_path: Path) -> N
 
 def test_profile_cli_rejects_disabled_profile_configuration(tmp_path: Path) -> None:
     """Expose a typed CLI error when profiling is not enabled by the strict config."""
-    # Given: the canonical smoke config whose profile section is explicitly disabled.
+    # Given: a copy of the canonical smoke config with its profile explicitly disabled.
     config_path = tmp_path / "disabled.yaml"
     _ = shutil.copy2(_SMOKE_CONFIG_PATH, config_path)
+    _ = config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("enabled: true", "enabled: false"),
+        encoding="utf-8",
+    )
 
     # When: the profile command is invoked.
     completed = _run_cli("--config", str(config_path))
