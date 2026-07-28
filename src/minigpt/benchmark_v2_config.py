@@ -94,13 +94,22 @@ def _string(document: ConfigMapping, key: str, source: Path) -> str:
     return value
 
 
-def _integer(document: ConfigMapping, key: str, source: Path, *, positive: bool = False) -> int:
-    """Read one required integer, optionally requiring a positive value."""
+def _integer(
+    document: ConfigMapping,
+    key: str,
+    source: Path,
+    *,
+    positive: bool = False,
+    non_negative: bool = False,
+) -> int:
+    """Read one required integer with an optional lower bound."""
     value = document[key]
     if isinstance(value, bool) or not isinstance(value, int):
         raise InvalidBenchmarkV2ConfigError(source, f"{key} must be an integer")
     if positive and value <= 0:
         raise InvalidBenchmarkV2ConfigError(source, f"{key} must be positive")
+    if non_negative and value < 0:
+        raise InvalidBenchmarkV2ConfigError(source, f"{key} must be non-negative")
     return value
 
 
@@ -267,7 +276,7 @@ def load_benchmark_v2_config(path: Path) -> BenchmarkV2Config:
         vocab_size=vocab_size,
         output_root=Path(_string(document, "output_root", path)),
         worker_timeout_seconds=_number(document, "worker_timeout_seconds", path, positive=True),
-        warmup_steps=_integer(document, "warmup_steps", path, positive=True),
+        warmup_steps=_integer(document, "warmup_steps", path, non_negative=True),
         measurement_steps=_integer(document, "measurement_steps", path, positive=True),
         replicates=replicates,
         torch_num_interop_threads=_integer(

@@ -354,6 +354,70 @@ def test_worker_main_retains_case_context_after_parsing_zero_warmup(
     assert payload["replicate_index"] == request.replicate_index
 
 
+def test_worker_main_retains_valid_context_when_later_field_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retain independently valid identity when full strict parsing fails later."""
+    # Given: valid orchestration context followed by an invalid measurement count.
+    request = make_request()
+    document = worker_request_document(request)
+    document["measurement_steps"] = 0
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(document)))
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    # When: strict parsing rejects the later measurement field.
+    status = worker_main()
+
+    # Then: failure retains context that was independently safe to extract.
+    payload = cast("dict[str, object]", json.loads(stdout.getvalue()))
+    assert status != 0
+    assert payload["case_identity"] == request.case_identity
+    assert payload["case_name"] == request.case.name
+    assert payload["replicate_index"] == request.replicate_index
+
+
+@pytest.mark.parametrize(
+    "invalid_context_field",
+    ["case_identity", "case_name", "replicate_index"],
+)
+def test_worker_main_never_retains_invalid_best_effort_context(
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_context_field: str,
+) -> None:
+    """Null only invalid context fields while preserving independent valid fields."""
+    # Given: one invalid context field plus a later invalid measurement count.
+    request = make_request()
+    document = worker_request_document(request)
+    document["measurement_steps"] = 0
+    case_document = cast("dict[str, object]", document["case"])
+    if invalid_context_field == "case_identity":
+        document["case_identity"] = "not-a-sha256"
+    elif invalid_context_field == "case_name":
+        case_document["name"] = ""
+    else:
+        document["replicate_index"] = -1
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(document)))
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    # When: the worker emits a strict-parse failure.
+    status = worker_main()
+
+    # Then: each field is retained only if it is independently valid.
+    payload = cast("dict[str, object]", json.loads(stdout.getvalue()))
+    assert status != 0
+    assert payload["case_identity"] == (
+        None if invalid_context_field == "case_identity" else request.case_identity
+    )
+    assert payload["case_name"] == (
+        None if invalid_context_field == "case_name" else request.case.name
+    )
+    assert payload["replicate_index"] == (
+        None if invalid_context_field == "replicate_index" else request.replicate_index
+    )
+
+
 def test_worker_main_keyboard_interrupt_returns_130_without_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -82,6 +82,23 @@ def test_v2_config_resolves_explicit_cases_and_stable_hash(tmp_path: Path) -> No
     assert resolved_config_document(first)["output_root"] == "reports/benchmark_v2"
 
 
+def test_v2_config_accepts_zero_top_level_warmup(tmp_path: Path) -> None:
+    """Allow measurements with no warmup while still rejecting negative values."""
+    # Given: a schema-v2 config with zero top-level warmup steps.
+    path = write_v2_config(tmp_path)
+    document = path.read_text(encoding="utf-8").replace(
+        "warmup_steps: 2\nmeasurement_steps: 5",
+        "warmup_steps: 0\nmeasurement_steps: 5",
+    )
+    _ = path.write_text(document, encoding="utf-8")
+
+    # When: the strict config parser loads it.
+    config = load_benchmark_v2_config(path)
+
+    # Then: zero is preserved as a valid no-warmup methodology.
+    assert config.warmup_steps == 0
+
+
 @pytest.mark.parametrize(
     ("original", "updated"),
     [

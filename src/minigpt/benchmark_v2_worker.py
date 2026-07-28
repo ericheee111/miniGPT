@@ -119,6 +119,15 @@ class WorkerFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class _WorkerFailureContext:
+    """Hold independently validated request identity for failure reporting."""
+
+    case_identity: str | None = None
+    case_name: str | None = None
+    replicate_index: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class InvalidWorkerRequestError(ValueError):
     """Report a request that violates the exact worker protocol schema."""
 
@@ -138,6 +147,39 @@ def _invalid(reason: str) -> Never:
 def _utc_now_iso() -> str:
     """Return one timezone-aware UTC timestamp for protocol evidence."""
     return datetime.now(UTC).isoformat()
+
+
+def _best_effort_failure_context(raw: object) -> _WorkerFailureContext:
+    """Extract only independently valid context without performing full parsing."""
+    if not isinstance(raw, dict):
+        return _WorkerFailureContext()
+    document = cast("dict[object, object]", raw)
+    raw_identity = document.get("case_identity")
+    case_identity = (
+        raw_identity.lower()
+        if isinstance(raw_identity, str)
+        and len(raw_identity) == _SHA256_HEX_LENGTH
+        and all(character in string.hexdigits for character in raw_identity)
+        else None
+    )
+    raw_case = document.get("case")
+    raw_case_name = (
+        cast("dict[object, object]", raw_case).get("name") if isinstance(raw_case, dict) else None
+    )
+    case_name = raw_case_name if isinstance(raw_case_name, str) and raw_case_name else None
+    raw_replicate_index = document.get("replicate_index")
+    replicate_index = (
+        raw_replicate_index
+        if isinstance(raw_replicate_index, int)
+        and not isinstance(raw_replicate_index, bool)
+        and raw_replicate_index >= 0
+        else None
+    )
+    return _WorkerFailureContext(
+        case_identity=case_identity,
+        case_name=case_name,
+        replicate_index=replicate_index,
+    )
 
 
 def _mapping(value: object, expected_keys: frozenset[str], context: str) -> dict[str, object]:
@@ -420,8 +462,10 @@ def worker_main() -> int:
     worker_pid = os.getpid()
     started_at_utc = _utc_now_iso()
     request: WorkerRequest | None = None
+    failure_context = _WorkerFailureContext()
     try:
         raw_request = cast("object", json.loads(sys.stdin.read()))
+        failure_context = _best_effort_failure_context(raw_request)
         request = _parse_worker_request(raw_request)
         response: WorkerResult | WorkerFailure = run_worker_request(request)
         status = 0
@@ -434,9 +478,13 @@ def worker_main() -> int:
             worker_pid=worker_pid,
             started_at_utc=started_at_utc,
             ended_at_utc=_utc_now_iso(),
-            case_identity=request.case_identity if request is not None else None,
-            case_name=request.case.name if request is not None else None,
-            replicate_index=request.replicate_index if request is not None else None,
+            case_identity=(
+                request.case_identity if request is not None else failure_context.case_identity
+            ),
+            case_name=request.case.name if request is not None else failure_context.case_name,
+            replicate_index=(
+                request.replicate_index if request is not None else failure_context.replicate_index
+            ),
             error_type=type(error).__name__,
             message=str(error),
         )
