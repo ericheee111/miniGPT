@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 import numpy as np
+import numpy.typing as npt
 import torch
 
+from minigpt.batching import TokenArrayLike, TokenBatcher
 from minigpt.optimization import create_adamw
 
 WorkloadMethodologyValue: TypeAlias = (
@@ -33,7 +35,12 @@ ZERO_GRAD_SET_TO_NONE = True
 SYNTHETIC_CORPUS_MIN_TOKENS = 4_096
 SYNTHETIC_CORPUS_BATCH_MULTIPLIER = 8
 SYNTHETIC_TOKEN_DTYPE = "uint16"  # noqa: S105
+SYNTHETIC_CORPUS_GENERATOR = "numpy.default_rng"
+SYNTHETIC_CORPUS_SEED_SOURCE = "worker_seed"
+SYNTHETIC_TOKEN_RANGE = "[0,vocab_size)"  # noqa: S105
+BATCHER_IMPLEMENTATION = "TokenBatcher"
 BATCHER_METHOD = "TokenBatcher.next_batch"
+BATCHER_SEED_SOURCE = "worker_seed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,17 +95,17 @@ def workload_methodology_document() -> dict[str, WorkloadMethodologyValue]:
         "gradient_clipping": {"max_norm": GRAD_CLIP},
         "zero_grad": {"set_to_none": ZERO_GRAD_SET_TO_NONE},
         "synthetic_corpus": {
-            "generator": "numpy.default_rng",
+            "generator": SYNTHETIC_CORPUS_GENERATOR,
             "minimum_tokens": SYNTHETIC_CORPUS_MIN_TOKENS,
             "batch_size_block_size_multiplier": SYNTHETIC_CORPUS_BATCH_MULTIPLIER,
             "token_dtype": SYNTHETIC_TOKEN_DTYPE,
-            "token_range": "[0,vocab_size)",
-            "seed": "worker_seed",
+            "token_range": SYNTHETIC_TOKEN_RANGE,
+            "seed": SYNTHETIC_CORPUS_SEED_SOURCE,
         },
         "batcher": {
-            "implementation": "TokenBatcher",
+            "implementation": BATCHER_IMPLEMENTATION,
             "method": BATCHER_METHOD,
-            "seed": "worker_seed",
+            "seed": BATCHER_SEED_SOURCE,
         },
     }
 
@@ -120,3 +127,60 @@ def workload_torch_dtype() -> torch.dtype:
     except KeyError as error:
         msg = f"unsupported workload dtype {WORKLOAD_DTYPE!r}"
         raise ValueError(msg) from error
+
+
+def workload_torch_device() -> torch.device:
+    """Resolve the documented CPU device without silently falling back."""
+    supported_devices = {"cpu": torch.device("cpu")}
+    try:
+        return supported_devices[WORKLOAD_DEVICE]
+    except KeyError as error:
+        msg = f"unsupported workload device {WORKLOAD_DEVICE!r}"
+        raise ValueError(msg) from error
+
+
+def create_synthetic_tokens(
+    *, seed: int, vocab_size: int, corpus_size: int
+) -> npt.NDArray[np.uint16]:
+    """Create the documented deterministic token corpus used by one benchmark worker."""
+    if SYNTHETIC_CORPUS_GENERATOR != "numpy.default_rng":
+        msg = f"unsupported synthetic corpus generator {SYNTHETIC_CORPUS_GENERATOR!r}"
+        raise ValueError(msg)
+    if SYNTHETIC_CORPUS_SEED_SOURCE != "worker_seed":
+        msg = f"unsupported synthetic corpus seed source {SYNTHETIC_CORPUS_SEED_SOURCE!r}"
+        raise ValueError(msg)
+    if SYNTHETIC_TOKEN_RANGE != "[0,vocab_size)":  # noqa: S105
+        msg = f"unsupported synthetic token range {SYNTHETIC_TOKEN_RANGE!r}"
+        raise ValueError(msg)
+    return np.random.default_rng(seed).integers(
+        0,
+        vocab_size,
+        size=corpus_size,
+        dtype=synthetic_token_dtype(),
+    )
+
+
+def create_benchmark_batcher(
+    tokens: TokenArrayLike,
+    *,
+    batch_size: int,
+    block_size: int,
+    seed: int,
+) -> TokenBatcher:
+    """Construct the documented seeded TokenBatcher for one benchmark workload."""
+    if BATCHER_IMPLEMENTATION != "TokenBatcher":
+        msg = f"unsupported benchmark batcher implementation {BATCHER_IMPLEMENTATION!r}"
+        raise ValueError(msg)
+    if BATCHER_METHOD != "TokenBatcher.next_batch":
+        msg = f"unsupported synthetic batcher method {BATCHER_METHOD!r}"
+        raise ValueError(msg)
+    if BATCHER_SEED_SOURCE != "worker_seed":
+        msg = f"unsupported benchmark batcher seed source {BATCHER_SEED_SOURCE!r}"
+        raise ValueError(msg)
+    return TokenBatcher(
+        tokens,
+        batch_size=batch_size,
+        block_size=block_size,
+        seed=seed,
+        device=workload_torch_device(),
+    )

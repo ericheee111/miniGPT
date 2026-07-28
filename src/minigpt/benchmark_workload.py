@@ -5,13 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast, final
 
-import numpy as np
 import torch
 from torch.profiler import record_function
 from typing_extensions import override
 
 import minigpt.benchmark_workload_methodology as methodology
-from minigpt.batching import TokenBatcher
 from minigpt.benchmark_types import BenchmarkCase
 from minigpt.model import GPT
 from minigpt.optimization import seed_everything
@@ -48,16 +46,12 @@ class TrainingStepWorkload:
             methodology.SYNTHETIC_CORPUS_MIN_TOKENS,
             case.batch_size * (case.block_size + 1) * methodology.SYNTHETIC_CORPUS_BATCH_MULTIPLIER,
         )
-        if methodology.BATCHER_METHOD != "TokenBatcher.next_batch":
-            msg = f"unsupported synthetic batcher method {methodology.BATCHER_METHOD!r}"
-            raise ValueError(msg)
-        tokens = np.random.default_rng(seed).integers(
-            0,
-            vocab_size,
-            size=corpus_size,
-            dtype=methodology.synthetic_token_dtype(),
+        tokens = methodology.create_synthetic_tokens(
+            seed=seed,
+            vocab_size=vocab_size,
+            corpus_size=corpus_size,
         )
-        self.batcher = TokenBatcher(
+        self.batcher = methodology.create_benchmark_batcher(
             tokens,
             batch_size=case.batch_size,
             block_size=case.block_size,
@@ -75,7 +69,7 @@ class TrainingStepWorkload:
             )
         )
         _ = self.model.to(
-            device=methodology.WORKLOAD_DEVICE, dtype=methodology.workload_torch_dtype()
+            device=methodology.workload_torch_device(), dtype=methodology.workload_torch_dtype()
         )
         settings = methodology.benchmark_optimizer_settings()
         self.optimizer = methodology.create_benchmark_optimizer(self.model)
