@@ -38,6 +38,7 @@ _MANIFEST_KEYS = frozenset(
         "started_at_utc",
         "ended_at_utc",
         "config_sha256",
+        "git",
         "expected_task_count",
         "completed_task_count",
         "successful_task_count",
@@ -49,6 +50,16 @@ _MANIFEST_KEYS = frozenset(
 _ARTIFACT_ENTRY_KEYS = frozenset({"path", "size_bytes", "sha256"})
 _SHA256_HEX_LENGTH = 64
 _SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
+_REQUIRED_BOUND_ARTIFACTS = frozenset(
+    {
+        "environment.json",
+        "resolved_config.yaml",
+        "raw_replicates.jsonl",
+        "summary.csv",
+        "summary.md",
+        "execution_order.json",
+    }
+)
 
 
 class _PriorityProcess(Protocol):
@@ -144,6 +155,7 @@ class RunManifest:
     started_at_utc: str
     ended_at_utc: str
     config_sha256: str
+    git: dict[str, JsonValue]
     expected_task_count: int
     completed_task_count: int
     successful_task_count: int
@@ -477,6 +489,7 @@ def _manifest_document(manifest: RunManifest) -> dict[str, JsonValue]:
             "started_at_utc": manifest.started_at_utc,
             "ended_at_utc": manifest.ended_at_utc,
             "config_sha256": manifest.config_sha256,
+            "git": manifest.git,
             "expected_task_count": manifest.expected_task_count,
             "completed_task_count": manifest.completed_task_count,
             "successful_task_count": manifest.successful_task_count,
@@ -619,6 +632,7 @@ def _write_final_artifacts(  # noqa: PLR0913
         started_at_utc=started_at_utc,
         ended_at_utc=ended_at_utc,
         config_sha256=resolved_config_sha256(config),
+        git=cast("dict[str, JsonValue]", environment_snapshot["git"]),
         expected_task_count=len(tasks),
         completed_task_count=len(raw_replicates),
         successful_task_count=sum(record.status == "ok" for record in raw_replicates),
@@ -673,12 +687,15 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
             msg = "artifact entry has an invalid field set"
             raise ValueError(msg)
         raw_path, size_bytes, sha256 = entry["path"], entry["size_bytes"], entry["sha256"]
+        artifact_path = Path(raw_path) if isinstance(raw_path, str) else None
         if (
             not isinstance(raw_path, str)
             or not raw_path
-            or Path(raw_path).is_absolute()
+            or artifact_path is None
+            or artifact_path.drive
+            or artifact_path.is_absolute()
             or "\\" in raw_path
-            or ".." in Path(raw_path).parts
+            or ".." in artifact_path.parts
             or not isinstance(size_bytes, int)
             or isinstance(size_bytes, bool)
             or size_bytes < 0
@@ -690,11 +707,18 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
             raise ValueError(msg)
         artifacts.append(ArtifactManifestEntry(raw_path, size_bytes, sha256))
     artifact_paths = tuple(entry.path for entry in artifacts)
-    if len(artifact_paths) != len(set(artifact_paths)) or "run_manifest.json" in artifact_paths:
-        msg = "run manifest artifact paths must be unique and self-excluded"
+    if len(artifact_paths) != len(set(artifact_paths)):
+        msg = "run manifest artifact paths must be unique"
         raise ValueError(msg)
+    if frozenset(artifact_paths) != _REQUIRED_BOUND_ARTIFACTS:
+        msg = "run manifest artifact paths must be the required self-excluded set"
+        raise ValueError(msg)
+    resolved_run_directory = path.parent.resolve()
     for artifact in artifacts:
-        bound_path = path.parent / artifact.path
+        bound_path = (resolved_run_directory / artifact.path).resolve()
+        if not bound_path.is_relative_to(resolved_run_directory):
+            msg = f"bound artifact escapes run directory: {artifact.path}"
+            raise ValueError(msg)
         if not bound_path.is_file():
             msg = f"bound artifact is missing: {artifact.path}"
             raise ValueError(msg)
@@ -735,6 +759,27 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
     if any(not isinstance(document[field], str) or not document[field] for field in string_fields):
         msg = "run manifest has an invalid string field"
         raise ValueError(msg)
+    if path.parent.name != document["run_id"]:
+        msg = "run manifest run_id does not match its run directory"
+        raise ValueError(msg)
+    git = _require_mapping(document["git"], "run manifest git")
+    raw_environment = cast(
+        "object",
+        json.loads((resolved_run_directory / "environment.json").read_text(encoding="utf-8")),
+    )
+    environment = _require_mapping(raw_environment, "environment artifact")
+    if environment.get("run_id") != document["run_id"]:
+        msg = "environment artifact run_id does not match the manifest"
+        raise ValueError(msg)
+    if environment.get("config_sha256") != document["config_sha256"]:
+        msg = "environment artifact config_sha256 does not match the manifest"
+        raise ValueError(msg)
+    run_environment = _require_mapping(
+        environment.get("run_environment"), "environment run_environment"
+    )
+    if run_environment.get("git") != git:
+        msg = "environment artifact git identity does not match the manifest"
+        raise ValueError(msg)
     return RunManifest(
         schema_version=cast("int", document["schema_version"]),
         run_id=cast("str", document["run_id"]),
@@ -742,6 +787,7 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
         started_at_utc=cast("str", document["started_at_utc"]),
         ended_at_utc=cast("str", document["ended_at_utc"]),
         config_sha256=cast("str", document["config_sha256"]),
+        git=cast("dict[str, JsonValue]", git),
         expected_task_count=cast("int", document["expected_task_count"]),
         completed_task_count=cast("int", document["completed_task_count"]),
         successful_task_count=cast("int", document["successful_task_count"]),

@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
+import minigpt.benchmark_v2 as benchmark_module
 from minigpt.benchmark_v2 import RawReplicate, expand_benchmark_tasks, run_benchmark_v2
 from minigpt.benchmark_v2_report import load_run_manifest, write_run_artifacts
 from minigpt.benchmark_v2_statistics import summarize_replicates
 from minigpt.benchmark_v2_types import BenchmarkV2Case, BenchmarkV2Config, ProfileV2Settings
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Callable
 
     from minigpt.benchmark_v2 import BenchmarkTask
     from minigpt.benchmark_v2_config import JsonValue
@@ -488,3 +491,147 @@ def test_ordinary_launcher_exception_finalizes_partial_evidence_then_reraises(
     # Then: partial evidence is finalized before the original exception propagates.
     (run_directory,) = tuple(tmp_path.iterdir())
     assert load_run_manifest(run_directory / "run_manifest.json").status == "partial"
+
+
+def test_exception_finalization_never_masks_launcher_error_when_state_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Best-effort state persistence failure leaves the original launcher OSError intact."""
+    # Given: initial writes work, then finalization state persistence fails after launcher failure.
+    config = make_config(tmp_path)
+    real_write_json = cast(
+        "Callable[[Path, JsonValue], None]", benchmark_module.__dict__["_write_json"]
+    )
+    calls = 0
+
+    def fail_final_state_write(path: Path, document: JsonValue) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            msg = "state write failed"
+            raise RuntimeError(msg)
+        real_write_json(path, document)
+
+    def fail_launcher(
+        command: list[str], request_json: str, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (command, request_json, timeout)
+        msg = "original launcher error"
+        raise OSError(msg)
+
+    monkeypatch.setattr(benchmark_module, "_write_json", fail_final_state_write)
+
+    # When/Then: cleanup failure cannot replace the original launcher exception.
+    with pytest.raises(OSError, match="original launcher error"):
+        _ = run_benchmark_v2(config, launcher=fail_launcher)
+
+
+def test_exception_finalization_never_masks_launcher_error_when_state_unlink_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Best-effort final state cleanup failure leaves the original launcher OSError intact."""
+    # Given: reporting works but its successful state-file cleanup cannot unlink the state.
+    config = make_config(tmp_path)
+    real_unlink = Path.unlink
+
+    def fail_state_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path.name == "run_state.json":
+            msg = "state unlink failed"
+            raise RuntimeError(msg)
+        real_unlink(path, missing_ok=missing_ok)
+
+    def fail_launcher(
+        command: list[str], request_json: str, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (command, request_json, timeout)
+        msg = "original launcher error"
+        raise OSError(msg)
+
+    monkeypatch.setattr(Path, "unlink", fail_state_unlink)
+
+    # When/Then: cleanup failure cannot replace the original launcher exception.
+    with pytest.raises(OSError, match="original launcher error"):
+        _ = run_benchmark_v2(config, launcher=fail_launcher)
+
+
+def test_snapshot_without_git_commit_never_rereads_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An immutable snapshot with no commit produces a deterministic token without Git access."""
+    # Given: a pre-captured Git snapshot that explicitly has no commit SHA.
+    config = make_config(tmp_path)
+
+    def unexpected_git_lookup(command: str) -> str:
+        msg = f"unexpected Git lookup: {command}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(shutil, "which", unexpected_git_lookup)
+
+    # When: a run ID is derived from the supplied immutable snapshot.
+    run_id = benchmark_module.create_run_id(
+        config,
+        created_at=datetime(2026, 7, 28, tzinfo=UTC),
+        environment_snapshot={"git": {"commit_sha": None}},
+    )
+
+    # Then: no live repository query occurs and the unavailable identity token is deterministic.
+    assert run_id.split("-")[1] == "unknown00000"
+
+
+@pytest.mark.parametrize("mutation", ["drive", "missing", "extra", "run_id", "environment"])
+def test_load_run_manifest_rejects_exact_set_and_environment_identity_violations(
+    tmp_path: Path, mutation: str
+) -> None:
+    """Reject unsafe paths, non-exact artifact sets, and identity disagreement."""
+    # Given: a valid report package and one binding mutation whose hashes are updated when needed.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / f"strict-{mutation}"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+    )
+    document = cast(
+        "dict[str, object]", json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+    )
+    entries = cast("list[dict[str, object]]", document["artifacts"])
+    if mutation == "drive":
+        entries[0]["path"] = "C:outside.txt"
+    elif mutation == "missing":
+        _ = entries.pop()
+    elif mutation == "extra":
+        extra_path = run_directory / "extra.txt"
+        _ = extra_path.write_text("extra\n", encoding="utf-8")
+        entries.append(
+            {
+                "path": "extra.txt",
+                "size_bytes": extra_path.stat().st_size,
+                "sha256": hashlib.sha256(extra_path.read_bytes()).hexdigest(),
+            }
+        )
+    elif mutation == "run_id":
+        document["run_id"] = "different-run"
+    else:
+        environment = cast(
+            "dict[str, object]", json.loads(artifacts.environment_path.read_text(encoding="utf-8"))
+        )
+        environment["run_id"] = "different-run"
+        _ = artifacts.environment_path.write_text(json.dumps(environment), encoding="utf-8")
+        environment_entry = next(entry for entry in entries if entry["path"] == "environment.json")
+        environment_entry["size_bytes"] = artifacts.environment_path.stat().st_size
+        environment_entry["sha256"] = hashlib.sha256(
+            artifacts.environment_path.read_bytes()
+        ).hexdigest()
+    _ = artifacts.run_manifest_path.write_text(json.dumps(document), encoding="utf-8")
+
+    # When/Then: strict loading rejects every invalid package boundary before returning a manifest.
+    with pytest.raises(ValueError, match=r"artifact|run_id|environment"):
+        _ = load_run_manifest(artifacts.run_manifest_path)

@@ -9,6 +9,7 @@ import random
 import shutil
 import subprocess
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Never, Protocol, cast
@@ -26,6 +27,7 @@ from minigpt.benchmark_v2_worker import (
 _GIT_SHORT_SHA_LENGTH = 12
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
     from typing import TextIO
 
@@ -684,6 +686,7 @@ def _git_short_sha(environment_snapshot: dict[str, JsonValue] | None = None) -> 
             commit_sha = git.get("commit_sha")
             if isinstance(commit_sha, str) and len(commit_sha) >= _GIT_SHORT_SHA_LENGTH:
                 return commit_sha[:_GIT_SHORT_SHA_LENGTH]
+        return "unknown00000"
     executable = shutil.which("git")
     if executable is None:
         return "nogit0000000"
@@ -695,6 +698,12 @@ def _git_short_sha(environment_snapshot: dict[str, JsonValue] | None = None) -> 
     )
     short_sha = completed.stdout.strip()
     return short_sha if completed.returncode == 0 and short_sha else "nogit0000000"
+
+
+def _best_effort(operation: Callable[[], None]) -> None:
+    """Attempt exceptional-path cleanup without replacing the original active exception."""
+    with suppress(BaseException):
+        operation()
 
 
 def create_run_id(
@@ -791,49 +800,52 @@ def run_benchmark_v2(
         ),
     )
     records: list[RawReplicate] = []
-    with raw_replicates_path.open("x", encoding="utf-8", newline="\n") as raw_stream:
-        try:
-            for task in tasks:
-                record = execute_worker(
-                    task,
-                    timeout_seconds=config.worker_timeout_seconds,
-                    launcher=launcher,
-                )
-                _append_durable_raw_record(raw_stream, record)
-                records.append(record)
-        except (KeyboardInterrupt, Exception):
-            status = _final_status(tasks, records)
-            _write_json(
-                run_state_path,
-                _run_state_document(
-                    run_id=run_id,
-                    config_sha256=config_sha256,
-                    progress=_RunProgress(
-                        status=status,
-                        expected_task_count=len(tasks),
-                        completed_task_count=len(records),
-                        failed_task_count=sum(record.status == "error" for record in records),
-                    ),
-                ),
+    raw_stream = raw_replicates_path.open("x", encoding="utf-8", newline="\n")
+    try:
+        for task in tasks:
+            record = execute_worker(
+                task,
+                timeout_seconds=config.worker_timeout_seconds,
+                launcher=launcher,
             )
-            raw_stream.close()
-            try:
-                _ = write_run_artifacts(
-                    config=config,
-                    run_directory=run_directory,
-                    run_id=run_id,
-                    status=status,
-                    tasks=tasks,
-                    raw_replicates=tuple(records),
-                    started_at_utc=started_at.isoformat(),
-                    ended_at_utc=datetime.now(UTC).isoformat(),
-                    environment_snapshot=environment_snapshot,
-                )
-            except Exception:  # noqa: BLE001, S110 - preserve the original orchestration exception.
-                pass
-            else:
-                run_state_path.unlink()
-            raise
+            _append_durable_raw_record(raw_stream, record)
+            records.append(record)
+    except (KeyboardInterrupt, Exception):
+        status = _final_status(tasks, records)
+        final_state = _run_state_document(
+            run_id=run_id,
+            config_sha256=config_sha256,
+            progress=_RunProgress(
+                status=status,
+                expected_task_count=len(tasks),
+                completed_task_count=len(records),
+                failed_task_count=sum(record.status == "error" for record in records),
+            ),
+        )
+        _best_effort(lambda: _write_json(run_state_path, final_state))
+        _best_effort(raw_stream.close)
+        report_finalized = False
+        try:
+            _ = write_run_artifacts(
+                config=config,
+                run_directory=run_directory,
+                run_id=run_id,
+                status=status,
+                tasks=tasks,
+                raw_replicates=tuple(records),
+                started_at_utc=started_at.isoformat(),
+                ended_at_utc=datetime.now(UTC).isoformat(),
+                environment_snapshot=environment_snapshot,
+            )
+        except BaseException:  # noqa: BLE001 - preserve the original orchestration exception.
+            report_finalized = False
+        else:
+            report_finalized = True
+        if report_finalized:
+            _best_effort(run_state_path.unlink)
+        raise
+    else:
+        raw_stream.close()
 
     status = _final_status(tasks, records)
     _write_json(
