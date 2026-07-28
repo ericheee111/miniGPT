@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import subprocess
-from typing import TYPE_CHECKING
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+from typing import Protocol, cast
 
 import numpy as np
 import pytest
@@ -18,6 +20,7 @@ from minigpt.run_provenance import (
     DirtyReferenceRunError,
     IncompatibleRunProvenanceError,
     RunInvocation,
+    RunSegment,
     begin_run_segment,
     complete_run_segment,
     fail_run_segment,
@@ -32,8 +35,24 @@ from minigpt.settings import (
     TrainingSettings,
 )
 
-if TYPE_CHECKING:
-    from pathlib import Path
+
+class TrainingCommand(Protocol):
+    """Expose the typed command entrypoint exercised by provenance tests."""
+
+    def main(self, argv: tuple[str, ...] | None = None) -> int:
+        """Run the training command with explicit command-line arguments."""
+        ...
+
+
+def load_training_command() -> TrainingCommand:
+    """Load the root training command without relying on the editable package path."""
+    path = Path(__file__).parent.parent / "train.py"
+    specification = spec_from_file_location("test_run_provenance_train", path)
+    assert specification is not None
+    assert specification.loader is not None
+    module = module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return cast("TrainingCommand", cast("object", module))
 
 
 def run_git(repository: Path, *arguments: str) -> str:
@@ -349,3 +368,93 @@ def test_failed_segment_records_end_without_claiming_completion(tmp_path: Path) 
     assert failed.ended_at_utc is not None
     assert failed.final_completed_step is None
     assert failed.checkpoint_sha256 is None
+
+
+def test_train_main_finalizes_provenance_after_ordinary_training_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a reference invocation whose trainer raises an ordinary exception.
+    repository, config_path, _ = prepare_repository(tmp_path)
+    provenance_path = repository / "outputs" / "reference" / "run.json"
+    expected_error = TypeError("boom")
+    training_command = load_training_command()
+
+    def raise_type_error(*_args: object, **_kwargs: object) -> None:
+        raise expected_error
+
+    monkeypatch.setattr(training_command, "run_training", raise_type_error)
+
+    # When: the training command exits through that failure.
+    with pytest.raises(TypeError) as caught:
+        _ = training_command.main(
+            ("--config", str(config_path), "--provenance", str(provenance_path))
+        )
+
+    # Then: the original exception and traceback propagate after a durable failed terminal segment.
+    failed = load_run_provenance(provenance_path).segments[-1]
+    assert caught.value is expected_error
+    assert caught.traceback[-1].name == "raise_type_error"
+    assert failed.status == "failed"
+    assert failed.ended_at_utc is not None
+
+
+def test_train_main_finalizes_provenance_after_keyboard_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a reference invocation whose trainer receives a keyboard interrupt.
+    repository, config_path, _ = prepare_repository(tmp_path)
+    provenance_path = repository / "outputs" / "reference" / "run.json"
+    expected_interrupt = KeyboardInterrupt()
+    training_command = load_training_command()
+
+    def raise_keyboard_interrupt(*_args: object, **_kwargs: object) -> None:
+        raise expected_interrupt
+
+    monkeypatch.setattr(training_command, "run_training", raise_keyboard_interrupt)
+
+    # When: the training command exits through that interrupt.
+    with pytest.raises(KeyboardInterrupt) as caught:
+        _ = training_command.main(
+            ("--config", str(config_path), "--provenance", str(provenance_path))
+        )
+
+    # Then: the interrupt and traceback propagate after a durable failed terminal segment.
+    failed = load_run_provenance(provenance_path).segments[-1]
+    assert caught.value is expected_interrupt
+    assert caught.traceback[-1].name == "raise_keyboard_interrupt"
+    assert failed.status == "failed"
+    assert failed.ended_at_utc is not None
+
+
+def test_train_main_preserves_training_failure_when_provenance_finalization_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: training and its provenance finalization both raise ordinary exceptions.
+    repository, config_path, _ = prepare_repository(tmp_path)
+    provenance_path = repository / "outputs" / "reference" / "run.json"
+    expected_error = TypeError("boom")
+    finalization_message = "provenance write failed"
+    training_command = load_training_command()
+
+    def raise_type_error(*_args: object, **_kwargs: object) -> None:
+        raise expected_error
+
+    def raise_provenance_error(_path: Path, *, segment: RunSegment) -> None:
+        _ = segment
+        raise OSError(finalization_message)
+
+    monkeypatch.setattr(training_command, "run_training", raise_type_error)
+    monkeypatch.setattr(training_command, "fail_run_segment", raise_provenance_error)
+
+    # When: the training command attempts to finalize its failed provenance segment.
+    with pytest.raises(TypeError) as caught:
+        _ = training_command.main(
+            ("--config", str(config_path), "--provenance", str(provenance_path))
+        )
+
+    # Then: best-effort provenance cannot replace the original training failure.
+    assert caught.value is expected_error
+    assert caught.traceback[-1].name == "raise_type_error"
