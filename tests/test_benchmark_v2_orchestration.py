@@ -330,13 +330,14 @@ def test_partial_run_keeps_every_raw_record_in_execution_order(tmp_path: Path) -
     assert [(record["case_name"], record["replicate_index"]) for record in durable_records] == [
         (task.case.name, task.replicate_index) for task in expected_tasks
     ]
-    state = cast(
+    manifest = cast(
         "dict[str, object]",
-        json.loads(artifacts.run_state_path.read_text(encoding="utf-8")),
+        json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8")),
     )
-    assert state["status"] == "partial"
-    assert state["completed_task_count"] == 4
-    assert state["failed_task_count"] == 3
+    assert manifest["status"] == "partial"
+    assert manifest["completed_task_count"] == 4
+    assert manifest["failed_task_count"] == 3
+    assert not artifacts.run_state_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -358,7 +359,7 @@ def test_partial_run_keeps_every_raw_record_in_execution_order(tmp_path: Path) -
         "task_count",
     ],
 )
-def test_invalid_complete_worker_response_is_a_partial_raw_failure(
+def test_invalid_complete_worker_response_is_a_failed_raw_failure(
     tmp_path: Path,
     mutation: str,
 ) -> None:
@@ -376,18 +377,19 @@ def test_invalid_complete_worker_response_is_a_partial_raw_failure(
     # When: the malformed response is run through normal durable orchestration.
     artifacts = benchmark_module.run_benchmark_v2(config, launcher=launcher)
 
-    # Then: strict validation prevents a complete run and retains one typed raw failure.
-    assert artifacts.status == "partial"
+    # Then: strict validation prevents success and zero successful measurements are failed.
+    assert artifacts.status == "failed"
     assert len(artifacts.raw_replicates) == 1
     (record,) = artifacts.raw_replicates
     assert record.status == "error"
     assert record.error_type == "InvalidWorkerResponse"
-    state = cast(
+    manifest = cast(
         "dict[str, object]",
-        json.loads(artifacts.run_state_path.read_text(encoding="utf-8")),
+        json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8")),
     )
-    assert state["status"] == "partial"
-    assert state["failed_task_count"] == 1
+    assert manifest["status"] == "failed"
+    assert manifest["failed_task_count"] == 1
+    assert not artifacts.run_state_path.exists()
 
 
 def test_keyboard_interrupt_finalizes_durable_partial_state_and_reraises(tmp_path: Path) -> None:
@@ -419,13 +421,14 @@ def test_keyboard_interrupt_finalizes_durable_partial_state_and_reraises(tmp_pat
         expected_tasks[0].case.name,
         expected_tasks[0].replicate_index,
     )
-    state = cast(
+    manifest = cast(
         "dict[str, object]",
-        json.loads((run_directory / "run_state.json").read_text(encoding="utf-8")),
+        json.loads((run_directory / "run_manifest.json").read_text(encoding="utf-8")),
     )
-    assert state["status"] == "partial"
-    assert state["completed_task_count"] == 1
-    assert state["expected_task_count"] == 4
+    assert manifest["status"] == "partial"
+    assert manifest["completed_task_count"] == 1
+    assert manifest["expected_task_count"] == 4
+    assert not (run_directory / "run_state.json").exists()
 
 
 def test_keyboard_interrupt_during_raw_fsync_rolls_back_non_durable_line(
@@ -460,12 +463,13 @@ def test_keyboard_interrupt_during_raw_fsync_rolls_back_non_durable_line(
     assert raw_text.endswith("\n")
     durable_record = cast("object", json.loads(raw_lines[0]))
     assert isinstance(durable_record, dict)
-    state = cast(
+    manifest = cast(
         "dict[str, object]",
-        json.loads((run_directory / "run_state.json").read_text(encoding="utf-8")),
+        json.loads((run_directory / "run_manifest.json").read_text(encoding="utf-8")),
     )
-    assert state["status"] == "partial"
-    assert state["completed_task_count"] == len(raw_lines) == 1
+    assert manifest["status"] == "partial"
+    assert manifest["completed_task_count"] == len(raw_lines) == 1
+    assert not (run_directory / "run_state.json").exists()
 
 
 def test_real_tiny_workers_use_distinct_exited_processes(tmp_path: Path) -> None:

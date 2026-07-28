@@ -16,12 +16,14 @@ from typing import TYPE_CHECKING, Literal, Never, Protocol, cast
 from typing_extensions import override
 
 from minigpt.benchmark_v2_config import JsonValue, case_identity, resolved_config_sha256
-from minigpt.benchmark_v2_report import write_run_artifacts
+from minigpt.benchmark_v2_report import RunStatus, capture_run_environment, write_run_artifacts
 from minigpt.benchmark_v2_worker import (
     WORKER_PROTOCOL_VERSION,
     WorkerRequest,
     worker_request_document,
 )
+
+_GIT_SHORT_SHA_LENGTH = 12
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -155,7 +157,7 @@ class BenchmarkV2Artifacts:
     """Expose the complete durable evidence package for one benchmark invocation."""
 
     run_directory: Path
-    status: Literal["complete", "partial"]
+    status: RunStatus
     run_id: str
     tasks: tuple[BenchmarkTask, ...]
     raw_replicates: tuple[RawReplicate, ...]
@@ -198,7 +200,7 @@ class _FailureEvidence:
 class _RunProgress:
     """Describe the current durable lifecycle counters."""
 
-    status: Literal["running", "complete", "partial"]
+    status: Literal["running", "complete", "partial", "failed"]
     expected_task_count: int
     completed_task_count: int
     failed_task_count: int
@@ -674,8 +676,14 @@ def _run_state_document(
     }
 
 
-def _git_short_sha() -> str:
+def _git_short_sha(environment_snapshot: dict[str, JsonValue] | None = None) -> str:
     """Read the current Git short SHA without making run creation depend on Git availability."""
+    if environment_snapshot is not None:
+        git = environment_snapshot.get("git")
+        if isinstance(git, dict):
+            commit_sha = git.get("commit_sha")
+            if isinstance(commit_sha, str) and len(commit_sha) >= _GIT_SHORT_SHA_LENGTH:
+                return commit_sha[:_GIT_SHORT_SHA_LENGTH]
     executable = shutil.which("git")
     if executable is None:
         return "nogit0000000"
@@ -689,14 +697,39 @@ def _git_short_sha() -> str:
     return short_sha if completed.returncode == 0 and short_sha else "nogit0000000"
 
 
-def create_run_id(config: BenchmarkV2Config, *, created_at: datetime | None = None) -> str:
+def create_run_id(
+    config: BenchmarkV2Config,
+    *,
+    created_at: datetime | None = None,
+    environment_snapshot: dict[str, JsonValue] | None = None,
+) -> str:
     """Return a collision-checked UTC/Git/config identity for one fresh run directory."""
     timestamp = created_at or datetime.now(UTC)
     if timestamp.tzinfo is None:
         msg = "created_at must be timezone-aware"
         raise ValueError(msg)
     utc_timestamp = timestamp.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return f"{utc_timestamp}-{_git_short_sha()}-{resolved_config_sha256(config)[:12]}"
+    return (
+        f"{utc_timestamp}-{_git_short_sha(environment_snapshot)}-"
+        f"{resolved_config_sha256(config)[:12]}"
+    )
+
+
+def _final_status(tasks: tuple[BenchmarkTask, ...], records: list[RawReplicate]) -> RunStatus:
+    """Classify complete, partial, and failed evidence without a zero-success partial state."""
+    success_count = sum(record.status == "ok" for record in records)
+    if success_count == 0:
+        return "failed"
+    expected = {(task.case_identity, task.replicate_index) for task in tasks}
+    observed = {(record.case_identity, record.replicate_index) for record in records}
+    if (
+        len(records) == len(tasks)
+        and len(observed) == len(records)
+        and observed == expected
+        and success_count == len(tasks)
+    ):
+        return "complete"
+    return "partial"
 
 
 def _append_durable_raw_record(raw_stream: TextIO, record: RawReplicate) -> None:
@@ -729,9 +762,14 @@ def run_benchmark_v2(
 ) -> BenchmarkV2Artifacts:
     """Execute randomized tasks sequentially and preserve a durable partial run."""
     started_at = datetime.now(UTC)
+    environment_snapshot = capture_run_environment(config)
     tasks = expand_benchmark_tasks(config)
     config.output_root.mkdir(parents=True, exist_ok=True)
-    run_id = create_run_id(config, created_at=started_at)
+    run_id = create_run_id(
+        config,
+        created_at=started_at,
+        environment_snapshot=environment_snapshot,
+    )
     run_directory = config.output_root / run_id
     run_directory.mkdir(exist_ok=False)
     config_sha256 = resolved_config_sha256(config)
@@ -763,14 +801,15 @@ def run_benchmark_v2(
                 )
                 _append_durable_raw_record(raw_stream, record)
                 records.append(record)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, Exception):
+            status = _final_status(tasks, records)
             _write_json(
                 run_state_path,
                 _run_state_document(
                     run_id=run_id,
                     config_sha256=config_sha256,
                     progress=_RunProgress(
-                        status="partial",
+                        status=status,
                         expected_task_count=len(tasks),
                         completed_task_count=len(records),
                         failed_task_count=sum(record.status == "error" for record in records),
@@ -778,23 +817,25 @@ def run_benchmark_v2(
                 ),
             )
             raw_stream.close()
-            _ = write_run_artifacts(
-                config=config,
-                run_directory=run_directory,
-                run_id=run_id,
-                status="partial",
-                tasks=tasks,
-                raw_replicates=tuple(records),
-                started_at_utc=started_at.isoformat(),
-                ended_at_utc=datetime.now(UTC).isoformat(),
-            )
+            try:
+                _ = write_run_artifacts(
+                    config=config,
+                    run_directory=run_directory,
+                    run_id=run_id,
+                    status=status,
+                    tasks=tasks,
+                    raw_replicates=tuple(records),
+                    started_at_utc=started_at.isoformat(),
+                    ended_at_utc=datetime.now(UTC).isoformat(),
+                    environment_snapshot=environment_snapshot,
+                )
+            except Exception:  # noqa: BLE001, S110 - preserve the original orchestration exception.
+                pass
+            else:
+                run_state_path.unlink()
             raise
 
-    status: Literal["complete", "partial"] = (
-        "complete"
-        if len(records) == len(tasks) and all(record.status == "ok" for record in records)
-        else "partial"
-    )
+    status = _final_status(tasks, records)
     _write_json(
         run_state_path,
         _run_state_document(
@@ -817,7 +858,9 @@ def run_benchmark_v2(
         raw_replicates=tuple(records),
         started_at_utc=started_at.isoformat(),
         ended_at_utc=datetime.now(UTC).isoformat(),
+        environment_snapshot=environment_snapshot,
     )
+    run_state_path.unlink()
     return BenchmarkV2Artifacts(
         run_directory=run_directory,
         status=status,

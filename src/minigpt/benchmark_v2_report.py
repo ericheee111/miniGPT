@@ -6,14 +6,19 @@ import csv
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
+import sys
 import uuid
 from dataclasses import asdict, dataclass
 from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
+import numpy as np
+import psutil
+import torch
 import yaml
 
 from minigpt.benchmark_v2_config import JsonValue, resolved_config_document, resolved_config_sha256
@@ -43,6 +48,15 @@ _MANIFEST_KEYS = frozenset(
 )
 _ARTIFACT_ENTRY_KEYS = frozenset({"path", "size_bytes", "sha256"})
 _SHA256_HEX_LENGTH = 64
+_SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+class _PriorityProcess(Protocol):
+    """Describe the psutil priority method absent from the installed type stubs."""
+
+    def nice(self) -> int | str:
+        """Return the current process priority without changing it."""
+        ...
 
 
 class _RawReplicateLike(Protocol):
@@ -259,12 +273,64 @@ def _git_identity() -> dict[str, str | bool | None]:
     }
 
 
+def _power_scheme_evidence() -> dict[str, str | None]:
+    """Capture the active Windows power scheme when the native utility is available."""
+    if sys.platform != "win32":
+        return {"value": None, "reason": "not_windows"}
+    executable = shutil.which("powercfg")
+    if executable is None:
+        return {"value": None, "reason": "powercfg_unavailable"}
+    completed = subprocess.run(  # noqa: S603 - command and arguments are fixed.
+        [executable, "/getactivescheme"],
+        capture_output=True,
+        check=False,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        return {"value": None, "reason": f"powercfg_exit_{completed.returncode}"}
+    return {"value": (completed.stdout or "").strip() or None, "reason": None}
+
+
+def capture_run_environment(config: BenchmarkV2Config) -> dict[str, JsonValue]:
+    """Capture immutable parent-process environment evidence before the first worker starts."""
+    process = cast("_PriorityProcess", cast("object", psutil.Process()))
+    cpu_name = platform.processor() or platform.uname().processor or None
+    return cast(
+        "dict[str, JsonValue]",
+        {
+            "captured_before_first_worker": True,
+            "git": cast("JsonValue", _git_identity()),
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "cpu_name": cpu_name,
+            "physical_cpu_count": psutil.cpu_count(logical=False),
+            "logical_cpu_count": psutil.cpu_count(logical=True),
+            "python_version": platform.python_version(),
+            "torch_version": torch.__version__,
+            "numpy_version": np.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "parent_torch_num_threads": torch.get_num_threads(),
+            "parent_torch_num_interop_threads": torch.get_num_interop_threads(),
+            "configured_torch_num_interop_threads": config.torch_num_interop_threads,
+            "configured_cpu_affinity": list(config.cpu_affinity) if config.cpu_affinity else None,
+            "relevant_environment_variables": {
+                name: os.environ.get(name) for name in config.relevant_environment_variables
+            },
+            "process_priority": str(process.nice()),
+            "power_scheme": cast("JsonValue", _power_scheme_evidence()),
+        },
+    )
+
+
 def _environment_document(
     *,
     config: BenchmarkV2Config,
     run_id: str,
     status: RunStatus,
     raw_replicates: tuple[_RawReplicateLike, ...],
+    environment_snapshot: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
     """Preserve run identity and every successful worker environment without pretending sameness."""
     environments = [
@@ -279,7 +345,7 @@ def _environment_document(
             "run_id": run_id,
             "run_status": status,
             "config_sha256": resolved_config_sha256(config),
-            "git": cast("JsonValue", _git_identity()),
+            "run_environment": environment_snapshot,
             "worker_environments": environments,
         },
     )
@@ -387,6 +453,19 @@ def _artifact_entry(run_directory: Path, artifact_path: Path) -> ArtifactManifes
     )
 
 
+def _case_identity_documents(
+    tasks: tuple[_BenchmarkTaskLike, ...],
+) -> tuple[dict[str, str], ...]:
+    """List each case identity once in first execution-order appearance."""
+    documents: list[dict[str, str]] = []
+    observed: set[str] = set()
+    for task in tasks:
+        if task.case_identity not in observed:
+            observed.add(task.case_identity)
+            documents.append({"case_name": task.case.name, "case_identity": task.case_identity})
+    return tuple(documents)
+
+
 def _manifest_document(manifest: RunManifest) -> dict[str, JsonValue]:
     """Serialize the strict manifest schema while deliberately omitting its own hash."""
     return cast(
@@ -408,6 +487,27 @@ def _manifest_document(manifest: RunManifest) -> dict[str, JsonValue]:
     )
 
 
+def _validate_complete_task_identities(
+    status: RunStatus,
+    tasks: tuple[_BenchmarkTaskLike, ...],
+    raw_replicates: tuple[_RawReplicateLike, ...],
+) -> None:
+    """Require a complete status to bind each expected task identity exactly once."""
+    if status != "complete":
+        return
+    expected = {(task.case_identity, task.replicate_index) for task in tasks}
+    observed = {(record.case_identity, record.replicate_index) for record in raw_replicates}
+    if (
+        len(expected) != len(tasks)
+        or len(raw_replicates) != len(tasks)
+        or len(observed) != len(raw_replicates)
+        or observed != expected
+        or any(record.status != "ok" for record in raw_replicates)
+    ):
+        msg = "a complete run requires exactly one successful raw record for every task identity"
+        raise ValueError(msg)
+
+
 def write_run_artifacts(  # noqa: PLR0913
     *,
     config: BenchmarkV2Config,
@@ -418,16 +518,13 @@ def write_run_artifacts(  # noqa: PLR0913
     raw_replicates: tuple[_RawReplicateLike, ...],
     started_at_utc: str,
     ended_at_utc: str,
+    environment_snapshot: dict[str, JsonValue] | None = None,
 ) -> RunArtifactPaths:
     """Atomically finalize a unique run directory from all preserved raw evidence."""
     if not run_directory.is_dir():
         msg = f"run directory does not exist: {run_directory}"
         raise FileNotFoundError(msg)
-    if status == "complete" and (
-        len(raw_replicates) != len(tasks) or any(record.status != "ok" for record in raw_replicates)
-    ):
-        msg = "a complete run requires one successful raw record for every task"
-        raise ValueError(msg)
+    _validate_complete_task_identities(status, tasks, raw_replicates)
     grouped_records: dict[str, list[_RawReplicateLike]] = {}
     for record in raw_replicates:
         grouped_records.setdefault(record.case_identity, []).append(record)
@@ -451,6 +548,7 @@ def write_run_artifacts(  # noqa: PLR0913
         started_at_utc=started_at_utc,
         ended_at_utc=ended_at_utc,
         summaries=summaries,
+        environment_snapshot=environment_snapshot or capture_run_environment(config),
     )
 
 
@@ -465,6 +563,7 @@ def _write_final_artifacts(  # noqa: PLR0913
     started_at_utc: str,
     ended_at_utc: str,
     summaries: tuple[BenchmarkV2Summary, ...],
+    environment_snapshot: dict[str, JsonValue],
 ) -> RunArtifactPaths:
     """Write bound non-manifest artifacts first, then write the self-excluded manifest."""
     environment_path = run_directory / "environment.json"
@@ -482,6 +581,7 @@ def _write_final_artifacts(  # noqa: PLR0913
                 run_id=run_id,
                 status=status,
                 raw_replicates=raw_replicates,
+                environment_snapshot=environment_snapshot,
             )
         ),
     )
@@ -523,9 +623,7 @@ def _write_final_artifacts(  # noqa: PLR0913
         completed_task_count=len(raw_replicates),
         successful_task_count=sum(record.status == "ok" for record in raw_replicates),
         failed_task_count=sum(record.status == "error" for record in raw_replicates),
-        case_identities=tuple(
-            {"case_name": task.case.name, "case_identity": task.case_identity} for task in tasks
-        ),
+        case_identities=_case_identity_documents(tasks),
         artifacts=entries,
     )
     _atomic_write_bytes(run_manifest_path, _json_bytes(_manifest_document(manifest)))
@@ -553,7 +651,7 @@ def _require_mapping(value: object, context: str) -> dict[str, object]:
     return cast("dict[str, object]", mapping)
 
 
-def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901
+def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR0915
     """Load a strict self-excluded manifest without trusting malformed artifact metadata."""
     raw_document = cast("object", json.loads(path.read_text(encoding="utf-8")))
     document = _require_mapping(raw_document, "run manifest")
@@ -579,16 +677,34 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901
             not isinstance(raw_path, str)
             or not raw_path
             or Path(raw_path).is_absolute()
+            or "\\" in raw_path
             or ".." in Path(raw_path).parts
             or not isinstance(size_bytes, int)
             or isinstance(size_bytes, bool)
             or size_bytes < 0
             or not isinstance(sha256, str)
             or len(sha256) != _SHA256_HEX_LENGTH
+            or any(character not in _SHA256_HEX_DIGITS for character in sha256)
         ):
             msg = "artifact entry has invalid values"
             raise ValueError(msg)
         artifacts.append(ArtifactManifestEntry(raw_path, size_bytes, sha256))
+    artifact_paths = tuple(entry.path for entry in artifacts)
+    if len(artifact_paths) != len(set(artifact_paths)) or "run_manifest.json" in artifact_paths:
+        msg = "run manifest artifact paths must be unique and self-excluded"
+        raise ValueError(msg)
+    for artifact in artifacts:
+        bound_path = path.parent / artifact.path
+        if not bound_path.is_file():
+            msg = f"bound artifact is missing: {artifact.path}"
+            raise ValueError(msg)
+        content = bound_path.read_bytes()
+        if (
+            len(content) != artifact.size_bytes
+            or hashlib.sha256(content).hexdigest() != artifact.sha256
+        ):
+            msg = f"bound artifact hash or size mismatch: {artifact.path}"
+            raise ValueError(msg)
     raw_case_identities = document["case_identities"]
     if not isinstance(raw_case_identities, list):
         msg = "run manifest case_identities must be a list"

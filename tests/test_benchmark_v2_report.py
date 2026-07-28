@@ -217,6 +217,10 @@ def test_write_run_artifacts_binds_all_outputs_without_hashing_its_manifest(tmp_
     }
     assert {path.name for path in run_directory.iterdir()} == expected_names
     manifest = load_run_manifest(artifacts.run_manifest_path)
+    environment = cast(
+        "dict[str, object]", json.loads(artifacts.environment_path.read_text(encoding="utf-8"))
+    )
+    run_environment = cast("dict[str, object]", environment["run_environment"])
     assert manifest.status == "complete"
     assert {entry.path for entry in manifest.artifacts} == expected_names - {"run_manifest.json"}
     for entry in manifest.artifacts:
@@ -226,6 +230,25 @@ def test_write_run_artifacts_binds_all_outputs_without_hashing_its_manifest(tmp_
         assert hashlib.sha256(artifact_path.read_bytes()).hexdigest() == entry.sha256
         assert not entry.path.startswith("/")
         assert ".." not in entry.path.split("/")
+    assert {
+        "captured_before_first_worker",
+        "git",
+        "platform",
+        "machine",
+        "cpu_name",
+        "physical_cpu_count",
+        "logical_cpu_count",
+        "python_version",
+        "torch_version",
+        "numpy_version",
+        "cuda_available",
+        "configured_torch_num_interop_threads",
+        "configured_cpu_affinity",
+        "relevant_environment_variables",
+        "process_priority",
+        "power_scheme",
+    } <= set(run_environment)
+    assert run_environment["captured_before_first_worker"] is True
 
 
 def test_partial_report_preserves_failure_and_makes_no_success_claim(tmp_path: Path) -> None:
@@ -298,3 +321,170 @@ def test_orchestrator_finalizes_unique_run_identity_and_complete_manifest(tmp_pa
     assert run_id_parts[0].endswith("Z")
     assert len(run_id_parts[1]) >= 7
     assert len(run_id_parts[2]) == 12
+
+
+def test_complete_artifacts_require_exact_unique_task_identities(tmp_path: Path) -> None:
+    """Reject a nominally successful set with a duplicate task replacing an expected task."""
+    # Given: two expected task identities but two raw successes for only the first one.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    duplicate_records = (successful_record(tasks[0], 10.0), successful_record(tasks[0], 11.0))
+    run_directory = tmp_path / "duplicate-complete"
+    run_directory.mkdir()
+
+    # When: the malformed set is claimed to be a complete run.
+    # Then: finalization rejects the duplicate/missing task identity rather than writing success.
+    with pytest.raises(ValueError, match="exactly one successful raw record"):
+        _ = write_run_artifacts(
+            config=config,
+            run_directory=run_directory,
+            run_id="duplicate-complete",
+            status="complete",
+            tasks=tasks,
+            raw_replicates=duplicate_records,
+            started_at_utc="2026-07-28T01:02:03+00:00",
+            ended_at_utc="2026-07-28T01:02:04+00:00",
+        )
+
+
+@pytest.mark.parametrize("mutation", ["tamper", "missing", "duplicate", "bad_hash"])
+def test_load_run_manifest_verifies_each_bound_artifact(tmp_path: Path, mutation: str) -> None:
+    """Reject missing, altered, duplicate, or non-hex artifact bindings before loading."""
+    # Given: a valid complete report package and one requested manifest/artifact mutation.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / f"manifest-{mutation}"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+    )
+    if mutation == "tamper":
+        _ = artifacts.summary_csv_path.write_text("tampered\n", encoding="utf-8")
+    elif mutation == "missing":
+        _ = artifacts.summary_csv_path.unlink()
+    else:
+        document = cast(
+            "dict[str, object]",
+            json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8")),
+        )
+        entries = cast("list[dict[str, object]]", document["artifacts"])
+        if mutation == "duplicate":
+            entries.append(entries[0].copy())
+        else:
+            entries[0]["sha256"] = "z" * 64
+        _ = artifacts.run_manifest_path.write_text(
+            json.dumps(document), encoding="utf-8", newline="\n"
+        )
+
+    # When/Then: strict loading detects a broken bound artifact before returning metadata.
+    with pytest.raises(ValueError, match=r"artifact|bound"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
+def test_orchestrator_marks_all_failures_failed_and_removes_transitional_state(
+    tmp_path: Path,
+) -> None:
+    """All worker failures produce failed evidence without a surviving run-state artifact."""
+    # Given: every expected worker returns a typed protocol failure.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+
+    class FailingLauncher:
+        """Return a worker-declared failure for each requested task."""
+
+        def __init__(self) -> None:
+            """Start with the first expected task."""
+            self._index: int = 0
+
+        def __call__(
+            self, command: list[str], request_json: str, timeout: float
+        ) -> subprocess.CompletedProcess[str]:
+            """Return one protocol-shaped failure response."""
+            task = tasks[self._index]
+            self._index += 1
+            response = worker_success_document(task, 15_000 + self._index)
+            failure = {
+                key: response[key]
+                for key in (
+                    "protocol_version",
+                    "worker_pid",
+                    "started_at_utc",
+                    "ended_at_utc",
+                    "case_identity",
+                    "case_name",
+                    "replicate_index",
+                )
+            }
+            failure.update({"status": "error", "error_type": "RuntimeError", "message": "boom"})
+            return subprocess.CompletedProcess(command, 1, json.dumps(failure), "boom")
+
+    # When: all launch results are collected normally.
+    artifacts = run_benchmark_v2(config, launcher=FailingLauncher())
+
+    # Then: no success is mislabeled as partial or complete, and final artifacts replace run state.
+    assert artifacts.status == "failed"
+    assert load_run_manifest(artifacts.run_manifest_path).status == "failed"
+    assert not artifacts.run_state_path.exists()
+
+
+def test_interruption_without_a_success_finalizes_failed_evidence_then_reraises(
+    tmp_path: Path,
+) -> None:
+    """An interruption before success writes failed evidence while preserving KeyboardInterrupt."""
+    # Given: a launcher interrupted before it can return the first result.
+    config = make_config(tmp_path)
+
+    def interrupt_launcher(
+        command: list[str], request_json: str, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (command, request_json, timeout)
+        raise KeyboardInterrupt
+
+    # When: orchestration is interrupted at the first launch.
+    with pytest.raises(KeyboardInterrupt):
+        _ = run_benchmark_v2(config, launcher=interrupt_launcher)
+
+    # Then: the run directory contains a failed package rather than a success claim.
+    (run_directory,) = tuple(tmp_path.iterdir())
+    manifest = load_run_manifest(run_directory / "run_manifest.json")
+    assert manifest.status == "failed"
+    assert not (run_directory / "run_state.json").exists()
+
+
+def test_ordinary_launcher_exception_finalizes_partial_evidence_then_reraises(
+    tmp_path: Path,
+) -> None:
+    """An ordinary parent exception retains evidence and does not replace the original error."""
+    # Given: one successful worker followed by a launcher-owned operating-system error.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    calls = 0
+
+    def exception_launcher(
+        command: list[str], request_json: str, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        _ = (request_json, timeout)
+        calls += 1
+        if calls == 1:
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps(worker_success_document(tasks[0], 16_000)), ""
+            )
+        msg = "launcher unavailable"
+        raise OSError(msg)
+
+    # When: the parent launcher raises after durable successful evidence exists.
+    with pytest.raises(OSError, match="launcher unavailable"):
+        _ = run_benchmark_v2(config, launcher=exception_launcher)
+
+    # Then: partial evidence is finalized before the original exception propagates.
+    (run_directory,) = tuple(tmp_path.iterdir())
+    assert load_run_manifest(run_directory / "run_manifest.json").status == "partial"
