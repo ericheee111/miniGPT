@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import subprocess
@@ -23,6 +24,8 @@ from minigpt.benchmark_v2_worker import (
 )
 
 if TYPE_CHECKING:
+    from typing import TextIO
+
     from minigpt.benchmark_v2_types import BenchmarkV2Case, BenchmarkV2Config
 
 _SUCCESS_RESPONSE_KEYS = frozenset(
@@ -61,6 +64,25 @@ _FAILURE_RESPONSE_KEYS = frozenset(
         "replicate_index",
         "error_type",
         "message",
+    }
+)
+_ENVIRONMENT_RESPONSE_KEYS = frozenset(
+    {
+        "platform",
+        "python_version",
+        "torch_version",
+        "torch_num_threads",
+        "torch_num_interop_threads",
+        "logical_cpu_count",
+        "requested_cpu_affinity",
+        "effective_cpu_affinity",
+        "relevant_environment_variables",
+    }
+)
+_PEAK_RSS_METHODS = frozenset(
+    {
+        "windows_peak_working_set",
+        "linux_getrusage_ru_maxrss",
     }
 )
 
@@ -252,6 +274,60 @@ def _invalid_worker_response(reason: str) -> Never:
     raise InvalidWorkerResponseError(reason)
 
 
+def _string_keyed_mapping(value: object, context: str) -> dict[str, object]:
+    """Require one JSON object whose keys are strings."""
+    if not isinstance(value, dict):
+        _invalid_worker_response(f"{context} must be an object")
+    raw_mapping = cast("dict[object, object]", value)
+    if any(not isinstance(key, str) for key in raw_mapping):
+        _invalid_worker_response(f"{context} keys must be strings")
+    return cast("dict[str, object]", raw_mapping)
+
+
+def _require_exact_keys(
+    document: dict[str, object],
+    expected_keys: frozenset[str],
+    context: str,
+) -> None:
+    """Require an exact worker-protocol key set."""
+    if frozenset(document) != expected_keys:
+        _invalid_worker_response(f"{context} has an invalid field set")
+
+
+def _integer(
+    value: object,
+    field: str,
+    *,
+    positive: bool = False,
+    non_negative: bool = False,
+) -> int:
+    """Require one strict JSON integer with an optional lower bound."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        _invalid_worker_response(f"{field} must be an integer")
+    if positive and value <= 0:
+        _invalid_worker_response(f"{field} must be positive")
+    if non_negative and value < 0:
+        _invalid_worker_response(f"{field} must be non-negative")
+    return value
+
+
+def _positive_finite_number(value: object, field: str) -> float:
+    """Require one positive finite JSON number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        _invalid_worker_response(f"{field} must be a number")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        _invalid_worker_response(f"{field} must be positive and finite")
+    return number
+
+
+def _string(value: object, field: str, *, allow_empty: bool = False) -> str:
+    """Require one string, optionally allowing the empty worker message."""
+    if not isinstance(value, str) or (not allow_empty and not value):
+        _invalid_worker_response(f"{field} must be a valid string")
+    return value
+
+
 def _parse_timestamp(value: object, field: str) -> str:
     """Require a timezone-aware worker lifecycle timestamp."""
     if not isinstance(value, str):
@@ -262,22 +338,122 @@ def _parse_timestamp(value: object, field: str) -> str:
     return value
 
 
-def _worker_metadata(task: BenchmarkTask, response: dict[str, JsonValue]) -> tuple[int, str, str]:
+def _affinity(value: object, field: str) -> tuple[int, ...] | None:
+    """Require a null or non-empty unique list of logical CPU IDs."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value:
+        _invalid_worker_response(f"{field} must be a non-empty list or null")
+    raw_values = cast("list[object]", value)
+    values = tuple(_integer(item, field, non_negative=True) for item in raw_values)
+    if len(values) != len(set(values)):
+        _invalid_worker_response(f"{field} must not contain duplicates")
+    return values
+
+
+def _worker_metadata(task: BenchmarkTask, response: dict[str, object]) -> tuple[int, str, str]:
     """Validate worker-owned process and lifecycle identity."""
-    worker_pid = response["worker_pid"]
-    if isinstance(worker_pid, bool) or not isinstance(worker_pid, int) or worker_pid <= 0:
-        _invalid_worker_response("worker_pid must be a positive integer")
+    worker_pid = _integer(response["worker_pid"], "worker_pid", positive=True)
     started_at_utc = _parse_timestamp(response["started_at_utc"], "started_at_utc")
     ended_at_utc = _parse_timestamp(response["ended_at_utc"], "ended_at_utc")
     if datetime.fromisoformat(started_at_utc) > datetime.fromisoformat(ended_at_utc):
         _invalid_worker_response("worker lifecycle ends before it starts")
-    if response["case_identity"] != task.case_identity:
+    if _string(response["case_identity"], "case_identity") != task.case_identity:
         _invalid_worker_response("case_identity does not match the task")
-    if response["case_name"] != task.case.name:
+    if _string(response["case_name"], "case_name") != task.case.name:
         _invalid_worker_response("case_name does not match the task")
-    if response["replicate_index"] != task.replicate_index:
+    replicate_index = _integer(response["replicate_index"], "replicate_index", non_negative=True)
+    if replicate_index != task.replicate_index:
         _invalid_worker_response("replicate_index does not match the task")
     return worker_pid, started_at_utc, ended_at_utc
+
+
+def _validate_environment(task: BenchmarkTask, raw_environment: object) -> None:
+    """Validate exact nested worker environment and applied CPU controls."""
+    environment = _string_keyed_mapping(raw_environment, "environment")
+    _require_exact_keys(environment, _ENVIRONMENT_RESPONSE_KEYS, "environment")
+    _ = _string(environment["platform"], "environment.platform")
+    _ = _string(environment["python_version"], "environment.python_version")
+    _ = _string(environment["torch_version"], "environment.torch_version")
+    torch_num_threads = _integer(
+        environment["torch_num_threads"],
+        "environment.torch_num_threads",
+        positive=True,
+    )
+    if torch_num_threads != task.case.torch_num_threads:
+        _invalid_worker_response("environment.torch_num_threads does not match the task")
+    torch_num_interop_threads = _integer(
+        environment["torch_num_interop_threads"],
+        "environment.torch_num_interop_threads",
+        positive=True,
+    )
+    if torch_num_interop_threads != task.torch_num_interop_threads:
+        _invalid_worker_response("environment.torch_num_interop_threads does not match the task")
+    logical_cpu_count = environment["logical_cpu_count"]
+    if logical_cpu_count is not None:
+        _ = _integer(
+            logical_cpu_count,
+            "environment.logical_cpu_count",
+            positive=True,
+        )
+    requested_affinity = _affinity(
+        environment["requested_cpu_affinity"],
+        "environment.requested_cpu_affinity",
+    )
+    if requested_affinity != task.cpu_affinity:
+        _invalid_worker_response("environment.requested_cpu_affinity does not match the task")
+    _ = _affinity(
+        environment["effective_cpu_affinity"],
+        "environment.effective_cpu_affinity",
+    )
+    environment_variables = _string_keyed_mapping(
+        environment["relevant_environment_variables"],
+        "environment.relevant_environment_variables",
+    )
+    if frozenset(environment_variables) != frozenset(task.relevant_environment_variables):
+        _invalid_worker_response(
+            "environment.relevant_environment_variables has an invalid field set"
+        )
+    if any(
+        value is not None and not isinstance(value, str) for value in environment_variables.values()
+    ):
+        _invalid_worker_response(
+            "environment.relevant_environment_variables values must be strings or null"
+        )
+
+
+def _validate_success_response(task: BenchmarkTask, response: dict[str, object]) -> None:
+    """Validate all success metrics, timer evidence, memory, and environment fields."""
+    warmup_steps = _integer(response["warmup_steps"], "warmup_steps", non_negative=True)
+    if warmup_steps != task.warmup_steps:
+        _invalid_worker_response("warmup_steps does not match the task")
+    measurement_steps = _integer(
+        response["measurement_steps"],
+        "measurement_steps",
+        positive=True,
+    )
+    if measurement_steps != task.measurement_steps:
+        _invalid_worker_response("measurement_steps does not match the task")
+    for field in ("elapsed_seconds", "step_time_ms", "tokens_per_second"):
+        _ = _positive_finite_number(response[field], field)
+    _ = _integer(response["tokens_per_step"], "tokens_per_step", positive=True)
+    _ = _integer(response["parameter_count"], "parameter_count", positive=True)
+    final_rss_mib = _positive_finite_number(response["final_rss_mib"], "final_rss_mib")
+    peak_rss_mib = _positive_finite_number(response["peak_rss_mib"], "peak_rss_mib")
+    if peak_rss_mib < final_rss_mib:
+        _invalid_worker_response("peak_rss_mib must not be below final_rss_mib")
+    peak_rss_method = _string(response["peak_rss_method"], "peak_rss_method")
+    if peak_rss_method not in _PEAK_RSS_METHODS:
+        _invalid_worker_response("peak_rss_method is unsupported")
+    if response["peak_rss_sampling_interval_ms"] is not None:
+        _invalid_worker_response("peak_rss_sampling_interval_ms must be null")
+    _validate_environment(task, response["environment"])
+
+
+def _validate_failure_response(response: dict[str, object]) -> None:
+    """Validate worker-declared error type and message fields."""
+    _ = _string(response["error_type"], "error_type")
+    _ = _string(response["message"], "message", allow_empty=True)
 
 
 def _parse_worker_response(
@@ -285,22 +461,26 @@ def _parse_worker_response(
 ) -> tuple[dict[str, JsonValue], int, str, str]:
     """Parse an exact worker response and validate its task-owned identity."""
     raw_response = cast("object", json.loads(stdout))
-    if not isinstance(raw_response, dict):
-        _invalid_worker_response("worker response must be an object")
-    raw_mapping = cast("dict[object, object]", raw_response)
-    if any(not isinstance(key, str) for key in raw_mapping):
-        _invalid_worker_response("worker response keys must be strings")
-    response = cast("dict[str, JsonValue]", raw_mapping)
+    response = _string_keyed_mapping(raw_response, "worker response")
     status = response.get("status")
     expected_keys = _SUCCESS_RESPONSE_KEYS if status == "ok" else _FAILURE_RESPONSE_KEYS
-    if frozenset(response) != expected_keys:
-        _invalid_worker_response("worker response has an invalid field set")
-    if response["protocol_version"] != WORKER_PROTOCOL_VERSION:
+    _require_exact_keys(response, expected_keys, "worker response")
+    protocol_version = _integer(response["protocol_version"], "protocol_version")
+    if protocol_version != WORKER_PROTOCOL_VERSION:
         _invalid_worker_response("worker response has an unsupported protocol version")
     if status not in {"ok", "error"}:
         _invalid_worker_response("worker response has an invalid status")
     worker_pid, started_at_utc, ended_at_utc = _worker_metadata(task, response)
-    return response, worker_pid, started_at_utc, ended_at_utc
+    if status == "ok":
+        _validate_success_response(task, response)
+    else:
+        _validate_failure_response(response)
+    return (
+        cast("dict[str, JsonValue]", response),
+        worker_pid,
+        started_at_utc,
+        ended_at_utc,
+    )
 
 
 def _invalid_response_record(
@@ -369,11 +549,13 @@ def execute_worker(
             parse_failure = _invalid_response_record(task, completed, error)
         return parse_failure
 
-    if completed.returncode != 0:
+    if response["status"] == "error":
+        error_type = cast("str", response["error_type"])
+        message = cast("str", response["message"])
         return _failure_record(
             task,
-            error_type="WorkerProcessError",
-            message=f"worker exited with return code {completed.returncode}",
+            error_type=error_type,
+            message=message,
             evidence=_FailureEvidence(
                 return_code=completed.returncode,
                 stdout=completed.stdout,
@@ -384,19 +566,11 @@ def execute_worker(
                 worker_response=response,
             ),
         )
-    if response["status"] == "error":
-        error_type = response["error_type"]
-        message = response["message"]
-        if not isinstance(error_type, str) or not isinstance(message, str):
-            return _invalid_response_record(
-                task,
-                completed,
-                ValueError("worker failure fields must be strings"),
-            )
+    if completed.returncode != 0:
         return _failure_record(
             task,
-            error_type=error_type,
-            message=message,
+            error_type="WorkerProcessError",
+            message=f"worker exited with return code {completed.returncode}",
             evidence=_FailureEvidence(
                 return_code=completed.returncode,
                 stdout=completed.stdout,
@@ -490,6 +664,29 @@ def _run_state_document(
     }
 
 
+def _append_durable_raw_record(raw_stream: TextIO, record: RawReplicate) -> None:
+    """Append one complete JSON line or roll it back before propagating interruption."""
+    durable_offset = raw_stream.tell()
+    try:
+        _ = raw_stream.write(
+            json.dumps(
+                raw_replicate_document(record),
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        raw_stream.flush()
+        os.fsync(raw_stream.fileno())
+    except KeyboardInterrupt:
+        _ = raw_stream.seek(durable_offset)
+        _ = raw_stream.truncate()
+        raw_stream.flush()
+        os.fsync(raw_stream.fileno())
+        raise
+
+
 def run_benchmark_v2(
     config: BenchmarkV2Config,
     *,
@@ -529,18 +726,8 @@ def run_benchmark_v2(
                     timeout_seconds=config.worker_timeout_seconds,
                     launcher=launcher,
                 )
+                _append_durable_raw_record(raw_stream, record)
                 records.append(record)
-                _ = raw_stream.write(
-                    json.dumps(
-                        raw_replicate_document(record),
-                        ensure_ascii=False,
-                        allow_nan=False,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                )
-                raw_stream.flush()
-                os.fsync(raw_stream.fileno())
         except KeyboardInterrupt:
             _write_json(
                 run_state_path,

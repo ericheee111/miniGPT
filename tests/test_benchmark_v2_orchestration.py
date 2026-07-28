@@ -9,12 +9,14 @@ from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
+import psutil
 import pytest
 
 import minigpt.benchmark_v2 as benchmark_module
 from minigpt.benchmark_v2_types import BenchmarkV2Case, BenchmarkV2Config, ProfileV2Settings
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from minigpt.benchmark_v2 import BenchmarkTask, WorkerLauncher
@@ -142,6 +144,48 @@ def worker_failure_document(task: BenchmarkTask, worker_pid: int) -> dict[str, J
     }
 
 
+def invalid_worker_document(
+    task: BenchmarkTask,
+    worker_pid: int,
+    mutation: str,
+) -> dict[str, JsonValue]:
+    """Build one worker response with a single strict-schema violation."""
+    if mutation == "failure_field_type":
+        failure = worker_failure_document(task, worker_pid)
+        failure["error_type"] = 7
+        return failure
+    response = worker_success_document(task, worker_pid)
+    scalar_mutations: dict[str, tuple[str, JsonValue]] = {
+        "string_metric": ("elapsed_seconds", "0.5"),
+        "zero_positive_metric": ("step_time_ms", 0.0),
+        "negative_memory": ("final_rss_mib", -1.0),
+        "non_finite_metric": ("tokens_per_second", float("nan")),
+        "integer_field_type": ("parameter_count", 123.0),
+        "peak_method": ("peak_rss_method", "sampled"),
+        "peak_interval": ("peak_rss_sampling_interval_ms", 1.0),
+        "task_count": ("warmup_steps", task.warmup_steps + 1),
+    }
+    if mutation in scalar_mutations:
+        field, value = scalar_mutations[mutation]
+        response[field] = value
+        return response
+    environment = cast("dict[str, JsonValue]", response["environment"])
+    if mutation == "environment_keys":
+        del environment["platform"]
+    else:
+        environment_mutations: dict[str, tuple[str, JsonValue]] = {
+            "environment_thread_type": ("torch_num_threads", True),
+            "environment_affinity": ("effective_cpu_affinity", [0, 0]),
+            "environment_variables": (
+                "relevant_environment_variables",
+                {"UNEXPECTED": 1},
+            ),
+        }
+        field, value = environment_mutations[mutation]
+        environment[field] = value
+    return response
+
+
 class ScriptedLauncher:
     """Return task-aware subprocess outcomes in a fixed sequence."""
 
@@ -169,14 +213,21 @@ class ScriptedLauncher:
             return subprocess.CompletedProcess(command, 0, stdout, "")
         if outcome == "declared_failure":
             stdout = json.dumps(worker_failure_document(task, worker_pid))
-            return subprocess.CompletedProcess(command, 0, stdout, "")
+            return subprocess.CompletedProcess(command, 1, stdout, "worker stderr")
         if outcome == "return_code_failure":
-            stdout = json.dumps(worker_failure_document(task, worker_pid))
+            stdout = json.dumps(worker_success_document(task, worker_pid))
             return subprocess.CompletedProcess(command, 1, stdout, "worker stderr")
         if outcome == "bare_return_code_failure":
             return subprocess.CompletedProcess(command, 7, "", "worker crashed")
         if outcome == "malformed":
             return subprocess.CompletedProcess(command, 0, "{not-json", "")
+        if outcome.startswith("invalid_"):
+            mutation = outcome.removeprefix("invalid_")
+            stdout = json.dumps(
+                invalid_worker_document(task, worker_pid, mutation),
+                allow_nan=True,
+            )
+            return subprocess.CompletedProcess(command, 0, stdout, "")
         if outcome == "interrupt":
             raise KeyboardInterrupt
         raise subprocess.TimeoutExpired(command, timeout, output="partial stdout", stderr="timeout")
@@ -241,6 +292,10 @@ def test_execute_worker_converts_each_failure_boundary_to_a_raw_record(
     assert record.replicate_index == task.replicate_index
     assert record.error_type == error_type
     assert record.worker_pid == expected_pid
+    if outcome == "declared_failure":
+        assert record.message == "worker failed"
+        assert record.return_code == 1
+        assert record.worker_response is not None
 
 
 def test_partial_run_keeps_every_raw_record_in_execution_order(tmp_path: Path) -> None:
@@ -283,6 +338,56 @@ def test_partial_run_keeps_every_raw_record_in_execution_order(tmp_path: Path) -
     assert state["failed_task_count"] == 3
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "string_metric",
+        "zero_positive_metric",
+        "negative_memory",
+        "non_finite_metric",
+        "integer_field_type",
+        "peak_method",
+        "peak_interval",
+        "environment_keys",
+        "environment_thread_type",
+        "environment_affinity",
+        "environment_variables",
+        "failure_field_type",
+        "task_count",
+    ],
+)
+def test_invalid_complete_worker_response_is_a_partial_raw_failure(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    """Reject wrong response types, metrics, controls, and nested environment evidence."""
+    # Given: one nominal worker response containing a single protocol violation.
+    base_config = make_config(tmp_path)
+    config = replace(
+        base_config,
+        cases=(base_config.cases[0],),
+        replicates=1,
+        minimum_replicates=1,
+    )
+    launcher: WorkerLauncher = ScriptedLauncher((f"invalid_{mutation}",))
+
+    # When: the malformed response is run through normal durable orchestration.
+    artifacts = benchmark_module.run_benchmark_v2(config, launcher=launcher)
+
+    # Then: strict validation prevents a complete run and retains one typed raw failure.
+    assert artifacts.status == "partial"
+    assert len(artifacts.raw_replicates) == 1
+    (record,) = artifacts.raw_replicates
+    assert record.status == "error"
+    assert record.error_type == "InvalidWorkerResponse"
+    state = cast(
+        "dict[str, object]",
+        json.loads(artifacts.run_state_path.read_text(encoding="utf-8")),
+    )
+    assert state["status"] == "partial"
+    assert state["failed_task_count"] == 1
+
+
 def test_keyboard_interrupt_finalizes_durable_partial_state_and_reraises(tmp_path: Path) -> None:
     """Flush completed records and partial status before propagating an interruption."""
     # Given: one successful worker followed by a parent-process interruption.
@@ -321,6 +426,46 @@ def test_keyboard_interrupt_finalizes_durable_partial_state_and_reraises(tmp_pat
     assert state["expected_task_count"] == 4
 
 
+def test_keyboard_interrupt_during_raw_fsync_rolls_back_non_durable_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Count only fully durable JSONL records when persistence is interrupted."""
+    # Given: the second raw-record fsync is interrupted after one durable line.
+    config = make_config(tmp_path)
+    launcher: WorkerLauncher = ScriptedLauncher(("success",) * 4)
+    real_fsync = os.fsync
+    fsync_calls = 0
+
+    def interrupt_second_raw_fsync(file_descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 4:
+            raise KeyboardInterrupt
+        real_fsync(file_descriptor)
+
+    monkeypatch.setattr(os, "fsync", interrupt_second_raw_fsync)
+
+    # When: persistence is interrupted after writing the second raw line.
+    with pytest.raises(KeyboardInterrupt):
+        _ = benchmark_module.run_benchmark_v2(config, launcher=launcher)
+
+    # Then: the partial state counts exactly the one complete durable JSON line.
+    (run_directory,) = tuple(tmp_path.iterdir())
+    raw_text = (run_directory / "raw_replicates.jsonl").read_text(encoding="utf-8")
+    raw_lines = raw_text.splitlines()
+    assert len(raw_lines) == 1
+    assert raw_text.endswith("\n")
+    durable_record = cast("object", json.loads(raw_lines[0]))
+    assert isinstance(durable_record, dict)
+    state = cast(
+        "dict[str, object]",
+        json.loads((run_directory / "run_state.json").read_text(encoding="utf-8")),
+    )
+    assert state["status"] == "partial"
+    assert state["completed_task_count"] == len(raw_lines) == 1
+
+
 def test_real_tiny_workers_use_distinct_exited_processes(tmp_path: Path) -> None:
     """Run each replicate in a distinct child process that has exited before return."""
     # Given: two bounded replicates of one minimal real worker case.
@@ -351,13 +496,8 @@ def test_real_tiny_workers_use_distinct_exited_processes(tmp_path: Path) -> None
     concrete_pids = cast("list[int]", worker_pids)
     assert len(set(concrete_pids)) == 2
     assert os.getpid() not in concrete_pids
-    for worker_pid in concrete_pids:
-        try:
-            os.kill(worker_pid, 0)
-        except OSError:
-            pass
-        else:
-            pytest.fail(f"worker process {worker_pid} is still running")
+    pid_exists = cast("Callable[[int], bool]", psutil.__dict__["pid_exists"])
+    assert all(not pid_exists(worker_pid) for worker_pid in concrete_pids)
     for record in artifacts.raw_replicates:
         assert record.started_at_utc is not None
         assert record.ended_at_utc is not None
