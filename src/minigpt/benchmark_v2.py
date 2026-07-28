@@ -354,7 +354,20 @@ def execute_worker(
             task, completed.stdout
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-        return _invalid_response_record(task, completed, error)
+        if completed.returncode != 0:
+            parse_failure = _failure_record(
+                task,
+                error_type="WorkerProcessError",
+                message=f"worker exited with return code {completed.returncode}",
+                evidence=_FailureEvidence(
+                    return_code=completed.returncode,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                ),
+            )
+        else:
+            parse_failure = _invalid_response_record(task, completed, error)
+        return parse_failure
 
     if completed.returncode != 0:
         return _failure_record(

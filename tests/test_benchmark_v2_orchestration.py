@@ -173,6 +173,8 @@ class ScriptedLauncher:
         if outcome == "return_code_failure":
             stdout = json.dumps(worker_failure_document(task, worker_pid))
             return subprocess.CompletedProcess(command, 1, stdout, "worker stderr")
+        if outcome == "bare_return_code_failure":
+            return subprocess.CompletedProcess(command, 7, "", "worker crashed")
         if outcome == "malformed":
             return subprocess.CompletedProcess(command, 0, "{not-json", "")
         if outcome == "interrupt":
@@ -213,6 +215,7 @@ def task_from_request(request: dict[str, object]) -> BenchmarkTask:
     [
         ("declared_failure", "RuntimeError", 9_001),
         ("return_code_failure", "WorkerProcessError", 9_001),
+        ("bare_return_code_failure", "WorkerProcessError", None),
         ("malformed", "InvalidWorkerResponse", None),
         ("timeout", "WorkerTimeout", None),
     ],
