@@ -339,10 +339,11 @@ def resolved_config_sha256(config: BenchmarkV2Config) -> str:
     return hashlib.sha256(_canonical_json(resolved_config_document(config))).hexdigest()
 
 
-def case_identity(config: BenchmarkV2Config, case: BenchmarkV2Case) -> str:
-    """Return a stable SHA-256 identity for one explicit config case."""
-    document: dict[str, JsonValue] = {
-        "config_sha256": resolved_config_sha256(config),
+def _workload_document(config: BenchmarkV2Config, case: BenchmarkV2Case) -> dict[str, JsonValue]:
+    """Select only settings that define the work performed by one case."""
+    return {
+        "benchmark_seed": config.benchmark_seed,
+        "vocab_size": config.vocab_size,
         "case": {
             "name": case.name,
             "model_name": case.model_name,
@@ -354,4 +355,8 @@ def case_identity(config: BenchmarkV2Config, case: BenchmarkV2Case) -> str:
             "batch_size": case.batch_size,
         },
     }
-    return hashlib.sha256(_canonical_json(document)).hexdigest()
+
+
+def case_identity(config: BenchmarkV2Config, case: BenchmarkV2Case) -> str:
+    """Return a stable SHA-256 identity for one workload, not its execution settings."""
+    return hashlib.sha256(_canonical_json(_workload_document(config, case))).hexdigest()

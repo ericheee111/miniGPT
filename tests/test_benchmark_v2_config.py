@@ -79,6 +79,32 @@ def test_v2_config_resolves_explicit_cases_and_stable_hash(tmp_path: Path) -> No
     assert resolved_config_document(first)["output_root"] == "reports/benchmark_v2"
 
 
+def test_case_identity_excludes_execution_and_reporting_settings(tmp_path: Path) -> None:
+    """Keep one workload identity stable across non-workload run settings."""
+    # Given: the same explicit workload with one set of output and report settings.
+    path = write_v2_config(tmp_path)
+    first = load_benchmark_v2_config(path)
+    first_identity = case_identity(first, first.cases[0])
+
+    # When: only execution, output, and report-threshold settings change.
+    updated_document = path.read_text(encoding="utf-8")
+    for original, updated in (
+        ("output_root: reports/benchmark_v2", "output_root: reports/another_location"),
+        ("worker_timeout_seconds: 60.0", "worker_timeout_seconds: 120.0"),
+        ("replicates: 3", "replicates: 5"),
+        ("max_cv_percent: 5.0", "max_cv_percent: 7.5"),
+        ("minimum_replicates: 2", "minimum_replicates: 3"),
+        ("regression_threshold_percent: 3.0", "regression_threshold_percent: 4.0"),
+    ):
+        updated_document = updated_document.replace(original, updated)
+    _ = path.write_text(updated_document, encoding="utf-8")
+    second = load_benchmark_v2_config(path)
+
+    # Then: provenance changes, but the workload's case identity does not.
+    assert resolved_config_sha256(first) != resolved_config_sha256(second)
+    assert first_identity == case_identity(second, second.cases[0])
+
+
 @pytest.mark.parametrize(
     ("replacement", "reason"),
     [
