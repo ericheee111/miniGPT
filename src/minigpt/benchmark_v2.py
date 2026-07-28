@@ -6,17 +6,17 @@ import json
 import math
 import os
 import random
+import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Never, Protocol, cast
 
 from typing_extensions import override
 
 from minigpt.benchmark_v2_config import JsonValue, case_identity, resolved_config_sha256
+from minigpt.benchmark_v2_report import write_run_artifacts
 from minigpt.benchmark_v2_worker import (
     WORKER_PROTOCOL_VERSION,
     WorkerRequest,
@@ -24,6 +24,7 @@ from minigpt.benchmark_v2_worker import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from typing import TextIO
 
     from minigpt.benchmark_v2_types import BenchmarkV2Case, BenchmarkV2Config
@@ -151,15 +152,21 @@ class RawReplicate:
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkV2Artifacts:
-    """Expose the minimal durable Task 3 run seam for later report finalization."""
+    """Expose the complete durable evidence package for one benchmark invocation."""
 
     run_directory: Path
     status: Literal["complete", "partial"]
+    run_id: str
     tasks: tuple[BenchmarkTask, ...]
     raw_replicates: tuple[RawReplicate, ...]
     execution_order_path: Path
     raw_replicates_path: Path
     run_state_path: Path
+    run_manifest_path: Path
+    environment_path: Path
+    resolved_config_path: Path
+    summary_csv_path: Path
+    summary_markdown_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -667,6 +674,31 @@ def _run_state_document(
     }
 
 
+def _git_short_sha() -> str:
+    """Read the current Git short SHA without making run creation depend on Git availability."""
+    executable = shutil.which("git")
+    if executable is None:
+        return "nogit0000000"
+    completed = subprocess.run(  # noqa: S603 - command and arguments are fixed Git metadata reads.
+        [executable, "rev-parse", "--short=12", "HEAD"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    short_sha = completed.stdout.strip()
+    return short_sha if completed.returncode == 0 and short_sha else "nogit0000000"
+
+
+def create_run_id(config: BenchmarkV2Config, *, created_at: datetime | None = None) -> str:
+    """Return a collision-checked UTC/Git/config identity for one fresh run directory."""
+    timestamp = created_at or datetime.now(UTC)
+    if timestamp.tzinfo is None:
+        msg = "created_at must be timezone-aware"
+        raise ValueError(msg)
+    utc_timestamp = timestamp.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"{utc_timestamp}-{_git_short_sha()}-{resolved_config_sha256(config)[:12]}"
+
+
 def _append_durable_raw_record(raw_stream: TextIO, record: RawReplicate) -> None:
     """Append one complete JSON line or roll it back before propagating interruption."""
     durable_offset = raw_stream.tell()
@@ -696,12 +728,12 @@ def run_benchmark_v2(
     launcher: WorkerLauncher = _subprocess_launcher,
 ) -> BenchmarkV2Artifacts:
     """Execute randomized tasks sequentially and preserve a durable partial run."""
+    started_at = datetime.now(UTC)
     tasks = expand_benchmark_tasks(config)
     config.output_root.mkdir(parents=True, exist_ok=True)
-    run_directory = Path(
-        tempfile.mkdtemp(prefix=f".{config.experiment_name}-", dir=config.output_root)
-    )
-    run_id = run_directory.name
+    run_id = create_run_id(config, created_at=started_at)
+    run_directory = config.output_root / run_id
+    run_directory.mkdir(exist_ok=False)
     config_sha256 = resolved_config_sha256(config)
     execution_order_path = run_directory / "execution_order.json"
     raw_replicates_path = run_directory / "raw_replicates.jsonl"
@@ -745,6 +777,17 @@ def run_benchmark_v2(
                     ),
                 ),
             )
+            raw_stream.close()
+            _ = write_run_artifacts(
+                config=config,
+                run_directory=run_directory,
+                run_id=run_id,
+                status="partial",
+                tasks=tasks,
+                raw_replicates=tuple(records),
+                started_at_utc=started_at.isoformat(),
+                ended_at_utc=datetime.now(UTC).isoformat(),
+            )
             raise
 
     status: Literal["complete", "partial"] = (
@@ -765,12 +808,28 @@ def run_benchmark_v2(
             ),
         ),
     )
-    return BenchmarkV2Artifacts(
+    report_artifacts = write_run_artifacts(
+        config=config,
         run_directory=run_directory,
+        run_id=run_id,
         status=status,
         tasks=tasks,
         raw_replicates=tuple(records),
-        execution_order_path=execution_order_path,
-        raw_replicates_path=raw_replicates_path,
+        started_at_utc=started_at.isoformat(),
+        ended_at_utc=datetime.now(UTC).isoformat(),
+    )
+    return BenchmarkV2Artifacts(
+        run_directory=run_directory,
+        status=status,
+        run_id=run_id,
+        tasks=tasks,
+        raw_replicates=tuple(records),
+        execution_order_path=report_artifacts.execution_order_path,
+        raw_replicates_path=report_artifacts.raw_replicates_path,
         run_state_path=run_state_path,
+        run_manifest_path=report_artifacts.run_manifest_path,
+        environment_path=report_artifacts.environment_path,
+        resolved_config_path=report_artifacts.resolved_config_path,
+        summary_csv_path=report_artifacts.summary_csv_path,
+        summary_markdown_path=report_artifacts.summary_markdown_path,
     )
