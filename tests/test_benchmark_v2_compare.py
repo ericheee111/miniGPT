@@ -681,6 +681,53 @@ def test_compare_runs_aligns_identity_not_display_name_and_writes_deterministic_
     assert "| display-name-can-change |" in artifacts.markdown_path.read_text(encoding="utf-8")
 
 
+def test_compare_runs_rejects_identically_unavailable_cpu_evidence(tmp_path: Path) -> None:
+    """Identical unavailable CPU evidence cannot establish a valid performance comparison."""
+    # Given: complete runs recorded unavailable CPU identity and topology rather than inventing it.
+    unavailable_cpu: dict[str, JsonValue] = {
+        "cpu_name": None,
+        "physical_cpu_count": None,
+        "logical_cpu_count": None,
+    }
+    baseline = _write_run_package(tmp_path, "baseline", environment_updates=unavailable_cpu)
+    candidate = _write_run_package(tmp_path, "candidate", environment_updates=unavailable_cpu)
+
+    # When: comparison evaluates required CPU compatibility evidence.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: equality of absence still fails closed with an explicit eligibility reason.
+    assert comparison.verdict == "not_comparable"
+    assert comparison.environment_mismatches == ()
+    assert (
+        "baseline environment lacks required CPU compatibility evidence: cpu_name"
+        in comparison.reasons
+    )
+    assert (
+        "candidate environment lacks required CPU compatibility evidence: logical_cpu_count"
+        in comparison.reasons
+    )
+
+
+@pytest.mark.parametrize("field", ["physical_cpu_count", "logical_cpu_count"])
+def test_compare_runs_rejects_missing_cpu_topology_from_either_run(
+    tmp_path: Path, field: str
+) -> None:
+    """A topology count unavailable on only one side still blocks a regression verdict."""
+    # Given: one otherwise complete candidate lacks one required topology measurement.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate", environment_updates={field: None})
+
+    # When: comparison checks the candidate environment's required CPU evidence.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: the evidence remains loadable but is not eligible for a performance verdict.
+    assert comparison.verdict == "not_comparable"
+    assert (
+        f"candidate environment lacks required CPU compatibility evidence: {field}"
+        in comparison.reasons
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "candidate_value"),
     [

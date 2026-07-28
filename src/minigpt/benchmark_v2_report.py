@@ -334,10 +334,76 @@ def _power_scheme_evidence() -> dict[str, str | None]:
     return {"value": (completed.stdout or "").strip() or None, "reason": None}
 
 
+def _nonempty_cpu_text(value: str | None) -> str | None:
+    """Normalize one optional CPU identity value without inventing unavailable evidence."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _linux_cpu_name_from_cpuinfo(cpuinfo_text: str | None) -> str | None:
+    """Select a Linux CPU brand deterministically from a supplied procfs document."""
+    if cpuinfo_text is None:
+        return None
+    values: dict[str, str] = {}
+    for line in cpuinfo_text.splitlines():
+        key, separator, value = line.partition(":")
+        if separator:
+            normalized = _nonempty_cpu_text(value)
+            if normalized is not None:
+                _ = values.setdefault(key.strip().casefold(), normalized)
+    for key in ("model name", "hardware", "processor"):
+        if key in values:
+            return values[key]
+    return None
+
+
+def resolve_cpu_name(
+    *,
+    platform_processor: str | None,
+    uname_processor: str | None,
+    system: str,
+    linux_cpuinfo_text: str | None,
+    windows_processor_identifier: str | None,
+) -> str | None:
+    """Resolve CPU identity from platform APIs before platform-specific evidence fallbacks."""
+    for value in (platform_processor, uname_processor):
+        identity = _nonempty_cpu_text(value)
+        if identity is not None:
+            return identity
+    if system.casefold() == "linux":
+        return _linux_cpu_name_from_cpuinfo(linux_cpuinfo_text)
+    if system.casefold() == "windows":
+        return _nonempty_cpu_text(windows_processor_identifier)
+    return None
+
+
+def _linux_cpuinfo_text(system: str) -> str | None:
+    """Read Linux CPU identity evidence only when the active platform exposes procfs."""
+    if system.casefold() != "linux":
+        return None
+    try:
+        return Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _captured_cpu_name() -> str | None:
+    """Capture CPU identity while preserving an explicit unavailable discovery result."""
+    system = platform.system()
+    return resolve_cpu_name(
+        platform_processor=platform.processor(),
+        uname_processor=platform.uname().processor,
+        system=system,
+        linux_cpuinfo_text=_linux_cpuinfo_text(system),
+        windows_processor_identifier=os.environ.get("PROCESSOR_IDENTIFIER"),
+    )
+
+
 def capture_run_environment(config: BenchmarkV2Config) -> dict[str, JsonValue]:
     """Capture immutable parent-process environment evidence before the first worker starts."""
     process = cast("_PriorityProcess", cast("object", psutil.Process()))
-    cpu_name = platform.processor() or platform.uname().processor or None
     return cast(
         "dict[str, JsonValue]",
         {
@@ -345,7 +411,7 @@ def capture_run_environment(config: BenchmarkV2Config) -> dict[str, JsonValue]:
             "git": cast("JsonValue", _git_identity()),
             "platform": platform.platform(),
             "machine": platform.machine(),
-            "cpu_name": cpu_name,
+            "cpu_name": _captured_cpu_name(),
             "physical_cpu_count": psutil.cpu_count(logical=False),
             "logical_cpu_count": psutil.cpu_count(logical=True),
             "python_version": platform.python_version(),

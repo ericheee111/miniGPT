@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 import minigpt.benchmark_v2 as benchmark_module
+import minigpt.benchmark_v2_report as report_module
 from minigpt.benchmark_v2 import RawReplicate, expand_benchmark_tasks, run_benchmark_v2
 from minigpt.benchmark_v2_report import load_run_manifest, write_run_artifacts
 from minigpt.benchmark_v2_statistics import summarize_replicates
@@ -297,6 +298,42 @@ def test_write_run_artifacts_binds_all_outputs_without_hashing_its_manifest(tmp_
         "power_scheme",
     } <= set(run_environment)
     assert run_environment["captured_before_first_worker"] is True
+
+
+def test_cpu_name_uses_platform_identity_before_linux_cpuinfo_fallback() -> None:
+    """Platform-provided CPU identity wins over an available Linux fallback document."""
+    # Given: platform APIs provide a processor name and Linux text supplies a conflicting fallback.
+    cpuinfo = "model name\t: Fallback CPU\n"
+
+    # When: the pure identity helper resolves the available evidence in priority order.
+    identity = report_module.resolve_cpu_name(
+        platform_processor="Platform CPU",
+        uname_processor="Uname CPU",
+        system="Linux",
+        linux_cpuinfo_text=cpuinfo,
+        windows_processor_identifier=None,
+    )
+
+    # Then: existing platform evidence remains unchanged instead of reading a fallback.
+    assert identity == "Platform CPU"
+
+
+def test_cpu_name_parses_linux_cpuinfo_with_deterministic_key_priority() -> None:
+    """Linux fallback selects its first supported brand key by priority, not line order."""
+    # Given: injected Linux cpuinfo has supported keys in an order unlike the selection priority.
+    cpuinfo = "Processor\t: Generic Processor\nHardware\t: Board CPU\nmodel name\t: Model CPU\n"
+
+    # When: no platform API exposes a CPU name and the pure fallback parser is used.
+    identity = report_module.resolve_cpu_name(
+        platform_processor="",
+        uname_processor="",
+        system="Linux",
+        linux_cpuinfo_text=cpuinfo,
+        windows_processor_identifier=None,
+    )
+
+    # Then: the most specific documented model-name key wins deterministically.
+    assert identity == "Model CPU"
 
 
 def test_load_run_manifest_recomputes_config_and_case_identities_from_snapshotted_yaml(

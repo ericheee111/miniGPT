@@ -47,6 +47,11 @@ _ENVIRONMENT_FIELDS = (
     "process_priority",
     "power_scheme",
 )
+_REQUIRED_CPU_COMPATIBILITY_FIELDS = (
+    "cpu_name",
+    "physical_cpu_count",
+    "logical_cpu_count",
+)
 _RUN_ENVIRONMENT_KEYS = frozenset({"captured_before_first_worker", "git", *_ENVIRONMENT_FIELDS})
 _ENVIRONMENT_DOCUMENT_KEYS = frozenset(
     {
@@ -1214,6 +1219,31 @@ def _environment_mismatches(
     )
 
 
+def _unavailable_cpu_compatibility_fields(environment: dict[str, JsonValue]) -> tuple[str, ...]:
+    """Return required CPU fields that cannot establish hardware compatibility evidence."""
+    unavailable: list[str] = []
+    for field in _REQUIRED_CPU_COMPATIBILITY_FIELDS:
+        value = environment[field]
+        if field == "cpu_name":
+            valid = isinstance(value, str) and bool(value.strip())
+        else:
+            valid = isinstance(value, int) and not isinstance(value, bool) and value > 0
+        if not valid:
+            unavailable.append(field)
+    return tuple(unavailable)
+
+
+def _cpu_compatibility_reasons(
+    baseline: _ComparisonInput, candidate: _ComparisonInput
+) -> list[str]:
+    """Describe missing CPU identity or topology evidence for each comparison input."""
+    return [
+        f"{label} environment lacks required CPU compatibility evidence: {field}"
+        for label, comparison_input in (("baseline", baseline), ("candidate", candidate))
+        for field in _unavailable_cpu_compatibility_fields(comparison_input.run_environment)
+    ]
+
+
 def _case_reasons(
     baseline: BenchmarkV2Summary,
     candidate: BenchmarkV2Summary,
@@ -1261,6 +1291,7 @@ def _run_reasons(
         reasons.append(f"candidate run status is {candidate.manifest.status}")
     if missing or extra:
         reasons.append("case identity sets do not align")
+    reasons.extend(_cpu_compatibility_reasons(baseline, candidate))
     reasons.extend(f"environment differs: {mismatch.field}" for mismatch in environment_mismatches)
     if baseline.manifest.status == "complete" and candidate.manifest.status == "complete":
         baseline_controls = dict(baseline.case_worker_controls)
