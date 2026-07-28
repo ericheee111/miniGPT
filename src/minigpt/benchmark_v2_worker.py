@@ -5,9 +5,11 @@ from __future__ import annotations
 import gc
 import json
 import math
+import os
 import string
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Literal, Never, TypeAlias, cast
 
@@ -80,9 +82,13 @@ class WorkerResult:
 
     protocol_version: int
     status: Literal["ok"]
+    worker_pid: int
+    started_at_utc: str
+    ended_at_utc: str
     case_identity: str
     case_name: str
     replicate_index: int
+    warmup_steps: int
     measurement_steps: int
     elapsed_seconds: float
     step_time_ms: float
@@ -102,6 +108,12 @@ class WorkerFailure:
 
     protocol_version: int
     status: Literal["error"]
+    worker_pid: int
+    started_at_utc: str
+    ended_at_utc: str
+    case_identity: str | None
+    case_name: str | None
+    replicate_index: int | None
     error_type: str
     message: str
 
@@ -121,6 +133,11 @@ class InvalidWorkerRequestError(ValueError):
 def _invalid(reason: str) -> Never:
     """Raise one consistently typed strict request error."""
     raise InvalidWorkerRequestError(reason)
+
+
+def _utc_now_iso() -> str:
+    """Return one timezone-aware UTC timestamp for protocol evidence."""
+    return datetime.now(UTC).isoformat()
 
 
 def _mapping(value: object, expected_keys: frozenset[str], context: str) -> dict[str, object]:
@@ -233,7 +250,7 @@ def _parse_worker_request(raw: object) -> WorkerRequest:
         case=_case(document["case"]),
         benchmark_seed=_integer(document, "benchmark_seed"),
         vocab_size=_integer(document, "vocab_size", positive=True),
-        warmup_steps=_integer(document, "warmup_steps", positive=True),
+        warmup_steps=_integer(document, "warmup_steps", non_negative=True),
         measurement_steps=_integer(document, "measurement_steps", positive=True),
         torch_num_interop_threads=_integer(
             document,
@@ -301,15 +318,25 @@ def worker_response_document(response: WorkerResult | WorkerFailure) -> dict[str
         return {
             "protocol_version": response.protocol_version,
             "status": response.status,
+            "worker_pid": response.worker_pid,
+            "started_at_utc": response.started_at_utc,
+            "ended_at_utc": response.ended_at_utc,
+            "case_identity": response.case_identity,
+            "case_name": response.case_name,
+            "replicate_index": response.replicate_index,
             "error_type": response.error_type,
             "message": response.message,
         }
     return {
         "protocol_version": response.protocol_version,
         "status": response.status,
+        "worker_pid": response.worker_pid,
+        "started_at_utc": response.started_at_utc,
+        "ended_at_utc": response.ended_at_utc,
         "case_identity": response.case_identity,
         "case_name": response.case_name,
         "replicate_index": response.replicate_index,
+        "warmup_steps": response.warmup_steps,
         "measurement_steps": response.measurement_steps,
         "elapsed_seconds": response.elapsed_seconds,
         "step_time_ms": response.step_time_ms,
@@ -326,6 +353,8 @@ def worker_response_document(response: WorkerResult | WorkerFailure) -> dict[str
 
 def run_worker_request(request: WorkerRequest) -> WorkerResult:
     """Apply CPU controls and execute one canonical uninstrumented timer."""
+    worker_pid = os.getpid()
+    started_at_utc = _utc_now_iso()
     if request.protocol_version != WORKER_PROTOCOL_VERSION:
         _invalid(f"protocol_version must be {WORKER_PROTOCOL_VERSION}")
     torch.set_num_threads(request.case.torch_num_threads)
@@ -360,13 +389,18 @@ def run_worker_request(request: WorkerRequest) -> WorkerResult:
         effective_cpu_affinity=effective_cpu_affinity,
         relevant_environment_variables=request.relevant_environment_variables,
     )
+    ended_at_utc = _utc_now_iso()
     step_time_ms = elapsed_seconds * 1_000 / request.measurement_steps
     return WorkerResult(
         protocol_version=WORKER_PROTOCOL_VERSION,
         status="ok",
+        worker_pid=worker_pid,
+        started_at_utc=started_at_utc,
+        ended_at_utc=ended_at_utc,
         case_identity=request.case_identity,
         case_name=request.case.name,
         replicate_index=request.replicate_index,
+        warmup_steps=request.warmup_steps,
         measurement_steps=request.measurement_steps,
         elapsed_seconds=elapsed_seconds,
         step_time_ms=step_time_ms,
@@ -383,11 +417,13 @@ def run_worker_request(request: WorkerRequest) -> WorkerResult:
 
 def worker_main() -> int:
     """Read one request from stdin and write one compact JSON response."""
+    worker_pid = os.getpid()
+    started_at_utc = _utc_now_iso()
+    request: WorkerRequest | None = None
     try:
         raw_request = cast("object", json.loads(sys.stdin.read()))
-        response: WorkerResult | WorkerFailure = run_worker_request(
-            _parse_worker_request(raw_request)
-        )
+        request = _parse_worker_request(raw_request)
+        response: WorkerResult | WorkerFailure = run_worker_request(request)
         status = 0
     except KeyboardInterrupt:
         return 130
@@ -395,6 +431,12 @@ def worker_main() -> int:
         response = WorkerFailure(
             protocol_version=WORKER_PROTOCOL_VERSION,
             status="error",
+            worker_pid=worker_pid,
+            started_at_utc=started_at_utc,
+            ended_at_utc=_utc_now_iso(),
+            case_identity=request.case_identity if request is not None else None,
+            case_name=request.case.name if request is not None else None,
+            replicate_index=request.replicate_index if request is not None else None,
             error_type=type(error).__name__,
             message=str(error),
         )

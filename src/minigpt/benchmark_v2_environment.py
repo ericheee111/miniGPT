@@ -66,10 +66,9 @@ class WorkerEnvironment:
 
 def apply_cpu_affinity(requested: tuple[int, ...] | None) -> tuple[int, ...] | None:
     """Apply and read back the requested logical CPU affinity."""
-    if requested is None:
-        return None
     process = cast("_AffinityProcess", cast("object", psutil.Process()))
-    _ = process.cpu_affinity(list(requested))
+    if requested is not None:
+        _ = process.cpu_affinity(list(requested))
     return tuple(process.cpu_affinity())
 
 

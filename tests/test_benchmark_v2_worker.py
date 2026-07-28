@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from dataclasses import dataclass, replace
+from datetime import datetime
+from typing import TYPE_CHECKING, NoReturn, cast
 
 import psutil
 import pytest
@@ -20,7 +22,14 @@ from minigpt.benchmark_v2_environment import (
     read_process_memory,
 )
 from minigpt.benchmark_v2_types import BenchmarkV2Case
-from minigpt.benchmark_v2_worker import WorkerRequest, run_worker_request, worker_main
+from minigpt.benchmark_v2_worker import (
+    WorkerRequest,
+    WorkerResult,
+    run_worker_request,
+    worker_main,
+    worker_request_document,
+    worker_response_document,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -100,12 +109,29 @@ def make_environment() -> WorkerEnvironment:
     )
 
 
+def assert_success_metadata(result: WorkerResult, request: WorkerRequest) -> None:
+    """Assert worker-owned success metadata in both records and JSON."""
+    assert result.worker_pid == os.getpid()
+    started_at = datetime.fromisoformat(result.started_at_utc)
+    ended_at = datetime.fromisoformat(result.ended_at_utc)
+    assert started_at.tzinfo is not None
+    assert started_at <= ended_at
+    assert result.warmup_steps == request.warmup_steps
+    payload = worker_response_document(result)
+    assert payload["worker_pid"] == os.getpid()
+    assert payload["started_at_utc"] == result.started_at_utc
+    assert payload["ended_at_utc"] == result.ended_at_utc
+    assert payload["warmup_steps"] == request.warmup_steps
+
+
+@pytest.mark.parametrize("warmup_steps", [0, 2])
 def test_worker_keeps_warmup_construction_and_evidence_outside_timer(
     monkeypatch: pytest.MonkeyPatch,
+    warmup_steps: int,
 ) -> None:
     """Measure only fixed training steps after controls, construction, and warmup."""
     # Given: deterministic controls, timer values, workload, and post-timer evidence.
-    request = make_request()
+    request = replace(make_request(), warmup_steps=warmup_steps)
     timer_values = iter((10.0, 11.5))
     timer_calls = 0
     controls = {"threads": False, "interop": False, "affinity": False}
@@ -181,6 +207,7 @@ def test_worker_keeps_warmup_construction_and_evidence_outside_timer(
     assert result.elapsed_seconds == 1.5
     assert result.step_time_ms == 500.0
     assert result.tokens_per_second == 128.0
+    assert_success_metadata(result, request)
     assert result.final_rss_mib > 0
     assert result.peak_rss_method in {
         "windows_peak_working_set",
@@ -189,17 +216,21 @@ def test_worker_keeps_warmup_construction_and_evidence_outside_timer(
     assert result.peak_rss_sampling_interval_ms is None
 
 
-def test_apply_cpu_affinity_none_skips_process_access(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Leave affinity unchanged when no logical CPU set was requested."""
+def test_apply_cpu_affinity_none_reads_back_inherited_effective_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leave inherited affinity unchanged while still recording its effective set."""
 
-    # Given: process access would fail if the null path attempted it.
-    def unexpected_process() -> AffinityProcess:
-        pytest.fail("psutil.Process must not be called for null affinity")
+    # Given: a process inherited an effective affinity from its parent.
+    process = AffinityProcess()
+    monkeypatch.setattr(psutil, "Process", lambda: process)
 
-    monkeypatch.setattr(psutil, "Process", unexpected_process)
+    # When: no new affinity is requested.
+    effective = apply_cpu_affinity(None)
 
-    # When/Then: a null request has no side effect and no effective-set claim.
-    assert apply_cpu_affinity(None) is None
+    # Then: no setter changes the inherited set, but its readback is retained.
+    assert effective == (7,)
+    assert process.effective == [7]
 
 
 def test_apply_cpu_affinity_sets_and_reads_back_effective_set(
@@ -277,6 +308,74 @@ def test_worker_main_returns_compact_json_failure_for_malformed_stdin(
     assert status != 0
     assert payload["protocol_version"] == 1
     assert payload["status"] == "error"
+    assert payload["worker_pid"] == os.getpid()
+    assert datetime.fromisoformat(cast("str", payload["started_at_utc"])).tzinfo is not None
+    assert datetime.fromisoformat(cast("str", payload["ended_at_utc"])).tzinfo is not None
+    assert payload["case_identity"] is None
+    assert payload["case_name"] is None
+    assert payload["replicate_index"] is None
     assert isinstance(payload["error_type"], str)
     assert isinstance(payload["message"], str)
     assert "\n" not in stdout.getvalue().rstrip("\n")
+
+
+def test_worker_main_retains_case_context_after_parsing_zero_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve parsed identity in failures and accept zero warmup consistently."""
+    # Given: a valid zero-warmup request whose execution raises an ordinary error.
+    request = replace(make_request(), warmup_steps=0)
+    captured_requests: list[WorkerRequest] = []
+    stdout = io.StringIO()
+
+    def failing_run(parsed: WorkerRequest) -> NoReturn:
+        captured_requests.append(parsed)
+        msg = "injected execution failure"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(worker_module, "run_worker_request", failing_run)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps(worker_request_document(request))),
+    )
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    # When: the strict protocol parses the request before execution fails.
+    status = worker_main()
+
+    # Then: zero warmup reaches execution and failure retains orchestration identity.
+    payload = cast("dict[str, object]", json.loads(stdout.getvalue()))
+    assert captured_requests[0].warmup_steps == 0
+    assert status != 0
+    assert payload["worker_pid"] == os.getpid()
+    assert payload["case_identity"] == request.case_identity
+    assert payload["case_name"] == request.case.name
+    assert payload["replicate_index"] == request.replicate_index
+
+
+def test_worker_main_keyboard_interrupt_returns_130_without_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return the conventional interrupted status without emitting false success."""
+    # Given: a valid request interrupted during execution.
+    request = make_request()
+    stdout = io.StringIO()
+
+    def interrupted_run(_request: WorkerRequest) -> NoReturn:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(worker_module, "run_worker_request", interrupted_run)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps(worker_request_document(request))),
+    )
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    # When: the worker is interrupted.
+    status = worker_main()
+
+    # Then: the shell-visible status is 130 and stdout contains no fake JSON result.
+    assert status == 130
+    assert stdout.getvalue() == ""
