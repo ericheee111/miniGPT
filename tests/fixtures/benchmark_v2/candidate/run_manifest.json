@@ -1,19 +1,52 @@
 {
   "artifacts": [
-    {"path": "environment.json", "sha256": "a2afa7b551da5f9ff5c503e559ec6413949f5ab06bd54dde65cbcba7619404bc", "size_bytes": 967},
-    {"path": "resolved_config.yaml", "sha256": "662e77ce17c79d82a94ef365fddb5ff9fb5a7095de42ca204469894cfdb67f66", "size_bytes": 52},
-    {"path": "raw_replicates.jsonl", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "size_bytes": 0},
-    {"path": "summary.csv", "sha256": "1e7bfe288b9806f22ff4a27633889e350b8199ff5e6dd6909f4383fb4344a74f", "size_bytes": 435},
-    {"path": "summary.md", "sha256": "21f44f8bc06c4bc5aa5c6ac691711c910db1d8ceae8fc4a992e18ad22c64079e", "size_bytes": 134},
-    {"path": "execution_order.json", "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570", "size_bytes": 3}
+    {
+      "path": "environment.json",
+      "sha256": "52994315b9d6db450d77c7a3d5320d398b41f833a2fda525989fce433225086f",
+      "size_bytes": 2213
+    },
+    {
+      "path": "resolved_config.yaml",
+      "sha256": "5e7acc3f51fd3421923d8f250aa4c0b9e46abacb31036462a9451b48206e6bfb",
+      "size_bytes": 95
+    },
+    {
+      "path": "raw_replicates.jsonl",
+      "sha256": "f31b548bdcb45d2f5b4bf91c6021acb556bd8ca051cf2989d865a841d0ac8796",
+      "size_bytes": 3864
+    },
+    {
+      "path": "summary.csv",
+      "sha256": "e617b5c8b93680768e66f4510a17efef9e9e72d2afd0045136af6cb2e8db787d",
+      "size_bytes": 449
+    },
+    {
+      "path": "summary.md",
+      "sha256": "faa5b4816800b8cbe1595e5533fe36c53f396c0c26a3a876dd3e4085232348a1",
+      "size_bytes": 10
+    },
+    {
+      "path": "execution_order.json",
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "size_bytes": 3
+    }
   ],
-  "case_identities": [{"case_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "case_name": "fixed-case"}],
+  "case_identities": [
+    {
+      "case_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "case_name": "display-name-can-change"
+    }
+  ],
   "completed_task_count": 3,
   "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "ended_at_utc": "2026-07-28T01:02:04+00:00",
   "expected_task_count": 3,
   "failed_task_count": 0,
-  "git": {"branch": "candidate", "commit_sha": "dddddddddddddddddddddddddddddddddddddddd", "dirty": true},
+  "git": {
+    "branch": "main",
+    "commit_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "dirty": false
+  },
   "run_id": "candidate",
   "schema_version": 2,
   "started_at_utc": "2026-07-28T01:02:03+00:00",

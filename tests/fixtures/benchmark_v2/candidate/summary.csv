@@ -1,2 +1,2 @@
 case_identity,case_name,replicate_count,success_count,failure_count,median_step_time_ms,min_step_time_ms,max_step_time_ms,population_stddev_step_time_ms,median_absolute_deviation_step_time_ms,coefficient_of_variation_percent,median_tokens_per_second,median_final_rss_mib,max_peak_rss_mib,stability
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,fixed-case,3,3,0,100.0,99.0,101.0,0.8,1.0,0.8,1000.0,100.0,120.0,stable
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,display-name-can-change,3,3,0,100.0,100.0,100.0,0.0,0.0,0.0,1000.0,100.0,120.0,stable

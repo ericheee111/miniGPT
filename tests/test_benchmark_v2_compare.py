@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -12,9 +13,12 @@ from typing import TYPE_CHECKING, cast
 import pytest
 import yaml
 
+import minigpt.benchmark_v2_compare as compare_module
 from minigpt.benchmark_v2_compare import compare_runs, compare_step_times, write_comparison
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from minigpt.benchmark_v2_config import JsonValue
 
 
@@ -62,7 +66,7 @@ def _write_run_package(  # noqa: PLR0913
 ) -> Path:
     """Create a hand-checked, hash-bound synthetic package without real timing claims."""
     run_directory = parent / name
-    run_directory.mkdir()
+    run_directory.mkdir(exist_ok=True)
     run_environment: dict[str, JsonValue] = {
         "captured_before_first_worker": True,
         "git": {"commit_sha": "c" * 40, "branch": "main", "dirty": False},
@@ -100,11 +104,12 @@ def _write_run_package(  # noqa: PLR0913
     config = {
         "schema_version": 2,
         "regression_threshold_percent": threshold_percent,
+        "minimum_replicates": 3,
+        "max_cv_percent": 10.0,
     }
     _ = (run_directory / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8", newline="\n"
     )
-    _ = (run_directory / "raw_replicates.jsonl").write_text("", encoding="utf-8", newline="\n")
     summary: dict[str, str] = {
         "case_identity": case_identity,
         "case_name": "display-name-can-change",
@@ -124,6 +129,80 @@ def _write_run_package(  # noqa: PLR0913
     }
     if summary_updates is not None:
         summary.update(summary_updates)
+    step_time = float(summary["median_step_time_ms"])
+    tokens = float(summary["median_tokens_per_second"])
+    summary.update(
+        {
+            "min_step_time_ms": str(step_time),
+            "max_step_time_ms": str(step_time),
+            "population_stddev_step_time_ms": "0.0",
+            "median_absolute_deviation_step_time_ms": "0.0",
+            "coefficient_of_variation_percent": "0.0",
+        }
+    )
+    worker_environment: dict[str, JsonValue] = {
+        "platform": "test-platform",
+        "python_version": "3.14.0",
+        "torch_version": "2.13.0+cpu",
+        "torch_num_threads": 1,
+        "torch_num_interop_threads": 1,
+        "logical_cpu_count": 8,
+        "requested_cpu_affinity": None,
+        "effective_cpu_affinity": [0, 1],
+        "relevant_environment_variables": {"OMP_NUM_THREADS": "1"},
+    }
+    environment["worker_environments"] = [
+        worker_environment,
+        worker_environment,
+        worker_environment,
+    ]
+    _ = environment_path.write_text(
+        json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    raw: list[dict[str, JsonValue]] = []
+    for index in range(3):
+        response: dict[str, JsonValue] = {
+            "protocol_version": 1,
+            "status": "ok",
+            "worker_pid": 1000 + index,
+            "started_at_utc": "2026-07-28T01:02:03+00:00",
+            "ended_at_utc": "2026-07-28T01:02:04+00:00",
+            "case_identity": case_identity,
+            "case_name": summary["case_name"],
+            "replicate_index": index,
+            "warmup_steps": 0,
+            "measurement_steps": 1,
+            "elapsed_seconds": step_time / 1000,
+            "step_time_ms": step_time,
+            "tokens_per_second": tokens,
+            "tokens_per_step": 64,
+            "parameter_count": 100,
+            "final_rss_mib": 100.0,
+            "peak_rss_mib": 120.0,
+            "peak_rss_method": "windows_peak_working_set",
+            "peak_rss_sampling_interval_ms": None,
+            "environment": worker_environment,
+        }
+        raw.append(
+            {
+                "status": "ok",
+                "case_identity": case_identity,
+                "case_name": summary["case_name"],
+                "replicate_index": index,
+                "worker_pid": 1000 + index,
+                "started_at_utc": "2026-07-28T01:02:03+00:00",
+                "ended_at_utc": "2026-07-28T01:02:04+00:00",
+                "return_code": 0,
+                "error_type": None,
+                "message": None,
+                "stdout": "",
+                "stderr": "",
+                "worker_response": response,
+            }
+        )
+    _ = (run_directory / "raw_replicates.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in raw), encoding="utf-8", newline="\n"
+    )
     summary_path = run_directory / "summary.csv"
     _ = summary_path.write_text(
         ",".join(_SUMMARY_FIELDS)
@@ -269,13 +348,6 @@ def test_compare_runs_ignores_git_provenance_differences(tmp_path: Path) -> None
     ("status", "summary_updates", "case_identity", "reason"),
     [
         ("partial", None, _CASE_IDENTITY, "candidate run status is partial"),
-        ("complete", {"stability": "unstable"}, _CASE_IDENTITY, "candidate case is unstable"),
-        (
-            "complete",
-            {"success_count": "1", "failure_count": "2", "stability": "insufficient_samples"},
-            _CASE_IDENTITY,
-            "candidate case has insufficient successful replicates",
-        ),
         ("complete", None, "d" * 64, "case identity sets do not align"),
     ],
 )
@@ -339,6 +411,131 @@ def test_compare_step_times_uses_a_strict_regression_threshold() -> None:
     # Then: equality is not a regression, while a larger relative increase is.
     assert equality.regressed is False
     assert exceeded.regressed is True
+
+
+def test_compare_runs_rejects_a_complete_manifest_without_raw_replicate_evidence(
+    tmp_path: Path,
+) -> None:
+    """Reject a self-declared complete/stable summary when its bound raw artifact is empty."""
+    # Given: both complete packages are valid, then one rehashes a forged empty raw artifact.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    _ = raw_path.write_text("", encoding="utf-8", newline="\n")
+    manifest = cast("dict[str, object]", json.loads(candidate.read_text(encoding="utf-8")))
+    entries = cast("list[dict[str, object]]", manifest["artifacts"])
+    next(entry for entry in entries if entry["path"] == "raw_replicates.jsonl").update(
+        _hash_entry(raw_path)
+    )
+    _ = candidate.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+
+    # When/Then: comparison refuses forged completeness before rendering a pass verdict.
+    with pytest.raises(ValueError, match=r"raw replicate.*manifest|raw replicate.*summary"):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_reconciles_partial_raw_failures_before_refusing_a_verdict(
+    tmp_path: Path,
+) -> None:
+    """Retain failed raw records when recomputing a partial run's case summary."""
+    # Given: a valid candidate is made partial by changing one bound raw result into a failure.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    raw_records[-1].update(
+        {
+            "status": "error",
+            "return_code": 1,
+            "error_type": "RuntimeError",
+            "message": "synthetic worker failure",
+            "worker_response": None,
+        }
+    )
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    summary_path = candidate.parent / "summary.csv"
+    summary_header, summary_record = summary_path.read_text(encoding="utf-8").splitlines()
+    summary = dict(zip(summary_header.split(","), summary_record.split(","), strict=True))
+    summary.update(
+        {"success_count": "2", "failure_count": "1", "stability": "insufficient_samples"}
+    )
+    _ = summary_path.write_text(
+        summary_header + "\n" + ",".join(summary[field] for field in _SUMMARY_FIELDS) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    environment_path = candidate.parent / "environment.json"
+    environment = cast(
+        "dict[str, JsonValue]", json.loads(environment_path.read_text(encoding="utf-8"))
+    )
+    environment["run_status"] = "partial"
+    workers = cast("list[JsonValue]", environment["worker_environments"])
+    environment["worker_environments"] = workers[:-1]
+    _ = environment_path.write_text(
+        json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    manifest = cast("dict[str, JsonValue]", json.loads(candidate.read_text(encoding="utf-8")))
+    manifest.update({"status": "partial", "successful_task_count": 2, "failed_task_count": 1})
+    entries = cast("list[dict[str, JsonValue]]", manifest["artifacts"])
+    for path in (raw_path, summary_path, environment_path):
+        next(entry for entry in entries if entry["path"] == path.name).update(_hash_entry(path))
+    _ = candidate.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+
+    # When: comparison recomputes statistics from every raw record, including the failure.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: partial evidence is described but never receives a regression pass/fail verdict.
+    assert comparison.verdict == "not_comparable"
+    assert "candidate run status is partial" in comparison.reasons
+    assert "candidate case has insufficient successful replicates" in comparison.reasons
+
+
+def test_compare_step_times_flags_the_next_representable_value_above_threshold() -> None:
+    """Do not suppress a genuine floating-point increase above an exact percentage boundary."""
+    # Given: a candidate step time one representable value above exact five-percent equality.
+    candidate = math.nextafter(105.0, float("inf"))
+
+    # When: the guard evaluates its mathematical strictly-greater threshold.
+    result = compare_step_times(100.0, candidate, threshold_percent=5.0)
+
+    # Then: any representable increase above equality is a regression.
+    assert result.regressed is True
+
+
+def test_write_comparison_rolls_back_the_first_output_if_the_second_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Leave no one-sided artifact when the Markdown half of the pair cannot be published."""
+    # Given: a valid comparison and a writer that fails only for its Markdown artifact.
+    comparison = compare_runs(
+        _write_run_package(tmp_path, "baseline"), _write_run_package(tmp_path, "candidate")
+    )
+    writer_name = "_atomic_write_new"
+    original = cast("Callable[[Path, bytes], None]", getattr(compare_module, writer_name))
+
+    def fail_markdown(path: Path, content: bytes) -> None:
+        if path.suffix == ".md":
+            message = "markdown write failed"
+            raise OSError(message)
+        original(path, content)
+
+    monkeypatch.setattr(compare_module, writer_name, fail_markdown)
+
+    # When/Then: publishing reports the failure and removes the already-written JSON sibling.
+    with pytest.raises(OSError, match="markdown write failed"):
+        _ = write_comparison(comparison)
+    assert not (tmp_path / "candidate-comparison-baseline.json").exists()
 
 
 def test_write_comparison_rejects_existing_sibling_artifacts(tmp_path: Path) -> None:

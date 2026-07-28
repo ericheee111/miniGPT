@@ -4,24 +4,82 @@
     "captured_before_first_worker": true,
     "configured_cpu_affinity": null,
     "configured_torch_num_interop_threads": 1,
-    "cpu_name": "fixture-cpu",
+    "cpu_name": "test-cpu",
     "cuda_available": false,
-    "git": {"branch": "main", "commit_sha": "cccccccccccccccccccccccccccccccccccccccc", "dirty": false},
+    "git": {
+      "branch": "main",
+      "commit_sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "dirty": false
+    },
     "logical_cpu_count": 8,
     "machine": "x86_64",
     "numpy_version": "2.3.0",
     "parent_torch_num_interop_threads": 1,
     "parent_torch_num_threads": 1,
     "physical_cpu_count": 4,
-    "platform": "fixture-platform",
-    "power_scheme": {"reason": null, "value": "balanced"},
+    "platform": "test-platform",
+    "power_scheme": {
+      "reason": null,
+      "value": "balanced"
+    },
     "process_priority": "normal",
     "python_version": "3.14.0",
-    "relevant_environment_variables": {"OMP_NUM_THREADS": "1"},
+    "relevant_environment_variables": {
+      "OMP_NUM_THREADS": "1"
+    },
     "torch_version": "2.13.0+cpu"
   },
   "run_id": "baseline",
   "run_status": "complete",
   "schema_version": 2,
-  "worker_environments": []
+  "worker_environments": [
+    {
+      "effective_cpu_affinity": [
+        0,
+        1
+      ],
+      "logical_cpu_count": 8,
+      "platform": "test-platform",
+      "python_version": "3.14.0",
+      "relevant_environment_variables": {
+        "OMP_NUM_THREADS": "1"
+      },
+      "requested_cpu_affinity": null,
+      "torch_num_interop_threads": 1,
+      "torch_num_threads": 1,
+      "torch_version": "2.13.0+cpu"
+    },
+    {
+      "effective_cpu_affinity": [
+        0,
+        1
+      ],
+      "logical_cpu_count": 8,
+      "platform": "test-platform",
+      "python_version": "3.14.0",
+      "relevant_environment_variables": {
+        "OMP_NUM_THREADS": "1"
+      },
+      "requested_cpu_affinity": null,
+      "torch_num_interop_threads": 1,
+      "torch_num_threads": 1,
+      "torch_version": "2.13.0+cpu"
+    },
+    {
+      "effective_cpu_affinity": [
+        0,
+        1
+      ],
+      "logical_cpu_count": 8,
+      "platform": "test-platform",
+      "python_version": "3.14.0",
+      "relevant_environment_variables": {
+        "OMP_NUM_THREADS": "1"
+      },
+      "requested_cpu_affinity": null,
+      "torch_num_interop_threads": 1,
+      "torch_num_threads": 1,
+      "torch_version": "2.13.0+cpu"
+    }
+  ]
 }

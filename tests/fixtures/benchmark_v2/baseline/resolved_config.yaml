@@ -1,2 +1,4 @@
 schema_version: 2
 regression_threshold_percent: 5.0
+minimum_replicates: 3
+max_cv_percent: 10.0

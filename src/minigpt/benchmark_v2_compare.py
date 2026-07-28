@@ -8,7 +8,9 @@ import json
 import math
 import os
 import uuid
+from collections import Counter
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from io import StringIO
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -16,7 +18,7 @@ import yaml
 from typing_extensions import override
 
 from minigpt.benchmark_v2_report import load_run_manifest
-from minigpt.benchmark_v2_statistics import BenchmarkV2Summary
+from minigpt.benchmark_v2_statistics import BenchmarkV2Summary, summarize_replicates
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -59,6 +61,37 @@ _ENVIRONMENT_DOCUMENT_KEYS = frozenset(
 _SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
 _SHA256_HEX_LENGTH = 64
 _ENVIRONMENT_SCHEMA_VERSION = 2
+_WORKER_ENVIRONMENT_KEYS = frozenset(
+    {
+        "platform",
+        "python_version",
+        "torch_version",
+        "torch_num_threads",
+        "torch_num_interop_threads",
+        "logical_cpu_count",
+        "requested_cpu_affinity",
+        "effective_cpu_affinity",
+        "relevant_environment_variables",
+    }
+)
+_WORKER_TEXT_FIELDS = ("platform", "python_version", "torch_version")
+_RAW_REPLICATE_KEYS = frozenset(
+    {
+        "status",
+        "case_identity",
+        "case_name",
+        "replicate_index",
+        "worker_pid",
+        "started_at_utc",
+        "ended_at_utc",
+        "return_code",
+        "error_type",
+        "message",
+        "stdout",
+        "stderr",
+        "worker_response",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -140,8 +173,29 @@ class _ComparisonInput:
     manifest_path: Path
     manifest: RunManifest
     run_environment: dict[str, JsonValue]
+    worker_environment_signatures: tuple[tuple[object, ...], ...]
     summaries: tuple[BenchmarkV2Summary, ...]
     regression_threshold_percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class _RawSummaryRecord:
+    """Expose validated raw-success fields to the existing pure statistics implementation."""
+
+    case_identity: str
+    case_name: str
+    replicate_index: int
+    worker_response: dict[str, JsonValue] | None
+    status: Literal["ok", "error"]
+
+
+@dataclass(frozen=True, slots=True)
+class _Methodology:
+    """Bind all configuration controls needed to validate summary eligibility."""
+
+    regression_threshold_percent: float
+    minimum_replicates: int
+    max_cv_percent: float
 
 
 def _require_mapping(value: object, path: Path, context: str) -> dict[str, object]:
@@ -204,6 +258,189 @@ def _read_bound_artifact(manifest_path: Path, manifest: RunManifest, name: str) 
             manifest_path, f"bound {name} changed after manifest validation"
         )
     return content
+
+
+def _worker_integer(
+    environment: dict[str, object], path: Path, field: str, *, nullable: bool
+) -> int | None:
+    """Normalize one positive worker control, preserving documented null CPU counts."""
+    item = environment[field]
+    if nullable and item is None:
+        return None
+    if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+        raise InvalidComparisonInputError(path, f"worker environment {field} is invalid")
+    return item
+
+
+def _worker_affinity(
+    environment: dict[str, object], path: Path, field: str
+) -> tuple[int, ...] | None:
+    """Normalize one actual/requested worker affinity without accepting duplicate CPUs."""
+    item = environment[field]
+    if item is None:
+        return None
+    if not isinstance(item, list) or not item:
+        raise InvalidComparisonInputError(path, f"worker environment {field} is invalid")
+    raw_values = cast("list[object]", item)
+    if any(isinstance(cpu, bool) or not isinstance(cpu, int) or cpu < 0 for cpu in raw_values):
+        raise InvalidComparisonInputError(path, f"worker environment {field} is invalid")
+    values = tuple(cast("int", cpu) for cpu in raw_values)
+    if len(values) != len(set(values)):
+        raise InvalidComparisonInputError(path, f"worker environment {field} has duplicate CPUs")
+    return values
+
+
+def _worker_variables(
+    environment: dict[str, object], path: Path
+) -> tuple[tuple[str, str | None], ...]:
+    """Normalize the named environment controls that workers actually observed."""
+    variables = _require_mapping(
+        environment["relevant_environment_variables"], path, "worker environment variables"
+    )
+    if any(item is not None and not isinstance(item, str) for item in variables.values()):
+        raise InvalidComparisonInputError(path, "worker environment variables are invalid")
+    return tuple(sorted((name, cast("str | None", item)) for name, item in variables.items()))
+
+
+def _worker_signature(value: object, path: Path) -> tuple[object, ...]:
+    """Validate and normalize the worker-applied controls relevant to performance comparison."""
+    environment = _require_mapping(value, path, "worker environment")
+    if frozenset(environment) != _WORKER_ENVIRONMENT_KEYS:
+        raise InvalidComparisonInputError(path, "worker environment has an invalid field set")
+    text_values = tuple(environment[field] for field in _WORKER_TEXT_FIELDS)
+    if any(not isinstance(item, str) or not item for item in text_values):
+        raise InvalidComparisonInputError(path, "worker environment text fields are invalid")
+    return (
+        *(cast("str", item) for item in text_values),
+        _worker_integer(environment, path, "torch_num_threads", nullable=False),
+        _worker_integer(environment, path, "torch_num_interop_threads", nullable=False),
+        _worker_integer(environment, path, "logical_cpu_count", nullable=True),
+        _worker_affinity(environment, path, "requested_cpu_affinity"),
+        _worker_affinity(environment, path, "effective_cpu_affinity"),
+        _worker_variables(environment, path),
+    )
+
+
+def _raw_record_identity(
+    document: dict[str, object], manifest_path: Path, index: int
+) -> tuple[Literal["ok", "error"], str, str, int]:
+    """Validate one outer raw-record identity before reconciling task counts."""
+    status = document["status"]
+    identity = _require_sha256(
+        document["case_identity"], manifest_path, "raw replicate case identity"
+    )
+    name = document["case_name"]
+    replicate = document["replicate_index"]
+    if (
+        status not in {"ok", "error"}
+        or not isinstance(name, str)
+        or not name
+        or isinstance(replicate, bool)
+        or not isinstance(replicate, int)
+        or replicate < 0
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path, f"raw replicate line {index} has invalid identity"
+        )
+    return cast("Literal['ok', 'error']", status), identity, name, replicate
+
+
+def _successful_raw_record(
+    document: dict[str, object], manifest_path: Path, identity: str, name: str, replicate: int
+) -> tuple[_RawSummaryRecord, tuple[object, ...]]:
+    """Validate the metrics and actual controls reported by one successful worker."""
+    response = _require_mapping(
+        document["worker_response"], manifest_path, "successful raw worker response"
+    )
+    if (
+        response.get("status") != "ok"
+        or response.get("case_identity") != identity
+        or response.get("case_name") != name
+        or response.get("replicate_index") != replicate
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path, "successful raw worker response disagrees with raw record"
+        )
+    for field in ("step_time_ms", "tokens_per_second", "final_rss_mib", "peak_rss_mib"):
+        value = response.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0.0
+        ):
+            raise InvalidComparisonInputError(
+                manifest_path, f"successful raw worker response has invalid {field}"
+            )
+    return (
+        _RawSummaryRecord(
+            identity, name, replicate, cast("dict[str, JsonValue]", response), status="ok"
+        ),
+        _worker_signature(response.get("environment"), manifest_path),
+    )
+
+
+def _parse_raw_record(
+    line: str, manifest_path: Path, index: int
+) -> tuple[_RawSummaryRecord, tuple[object, ...] | None]:
+    """Parse one exact raw JSONL record without collapsing worker failure evidence."""
+    if not line:
+        raise InvalidComparisonInputError(manifest_path, f"raw replicate line {index} is empty")
+    try:
+        document = _require_mapping(
+            cast("object", json.loads(line)), manifest_path, f"raw replicate line {index}"
+        )
+    except json.JSONDecodeError as error:
+        raise InvalidComparisonInputError(
+            manifest_path, f"raw replicate line {index} is invalid JSON"
+        ) from error
+    if frozenset(document) != _RAW_REPLICATE_KEYS:
+        raise InvalidComparisonInputError(
+            manifest_path, f"raw replicate line {index} has an invalid field set"
+        )
+    status, identity, name, replicate = _raw_record_identity(document, manifest_path, index)
+    if status == "error":
+        return _RawSummaryRecord(identity, name, replicate, None, status="error"), None
+    return _successful_raw_record(document, manifest_path, identity, name, replicate)
+
+
+def _load_raw_records(
+    manifest_path: Path, manifest: RunManifest
+) -> tuple[tuple[_RawSummaryRecord, ...], tuple[tuple[object, ...], ...]]:
+    """Strictly reconcile bound raw records with manifest counts and recomputed case statistics."""
+    content = _read_bound_artifact(manifest_path, manifest, "raw_replicates.jsonl")
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise InvalidComparisonInputError(
+            manifest_path, "raw_replicates.jsonl is not valid UTF-8"
+        ) from error
+    parsed = tuple(
+        _parse_raw_record(line, manifest_path, index) for index, line in enumerate(lines, 1)
+    )
+    records = tuple(record for record, _ in parsed)
+    tasks = {(record.case_identity, record.replicate_index) for record in records}
+    signatures = tuple(signature for _, signature in parsed if signature is not None)
+    if len(tasks) != len(records):
+        raise InvalidComparisonInputError(
+            manifest_path, "raw replicate task identities are not unique"
+        )
+    failures = sum(record.status == "error" for record in records)
+    if (
+        len(records) != manifest.completed_task_count
+        or sum(record.status == "ok" for record in records) != manifest.successful_task_count
+        or failures != manifest.failed_task_count
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path, "raw replicate counts disagree with manifest"
+        )
+    if manifest.status == "complete" and (
+        len(records) != manifest.expected_task_count or failures != 0
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path, "complete manifest has incomplete or failed raw replicates"
+        )
+    return records, signatures
 
 
 def _load_run_environment(manifest_path: Path, manifest: RunManifest) -> dict[str, JsonValue]:
@@ -348,7 +585,7 @@ def _load_summaries(  # noqa: C901
     return tuple(sorted(summaries, key=lambda summary: summary.case_identity))
 
 
-def _load_threshold(manifest_path: Path, manifest: RunManifest) -> float:
+def _load_methodology(manifest_path: Path, manifest: RunManifest) -> _Methodology:
     """Read the candidate's bound strict regression threshold without trusting a CLI default."""
     try:
         document = yaml.safe_load(
@@ -359,28 +596,89 @@ def _load_threshold(manifest_path: Path, manifest: RunManifest) -> float:
             manifest_path, "resolved_config.yaml is invalid"
         ) from error
     config = _require_mapping(document, manifest_path, "resolved_config.yaml")
-    threshold = config.get("regression_threshold_percent")
-    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+
+    def positive_number(field: str) -> float:
+        value = config.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0.0
+        ):
+            raise InvalidComparisonInputError(
+                manifest_path, f"config {field} is not positive and finite"
+            )
+        return float(value)
+
+    minimum = config.get("minimum_replicates")
+    if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum <= 0:
+        raise InvalidComparisonInputError(manifest_path, "config minimum_replicates is invalid")
+    return _Methodology(
+        positive_number("regression_threshold_percent"), minimum, positive_number("max_cv_percent")
+    )
+
+
+def _validate_summaries_from_raw(
+    manifest_path: Path,
+    summaries: tuple[BenchmarkV2Summary, ...],
+    records: tuple[_RawSummaryRecord, ...],
+    methodology: _Methodology,
+) -> None:
+    """Recompute every summary from raw successes so eligibility cannot be self-declared."""
+    summary_identities = {summary.case_identity for summary in summaries}
+    raw_identities = {record.case_identity for record in records}
+    if raw_identities != summary_identities:
         raise InvalidComparisonInputError(
-            manifest_path, "config has no numeric regression threshold"
+            manifest_path, "raw replicate case identities do not match summary.csv"
         )
-    value = float(threshold)
-    if not math.isfinite(value) or value <= 0.0:
-        raise InvalidComparisonInputError(
-            manifest_path, "config regression threshold is not positive and finite"
+    for summary in summaries:
+        case_records = tuple(
+            record for record in records if record.case_identity == summary.case_identity
         )
-    return value
+        if not case_records:
+            raise InvalidComparisonInputError(
+                manifest_path, "summary case has no successful raw replicates"
+            )
+        recomputed = summarize_replicates(
+            case_records,
+            minimum_replicates=methodology.minimum_replicates,
+            max_cv_percent=methodology.max_cv_percent,
+        )
+        if recomputed != summary:
+            raise InvalidComparisonInputError(
+                manifest_path, "summary disagrees with raw replicate statistics"
+            )
 
 
 def _load_input(manifest_path: Path) -> _ComparisonInput:
     """Compose strict loader boundaries before any comparison calculation occurs."""
     manifest = load_run_manifest(manifest_path)
+    methodology = _load_methodology(manifest_path, manifest)
+    summaries = _load_summaries(manifest_path, manifest)
+    records, raw_signatures = _load_raw_records(manifest_path, manifest)
+    _validate_summaries_from_raw(manifest_path, summaries, records, methodology)
+    environment = _load_run_environment(manifest_path, manifest)
+    raw_environment = cast(
+        "object", json.loads(_read_bound_artifact(manifest_path, manifest, "environment.json"))
+    )
+    worker_documents = _require_mapping(raw_environment, manifest_path, "environment.json")[
+        "worker_environments"
+    ]
+    if not isinstance(worker_documents, list):
+        raise InvalidComparisonInputError(manifest_path, "worker_environments must be a list")
+    worker_values = cast("list[object]", worker_documents)
+    reported_signatures = tuple(_worker_signature(item, manifest_path) for item in worker_values)
+    if Counter(raw_signatures) != Counter(reported_signatures):
+        raise InvalidComparisonInputError(
+            manifest_path, "worker environments disagree with successful raw records"
+        )
     return _ComparisonInput(
         manifest_path=manifest_path.resolve(),
         manifest=manifest,
-        run_environment=_load_run_environment(manifest_path, manifest),
-        summaries=_load_summaries(manifest_path, manifest),
-        regression_threshold_percent=_load_threshold(manifest_path, manifest),
+        run_environment=environment,
+        worker_environment_signatures=reported_signatures,
+        summaries=summaries,
+        regression_threshold_percent=methodology.regression_threshold_percent,
     )
 
 
@@ -396,10 +694,13 @@ def compare_step_times(
         msg = "threshold_percent must be positive"
         raise ValueError(msg)
     change = (candidate_step_time_ms / baseline_step_time_ms - 1.0) * 100.0
-    equal_to_threshold = math.isclose(change, threshold_percent, rel_tol=1e-12, abs_tol=1e-12)
+    exact_change = (
+        Decimal(str(candidate_step_time_ms)) / Decimal(str(baseline_step_time_ms)) - 1
+    ) * 100
+    exact_threshold = Decimal(str(threshold_percent))
     return StepTimeComparison(
         step_time_change_percent=change,
-        regressed=change > threshold_percent and not equal_to_threshold,
+        regressed=exact_change > exact_threshold,
     )
 
 
@@ -448,7 +749,108 @@ def _case_reasons(
     return tuple(reasons)
 
 
-def compare_runs(baseline: Path, candidate: Path) -> BenchmarkComparison:  # noqa: C901
+def _run_reasons(
+    baseline: _ComparisonInput,
+    candidate: _ComparisonInput,
+    missing: tuple[str, ...],
+    extra: tuple[str, ...],
+    environment_mismatches: tuple[EnvironmentMismatch, ...],
+) -> list[str]:
+    """Collect run-level eligibility blockers before evaluating any case-level result."""
+    reasons: list[str] = []
+    if baseline.manifest.status != "complete":
+        reasons.append(f"baseline run status is {baseline.manifest.status}")
+    if candidate.manifest.status != "complete":
+        reasons.append(f"candidate run status is {candidate.manifest.status}")
+    if baseline.manifest.config_sha256 != candidate.manifest.config_sha256:
+        reasons.append("config_sha256 differs")
+    if missing or extra:
+        reasons.append("case identity sets do not align")
+    reasons.extend(f"environment differs: {mismatch.field}" for mismatch in environment_mismatches)
+    if Counter(baseline.worker_environment_signatures) != Counter(
+        candidate.worker_environment_signatures
+    ):
+        reasons.append("applied worker controls differ")
+    return reasons
+
+
+def _compare_case(
+    identity: str,
+    baseline: BenchmarkV2Summary,
+    candidate: BenchmarkV2Summary,
+    *,
+    globally_comparable: bool,
+    threshold_percent: float,
+) -> CaseComparison:
+    """Calculate descriptive and guarded verdict data for one aligned case identity."""
+    reasons = _case_reasons(baseline, candidate, globally_comparable=globally_comparable)
+    step_change = _descriptive_change(baseline.median_step_time_ms, candidate.median_step_time_ms)
+    throughput_change = _descriptive_change(
+        baseline.median_tokens_per_second, candidate.median_tokens_per_second
+    )
+    regressed = (
+        compare_step_times(
+            cast("float", baseline.median_step_time_ms),
+            cast("float", candidate.median_step_time_ms),
+            threshold_percent=threshold_percent,
+        ).regressed
+        if not reasons and step_change is not None
+        else None
+    )
+    return CaseComparison(
+        case_identity=identity,
+        baseline_case_name=baseline.case_name,
+        candidate_case_name=candidate.case_name,
+        baseline_median_step_time_ms=baseline.median_step_time_ms,
+        candidate_median_step_time_ms=candidate.median_step_time_ms,
+        baseline_median_tokens_per_second=baseline.median_tokens_per_second,
+        candidate_median_tokens_per_second=candidate.median_tokens_per_second,
+        step_time_change_percent=step_change,
+        throughput_change_percent=throughput_change,
+        reasons=reasons,
+        regressed=regressed,
+    )
+
+
+def _case_comparisons(
+    baseline: _ComparisonInput, candidate: _ComparisonInput, *, globally_comparable: bool
+) -> tuple[CaseComparison, ...]:
+    """Align summaries by durable case identity and compare their common entries in order."""
+    baseline_by_identity = {summary.case_identity: summary for summary in baseline.summaries}
+    candidate_by_identity = {summary.case_identity: summary for summary in candidate.summaries}
+    return tuple(
+        _compare_case(
+            identity,
+            baseline_by_identity[identity],
+            candidate_by_identity[identity],
+            globally_comparable=globally_comparable,
+            threshold_percent=candidate.regression_threshold_percent,
+        )
+        for identity in sorted(baseline_by_identity.keys() & candidate_by_identity.keys())
+    )
+
+
+def _append_case_blockers(reasons: list[str], cases: tuple[CaseComparison, ...]) -> None:
+    """Promote local blockers into the run reason list once, preserving explanatory order."""
+    for case in cases:
+        for reason in case.reasons:
+            if (
+                reason != "run-level compatibility requirements are not met"
+                and reason not in reasons
+            ):
+                reasons.append(reason)
+
+
+def _verdict(reasons: list[str], cases: tuple[CaseComparison, ...]) -> ComparisonVerdict:
+    """Return a pass/fail only when every aligned case has guarded regression eligibility."""
+    if reasons or any(case.regressed is None for case in cases):
+        return "not_comparable"
+    if any(case.regressed for case in cases):
+        return "fail"
+    return "pass"
+
+
+def compare_runs(baseline: Path, candidate: Path) -> BenchmarkComparison:
     """Compare two finalized runs with conservative eligibility and immutable source evidence."""
     baseline_input = _load_input(baseline)
     candidate_input = _load_input(candidate)
@@ -457,69 +859,9 @@ def compare_runs(baseline: Path, candidate: Path) -> BenchmarkComparison:  # noq
     candidate_identities = {summary.case_identity for summary in candidate_input.summaries}
     missing = tuple(sorted(baseline_identities - candidate_identities))
     extra = tuple(sorted(candidate_identities - baseline_identities))
-    reasons: list[str] = []
-    if baseline_input.manifest.status != "complete":
-        reasons.append(f"baseline run status is {baseline_input.manifest.status}")
-    if candidate_input.manifest.status != "complete":
-        reasons.append(f"candidate run status is {candidate_input.manifest.status}")
-    if baseline_input.manifest.config_sha256 != candidate_input.manifest.config_sha256:
-        reasons.append("config_sha256 differs")
-    if missing or extra:
-        reasons.append("case identity sets do not align")
-    reasons.extend(f"environment differs: {mismatch.field}" for mismatch in environment_mismatches)
-    globally_comparable = not reasons
-    baseline_by_identity = {summary.case_identity: summary for summary in baseline_input.summaries}
-    candidate_by_identity = {
-        summary.case_identity: summary for summary in candidate_input.summaries
-    }
-    cases: list[CaseComparison] = []
-    for identity in sorted(baseline_identities & candidate_identities):
-        baseline_summary = baseline_by_identity[identity]
-        candidate_summary = candidate_by_identity[identity]
-        case_reasons = _case_reasons(
-            baseline_summary, candidate_summary, globally_comparable=globally_comparable
-        )
-        step_change = _descriptive_change(
-            baseline_summary.median_step_time_ms, candidate_summary.median_step_time_ms
-        )
-        throughput_change = _descriptive_change(
-            baseline_summary.median_tokens_per_second, candidate_summary.median_tokens_per_second
-        )
-        regressed: bool | None = None
-        if not case_reasons and step_change is not None:
-            regressed = compare_step_times(
-                cast("float", baseline_summary.median_step_time_ms),
-                cast("float", candidate_summary.median_step_time_ms),
-                threshold_percent=candidate_input.regression_threshold_percent,
-            ).regressed
-        cases.append(
-            CaseComparison(
-                case_identity=identity,
-                baseline_case_name=baseline_summary.case_name,
-                candidate_case_name=candidate_summary.case_name,
-                baseline_median_step_time_ms=baseline_summary.median_step_time_ms,
-                candidate_median_step_time_ms=candidate_summary.median_step_time_ms,
-                baseline_median_tokens_per_second=baseline_summary.median_tokens_per_second,
-                candidate_median_tokens_per_second=candidate_summary.median_tokens_per_second,
-                step_time_change_percent=step_change,
-                throughput_change_percent=throughput_change,
-                reasons=case_reasons,
-                regressed=regressed,
-            )
-        )
-    for case in cases:
-        for reason in case.reasons:
-            if (
-                reason != "run-level compatibility requirements are not met"
-                and reason not in reasons
-            ):
-                reasons.append(reason)
-    if reasons or any(case.regressed is None for case in cases):
-        verdict: ComparisonVerdict = "not_comparable"
-    elif any(case.regressed for case in cases):
-        verdict = "fail"
-    else:
-        verdict = "pass"
+    reasons = _run_reasons(baseline_input, candidate_input, missing, extra, environment_mismatches)
+    cases = _case_comparisons(baseline_input, candidate_input, globally_comparable=not reasons)
+    _append_case_blockers(reasons, cases)
     return BenchmarkComparison(
         baseline_manifest_path=baseline_input.manifest_path,
         candidate_manifest_path=candidate_input.manifest_path,
@@ -530,8 +872,8 @@ def compare_runs(baseline: Path, candidate: Path) -> BenchmarkComparison:  # noq
         missing_case_identities=missing,
         extra_case_identities=extra,
         reasons=tuple(reasons),
-        case_comparisons=tuple(cases),
-        verdict=verdict,
+        case_comparisons=cases,
+        verdict=_verdict(reasons, cases),
     )
 
 
@@ -670,5 +1012,10 @@ def write_comparison(comparison: BenchmarkComparison) -> ComparisonArtifacts:
             + "\n"
         ).encode("utf-8"),
     )
-    _atomic_write_new(markdown_path, _comparison_markdown(comparison).encode("utf-8"))
+    try:
+        _atomic_write_new(markdown_path, _comparison_markdown(comparison).encode("utf-8"))
+    except Exception:
+        if json_path.exists():
+            json_path.unlink()
+        raise
     return ComparisonArtifacts(json_path=json_path, markdown_path=markdown_path)
