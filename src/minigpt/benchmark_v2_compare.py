@@ -661,6 +661,27 @@ def _failed_raw_record(
     identity, name, replicate, worker_pid = task
     raw_response = document["worker_response"]
     if raw_response is not None:
+        if worker_pid is None:
+            raise InvalidComparisonInputError(
+                manifest_path, "worker-declared failure requires a positive outer worker_pid"
+            )
+        started = document["started_at_utc"]
+        ended = document["ended_at_utc"]
+        if started is None or ended is None:
+            raise InvalidComparisonInputError(
+                manifest_path, "worker-declared failure requires outer lifecycle timestamps"
+            )
+        if _timestamp(started, manifest_path, "worker-declared failure start") > _timestamp(
+            ended, manifest_path, "worker-declared failure end"
+        ):
+            raise InvalidComparisonInputError(
+                manifest_path, "worker-declared failure lifecycle ends before it starts"
+            )
+        return_code = document["return_code"]
+        if isinstance(return_code, bool) or not isinstance(return_code, int) or return_code == 0:
+            raise InvalidComparisonInputError(
+                manifest_path, "worker-declared failure requires a nonzero outer return_code"
+            )
         response = _require_mapping(raw_response, manifest_path, "failed raw worker response")
         if frozenset(response) != _FAILURE_RESPONSE_KEYS:
             raise InvalidComparisonInputError(
@@ -675,6 +696,8 @@ def _failed_raw_record(
             or response["replicate_index"] != replicate
             or response["started_at_utc"] != document["started_at_utc"]
             or response["ended_at_utc"] != document["ended_at_utc"]
+            or response["error_type"] != document["error_type"]
+            or response["message"] != document["message"]
         ):
             raise InvalidComparisonInputError(
                 manifest_path, "failed raw worker response disagrees with raw record"

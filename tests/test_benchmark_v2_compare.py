@@ -371,6 +371,81 @@ def _add_second_case(manifest_path: Path) -> str:
     return second_identity
 
 
+def _write_partial_failure_package(parent: Path, *, worker_declared: bool) -> tuple[Path, Path]:
+    """Create one complete baseline and one valid partial candidate with a chosen failure origin."""
+    baseline = _write_run_package(parent, "baseline")
+    candidate = _write_run_package(parent, "candidate")
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    failed = raw_records[-1]
+    failed.update(
+        {
+            "status": "error",
+            "return_code": 1,
+            "error_type": "RuntimeError",
+            "message": "synthetic worker failure",
+            "worker_response": None,
+        }
+    )
+    if worker_declared:
+        failed["worker_response"] = {
+            "protocol_version": 1,
+            "status": "error",
+            "worker_pid": failed["worker_pid"],
+            "started_at_utc": failed["started_at_utc"],
+            "ended_at_utc": failed["ended_at_utc"],
+            "case_identity": failed["case_identity"],
+            "case_name": failed["case_name"],
+            "replicate_index": failed["replicate_index"],
+            "error_type": "RuntimeError",
+            "message": "synthetic worker failure",
+        }
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    order_path = candidate.parent / "execution_order.json"
+    order = cast("list[dict[str, JsonValue]]", json.loads(order_path.read_text(encoding="utf-8")))
+    order[-1]["status"] = "error"
+    _ = order_path.write_text(
+        json.dumps(order, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    summary_path = candidate.parent / "summary.csv"
+    summary_header, summary_record = summary_path.read_text(encoding="utf-8").splitlines()
+    summary = dict(zip(summary_header.split(","), summary_record.split(","), strict=True))
+    summary.update(
+        {"success_count": "2", "failure_count": "1", "stability": "insufficient_samples"}
+    )
+    _ = summary_path.write_text(
+        summary_header + "\n" + ",".join(summary[field] for field in _SUMMARY_FIELDS) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    environment_path = candidate.parent / "environment.json"
+    environment = cast(
+        "dict[str, JsonValue]", json.loads(environment_path.read_text(encoding="utf-8"))
+    )
+    environment["run_status"] = "partial"
+    workers = cast("list[JsonValue]", environment["worker_environments"])
+    environment["worker_environments"] = workers[:-1]
+    _ = environment_path.write_text(
+        json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    manifest = cast("dict[str, JsonValue]", json.loads(candidate.read_text(encoding="utf-8")))
+    manifest.update({"status": "partial", "successful_task_count": 2, "failed_task_count": 1})
+    entries = cast("list[dict[str, JsonValue]]", manifest["artifacts"])
+    for path in (raw_path, summary_path, environment_path, order_path):
+        next(entry for entry in entries if entry["path"] == path.name).update(_hash_entry(path))
+    _ = candidate.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    return baseline, candidate
+
+
 def test_compare_runs_aligns_identity_not_display_name_and_writes_deterministic_outputs(
     tmp_path: Path,
 ) -> None:
@@ -900,3 +975,91 @@ def test_compare_runs_rejects_case_scoped_worker_control_swaps(tmp_path: Path) -
     assert second_identity in {case.case_identity for case in comparison.case_comparisons}
     assert comparison.verdict == "not_comparable"
     assert "applied worker controls differ" in comparison.reasons
+
+
+@pytest.mark.parametrize(
+    "forgery",
+    [
+        "null_pid",
+        "zero_pid",
+        "null_timestamps",
+        "invalid_timestamps",
+        "reversed_timestamps",
+        "null_return_code",
+        "zero_return_code",
+        "boolean_return_code",
+        "nested_pid_mismatch",
+    ],
+)
+def test_compare_runs_rejects_incomplete_outer_evidence_for_worker_declared_failures(
+    tmp_path: Path, forgery: str
+) -> None:
+    """Require complete outer lifecycle evidence whenever a real worker emitted failure JSON."""
+    # Given: a valid worker-declared partial failure is forged at one outer/nested contract field.
+    baseline, candidate = _write_partial_failure_package(tmp_path, worker_declared=True)
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    failed = raw_records[-1]
+    nested = cast("dict[str, JsonValue]", failed["worker_response"])
+    if forgery == "null_pid":
+        failed["worker_pid"] = None
+        nested["worker_pid"] = None
+    elif forgery == "zero_pid":
+        failed["worker_pid"] = 0
+        nested["worker_pid"] = 0
+    elif forgery == "null_timestamps":
+        failed["started_at_utc"] = None
+        failed["ended_at_utc"] = None
+        nested["started_at_utc"] = None
+        nested["ended_at_utc"] = None
+    elif forgery == "invalid_timestamps":
+        failed["started_at_utc"] = "not-a-timestamp"
+        nested["started_at_utc"] = "not-a-timestamp"
+    elif forgery == "reversed_timestamps":
+        failed["started_at_utc"] = "2026-07-28T01:02:05+00:00"
+        failed["ended_at_utc"] = "2026-07-28T01:02:04+00:00"
+        nested["started_at_utc"] = failed["started_at_utc"]
+        nested["ended_at_utc"] = failed["ended_at_utc"]
+    elif forgery == "null_return_code":
+        failed["return_code"] = None
+    elif forgery == "zero_return_code":
+        failed["return_code"] = 0
+    elif forgery == "boolean_return_code":
+        failed["return_code"] = True
+    else:
+        nested["worker_pid"] = 9999
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When/Then: a declared worker failure cannot use parent-only nullable lifecycle evidence.
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"worker-declared failure|raw worker_pid|raw return_code|raw started_at_utc|"
+            r"raw worker lifecycle|failed raw record|failed raw worker response"
+        ),
+    ):
+        _ = compare_runs(baseline, candidate)
+
+
+@pytest.mark.parametrize("worker_declared", [True, False])
+def test_compare_runs_accepts_valid_worker_declared_and_parent_only_failures(
+    tmp_path: Path, *, worker_declared: bool
+) -> None:
+    """Accept valid worker-declared and parent-only failures as partial, non-comparable evidence."""
+    # Given: equivalent partial packages differing only in whether the worker supplied failure JSON.
+    baseline, candidate = _write_partial_failure_package(tmp_path, worker_declared=worker_declared)
+
+    # When: the strict parser validates the appropriate failure-origin contract.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: both retain evidence yet refuse a performance pass/fail verdict for partial data.
+    assert comparison.verdict == "not_comparable"
+    assert "candidate run status is partial" in comparison.reasons
