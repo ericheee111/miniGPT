@@ -11,6 +11,7 @@ from torch.profiler import record_function
 from typing_extensions import override
 
 from minigpt.batching import TokenBatcher
+from minigpt.benchmark_types import BenchmarkCase
 from minigpt.model import GPT
 from minigpt.optimization import create_adamw, seed_everything
 from minigpt.settings import GPTConfig, OptimizerSettings
@@ -18,7 +19,7 @@ from minigpt.settings import GPTConfig, OptimizerSettings
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from minigpt.benchmark_types import BenchmarkCase
+    from minigpt.benchmark_v2_types import BenchmarkV2Case
 
 MISSING_LOSS_REASON = "model returned no loss"
 
@@ -112,3 +113,25 @@ class TrainingStepWorkload:
         with record_function("optimizer_step"):
             optimizer_step = cast("Callable[[], object | None]", self.optimizer.step)
             _ = optimizer_step()
+
+
+def create_training_step_workload(
+    case: BenchmarkV2Case,
+    *,
+    seed: int,
+    vocab_size: int,
+) -> TrainingStepWorkload:
+    """Adapt one explicit Benchmark v2 case to the unchanged v1 workload math."""
+    return TrainingStepWorkload(
+        BenchmarkCase(
+            model_size=case.model_name,
+            n_layer=case.n_layer,
+            n_head=case.n_head,
+            n_embd=case.n_embd,
+            thread_count=case.torch_num_threads,
+            block_size=case.block_size,
+            batch_size=case.batch_size,
+        ),
+        seed=seed,
+        vocab_size=vocab_size,
+    )
