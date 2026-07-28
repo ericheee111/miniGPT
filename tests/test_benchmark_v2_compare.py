@@ -15,6 +15,13 @@ import yaml
 
 import minigpt.benchmark_v2_compare as compare_module
 from minigpt.benchmark_v2_compare import compare_runs, compare_step_times, write_comparison
+from minigpt.benchmark_v2_config import (
+    case_identity as derive_case_identity,
+)
+from minigpt.benchmark_v2_config import (
+    load_resolved_benchmark_v2_config,
+    resolved_config_sha256,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,13 +67,59 @@ def _write_run_package(  # noqa: PLR0913
     status: str = "complete",
     environment_updates: dict[str, JsonValue] | None = None,
     summary_updates: dict[str, str] | None = None,
-    config_sha256: str = "b" * 64,
+    config_sha256: str | None = None,
     threshold_percent: float = 5.0,
     case_identity: str = _CASE_IDENTITY,
 ) -> Path:
     """Create a hand-checked, hash-bound synthetic package without real timing claims."""
     run_directory = parent / name
     run_directory.mkdir(exist_ok=True)
+    case_name = "display-name-can-change" if case_identity == _CASE_IDENTITY else "different-case"
+    config: dict[str, JsonValue] = {
+        "schema_version": 2,
+        "experiment_name": "synthetic_benchmark_v2_fixture",
+        "benchmark_seed": 1337,
+        "vocab_size": 65,
+        "output_root": "reports/benchmark_v2",
+        "worker_timeout_seconds": 60.0,
+        "warmup_steps": 0,
+        "measurement_steps": 1,
+        "replicates": 3,
+        "torch_num_interop_threads": 1,
+        "cpu_affinity": None,
+        "max_cv_percent": 10.0,
+        "minimum_replicates": 3,
+        "regression_threshold_percent": threshold_percent,
+        "relevant_environment_variables": ["OMP_NUM_THREADS"],
+        "cases": [
+            {
+                "name": case_name,
+                "model_name": "tiny",
+                "n_layer": 1,
+                "n_head": 1,
+                "n_embd": 8,
+                "torch_num_threads": 1,
+                "block_size": 32,
+                "batch_size": 2,
+            }
+        ],
+        "profile": {
+            "enabled": False,
+            "case_name": case_name,
+            "warmup_steps": 1,
+            "active_steps": 1,
+        },
+    }
+    config_content = yaml.safe_dump(config, sort_keys=False).encode("utf-8")
+    resolved_config = load_resolved_benchmark_v2_config(
+        config_content, run_directory / "resolved_config.yaml"
+    )
+    computed_config_sha256 = resolved_config_sha256(resolved_config)
+    if config_sha256 is not None and config_sha256 != computed_config_sha256:
+        msg = "synthetic package config hash must be derived from its resolved config"
+        raise ValueError(msg)
+    config_sha256 = computed_config_sha256
+    case_identity = derive_case_identity(resolved_config, resolved_config.cases[0])
     run_environment: dict[str, JsonValue] = {
         "captured_before_first_worker": True,
         "git": {"commit_sha": "c" * 40, "branch": "main", "dirty": False},
@@ -101,18 +154,12 @@ def _write_run_package(  # noqa: PLR0913
     _ = environment_path.write_text(
         json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
     )
-    config = {
-        "schema_version": 2,
-        "regression_threshold_percent": threshold_percent,
-        "minimum_replicates": 3,
-        "max_cv_percent": 10.0,
-    }
     _ = (run_directory / "resolved_config.yaml").write_text(
-        yaml.safe_dump(config, sort_keys=False), encoding="utf-8", newline="\n"
+        config_content.decode("utf-8"), encoding="utf-8", newline="\n"
     )
     summary: dict[str, str] = {
         "case_identity": case_identity,
-        "case_name": "display-name-can-change",
+        "case_name": case_name,
         "replicate_count": "3",
         "success_count": "3",
         "failure_count": "0",
@@ -276,8 +323,18 @@ def _rehash_manifest_artifact(manifest_path: Path, artifact_path: Path) -> None:
 def _add_second_case(manifest_path: Path) -> str:
     """Add a hash-bound second three-replicate case to one synthetic fixture package."""
     directory = manifest_path.parent
-    second_identity = "d" * 64
     second_name = "second-case"
+    config_path = directory / "resolved_config.yaml"
+    config_document = cast("dict[str, JsonValue]", yaml.safe_load(config_path.read_text()))
+    cases = cast("list[dict[str, JsonValue]]", config_document["cases"])
+    second_case = dict(cases[0])
+    second_case.update({"name": second_name, "torch_num_threads": 2})
+    cases.append(second_case)
+    config_content = yaml.safe_dump(config_document, sort_keys=False).encode("utf-8")
+    resolved_config = load_resolved_benchmark_v2_config(config_content, config_path)
+    second_identity = derive_case_identity(resolved_config, resolved_config.cases[1])
+    config_sha256 = resolved_config_sha256(resolved_config)
+    _ = config_path.write_bytes(config_content)
     raw_path = directory / "raw_replicates.jsonl"
     raw_records = cast(
         "list[dict[str, JsonValue]]",
@@ -329,6 +386,7 @@ def _add_second_case(manifest_path: Path) -> str:
     environment = cast(
         "dict[str, JsonValue]", json.loads(environment_path.read_text(encoding="utf-8"))
     )
+    environment["config_sha256"] = config_sha256
     worker_environments = cast("list[JsonValue]", environment["worker_environments"])
     worker_environments.extend(cast("list[JsonValue]", json.loads(json.dumps(worker_environments))))
     for worker in worker_environments[3:]:
@@ -356,12 +414,17 @@ def _add_second_case(manifest_path: Path) -> str:
     )
     manifest = cast("dict[str, JsonValue]", json.loads(manifest_path.read_text(encoding="utf-8")))
     manifest.update(
-        {"expected_task_count": 6, "completed_task_count": 6, "successful_task_count": 6}
+        {
+            "config_sha256": config_sha256,
+            "expected_task_count": 6,
+            "completed_task_count": 6,
+            "successful_task_count": 6,
+        }
     )
     case_identities = cast("list[JsonValue]", manifest["case_identities"])
     case_identities.append({"case_name": second_name, "case_identity": second_identity})
     entries = cast("list[dict[str, JsonValue]]", manifest["artifacts"])
-    for artifact_path in (raw_path, summary_path, environment_path, order_path):
+    for artifact_path in (config_path, raw_path, summary_path, environment_path, order_path):
         next(entry for entry in entries if entry["path"] == artifact_path.name).update(
             _hash_entry(artifact_path)
         )
@@ -449,14 +512,13 @@ def _write_partial_failure_package(parent: Path, *, worker_declared: bool) -> tu
 def test_compare_runs_aligns_identity_not_display_name_and_writes_deterministic_outputs(
     tmp_path: Path,
 ) -> None:
-    """Compare aligned stable fixtures even when a human-facing case label changes."""
-    # Given: two complete, hash-bound runs with one matching workload identity and different labels.
+    """Compare aligned stable fixtures with one matching resolved case identity."""
+    # Given: two complete, hash-bound runs with one matching resolved workload identity.
     baseline = _write_run_package(tmp_path, "baseline")
     candidate = _write_run_package(
         tmp_path,
         "candidate",
         summary_updates={
-            "case_name": "renamed-case",
             "median_step_time_ms": "105.0",
             "median_tokens_per_second": "952.3809523809524",
         },
@@ -468,12 +530,12 @@ def test_compare_runs_aligns_identity_not_display_name_and_writes_deterministic_
 
     # Then: equality passes and outputs are immutable-source-safe siblings of the candidate run.
     assert comparison.verdict == "pass"
-    assert comparison.case_comparisons[0].case_identity == _CASE_IDENTITY
+    assert len(comparison.case_comparisons[0].case_identity) == 64
     assert comparison.case_comparisons[0].regressed is False
     assert artifacts.json_path == candidate.parent.parent / "candidate-comparison-baseline.json"
     assert artifacts.markdown_path == candidate.parent.parent / "candidate-comparison-baseline.md"
     assert '"verdict": "pass"' in artifacts.json_path.read_text(encoding="utf-8")
-    assert "| renamed-case |" in artifacts.markdown_path.read_text(encoding="utf-8")
+    assert "| display-name-can-change |" in artifacts.markdown_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -586,7 +648,7 @@ def test_compare_runs_refuses_configuration_mismatch_but_reports_descriptive_del
     candidate = _write_run_package(
         tmp_path,
         "candidate",
-        config_sha256="e" * 64,
+        threshold_percent=6.0,
         summary_updates={"median_step_time_ms": "110.0", "median_tokens_per_second": "909.0"},
     )
 
@@ -947,7 +1009,9 @@ def test_compare_runs_rejects_case_scoped_worker_control_swaps(tmp_path: Path) -
     for raw_record in raw_records:
         response = cast("dict[str, JsonValue]", raw_record["worker_response"])
         environment = cast("dict[str, JsonValue]", response["environment"])
-        environment["torch_num_threads"] = 2 if raw_record["case_identity"] == _CASE_IDENTITY else 1
+        environment["torch_num_threads"] = (
+            1 if raw_record["case_identity"] == second_identity else 2
+        )
     _ = raw_path.write_text(
         "".join(json.dumps(record) + "\n" for record in raw_records),
         encoding="utf-8",

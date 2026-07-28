@@ -299,6 +299,78 @@ def test_write_run_artifacts_binds_all_outputs_without_hashing_its_manifest(tmp_
     assert run_environment["captured_before_first_worker"] is True
 
 
+def test_load_run_manifest_recomputes_config_and_case_identities_from_snapshotted_yaml(
+    tmp_path: Path,
+) -> None:
+    """Reject a self-consistent manifest/environment pair that lies about its resolved workload."""
+    # Given: a writer-produced complete package whose copied identity tokens are forged.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    run_directory = tmp_path / "forged-identities"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=tuple(successful_record(task, 1.0) for task in tasks),
+        started_at_utc=datetime(2026, 7, 28, 1, 2, 3, tzinfo=UTC).isoformat(),
+        ended_at_utc=datetime(2026, 7, 28, 1, 2, 4, tzinfo=UTC).isoformat(),
+    )
+    forged_sha256 = "d" * 64
+    environment = cast(
+        "dict[str, object]", json.loads(artifacts.environment_path.read_text(encoding="utf-8"))
+    )
+    environment["config_sha256"] = forged_sha256
+    _ = artifacts.environment_path.write_text(json.dumps(environment), encoding="utf-8")
+    manifest = cast(
+        "dict[str, object]", json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+    )
+    manifest["config_sha256"] = forged_sha256
+    manifest["case_identities"] = [{"case_name": config.cases[0].name, "case_identity": "e" * 64}]
+    entries = cast("list[dict[str, object]]", manifest["artifacts"])
+    environment_entry = next(entry for entry in entries if entry["path"] == "environment.json")
+    environment_content = artifacts.environment_path.read_bytes()
+    environment_entry["size_bytes"] = len(environment_content)
+    environment_entry["sha256"] = hashlib.sha256(environment_content).hexdigest()
+    _ = artifacts.run_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # When/Then: copies agreeing with one another cannot override the snapshotted config bytes.
+    with pytest.raises(ValueError, match="config_sha256"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
+def test_load_run_manifest_rejects_forged_case_identity_with_a_real_config_hash(
+    tmp_path: Path,
+) -> None:
+    """Reject a self-declared case identity even when config hashes are otherwise authentic."""
+    # Given: a complete writer package with only its manifest's case identity forged.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    run_directory = tmp_path / "forged-case-identity"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=tuple(successful_record(task, 1.0) for task in tasks),
+        started_at_utc=datetime(2026, 7, 28, 1, 2, 3, tzinfo=UTC).isoformat(),
+        ended_at_utc=datetime(2026, 7, 28, 1, 2, 4, tzinfo=UTC).isoformat(),
+    )
+    manifest = cast(
+        "dict[str, object]", json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+    )
+    manifest["case_identities"] = [{"case_name": config.cases[0].name, "case_identity": "e" * 64}]
+    _ = artifacts.run_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # When/Then: the manifest cannot override the case identity derived from snapshotted YAML.
+    with pytest.raises(ValueError, match="case identities"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
 def test_partial_report_preserves_failure_and_makes_no_success_claim(tmp_path: Path) -> None:
     """A worker failure remains visible in the final evidence and prevents completion wording."""
     # Given: one success and one failure from an expected two-replicate run.

@@ -1,4 +1,30 @@
 schema_version: 2
-regression_threshold_percent: 5.0
-minimum_replicates: 3
+experiment_name: synthetic_benchmark_v2_fixture
+benchmark_seed: 1337
+vocab_size: 65
+output_root: reports/benchmark_v2
+worker_timeout_seconds: 60.0
+warmup_steps: 0
+measurement_steps: 1
+replicates: 3
+torch_num_interop_threads: 1
+cpu_affinity: null
 max_cv_percent: 10.0
+minimum_replicates: 3
+regression_threshold_percent: 5.0
+relevant_environment_variables:
+- OMP_NUM_THREADS
+cases:
+- name: display-name-can-change
+  model_name: tiny
+  n_layer: 1
+  n_head: 1
+  n_embd: 8
+  torch_num_threads: 1
+  block_size: 32
+  batch_size: 2
+profile:
+  enabled: false
+  case_name: display-name-can-change
+  warmup_steps: 1
+  active_steps: 1

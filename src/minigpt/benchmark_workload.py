@@ -12,6 +12,23 @@ from typing_extensions import override
 
 from minigpt.batching import TokenBatcher
 from minigpt.benchmark_types import BenchmarkCase
+from minigpt.benchmark_workload_methodology import (
+    BATCHER_METHOD,
+    GRAD_CLIP,
+    MODEL_BIAS,
+    MODEL_DROPOUT,
+    OPTIMIZER_BETAS,
+    OPTIMIZER_LEARNING_RATE,
+    OPTIMIZER_MIN_LEARNING_RATE,
+    OPTIMIZER_TYPE,
+    OPTIMIZER_WEIGHT_DECAY,
+    SYNTHETIC_CORPUS_BATCH_MULTIPLIER,
+    SYNTHETIC_CORPUS_MIN_TOKENS,
+    WORKLOAD_DEVICE,
+    ZERO_GRAD_SET_TO_NONE,
+    synthetic_token_dtype,
+    workload_torch_dtype,
+)
 from minigpt.model import GPT
 from minigpt.optimization import create_adamw, seed_everything
 from minigpt.settings import GPTConfig, OptimizerSettings
@@ -43,12 +60,18 @@ class TrainingStepWorkload:
     def __init__(self, case: BenchmarkCase, *, seed: int, vocab_size: int) -> None:
         """Initialize a deterministic model, optimizer, and synthetic corpus."""
         seed_everything(seed, case.thread_count)
-        corpus_size = max(4_096, case.batch_size * (case.block_size + 1) * 8)
+        corpus_size = max(
+            SYNTHETIC_CORPUS_MIN_TOKENS,
+            case.batch_size * (case.block_size + 1) * SYNTHETIC_CORPUS_BATCH_MULTIPLIER,
+        )
+        if BATCHER_METHOD != "TokenBatcher.next_batch":
+            msg = f"unsupported synthetic batcher method {BATCHER_METHOD!r}"
+            raise ValueError(msg)
         tokens = np.random.default_rng(seed).integers(
             0,
             vocab_size,
             size=corpus_size,
-            dtype=np.uint16,
+            dtype=synthetic_token_dtype(),
         )
         self.batcher = TokenBatcher(
             tokens,
@@ -63,18 +86,19 @@ class TrainingStepWorkload:
                 n_layer=case.n_layer,
                 n_head=case.n_head,
                 n_embd=case.n_embd,
-                dropout=0.0,
-                bias=False,
+                dropout=MODEL_DROPOUT,
+                bias=MODEL_BIAS,
             )
         )
+        _ = self.model.to(device=WORKLOAD_DEVICE, dtype=workload_torch_dtype())
         settings = OptimizerSettings(
-            optimizer_type="adamw",
-            learning_rate=3e-4,
-            min_learning_rate=3e-5,
-            weight_decay=0.1,
-            beta1=0.9,
-            beta2=0.95,
-            grad_clip=1.0,
+            optimizer_type=OPTIMIZER_TYPE,
+            learning_rate=OPTIMIZER_LEARNING_RATE,
+            min_learning_rate=OPTIMIZER_MIN_LEARNING_RATE,
+            weight_decay=OPTIMIZER_WEIGHT_DECAY,
+            beta1=OPTIMIZER_BETAS[0],
+            beta2=OPTIMIZER_BETAS[1],
+            grad_clip=GRAD_CLIP,
         )
         self.optimizer = create_adamw(self.model, settings)
         self.grad_clip = settings.grad_clip
@@ -88,7 +112,7 @@ class TrainingStepWorkload:
     def step(self) -> None:
         """Execute one uninstrumented forward/backward/optimizer training step."""
         inputs, targets = self.batcher.next_batch()
-        self.optimizer.zero_grad(set_to_none=True)
+        self.optimizer.zero_grad(set_to_none=ZERO_GRAD_SET_TO_NONE)
         _, loss = cast("tuple[torch.Tensor, torch.Tensor | None]", self.model(inputs, targets))
         if loss is None:
             raise InvalidBenchmarkStateError(MISSING_LOSS_REASON)
@@ -103,7 +127,7 @@ class TrainingStepWorkload:
         with record_function("data_preparation"):
             inputs, targets = self.batcher.next_batch()
         with record_function("forward_backward"):
-            self.optimizer.zero_grad(set_to_none=True)
+            self.optimizer.zero_grad(set_to_none=ZERO_GRAD_SET_TO_NONE)
             _, loss = cast("tuple[torch.Tensor, torch.Tensor | None]", self.model(inputs, targets))
             if loss is None:
                 raise InvalidBenchmarkStateError(MISSING_LOSS_REASON)

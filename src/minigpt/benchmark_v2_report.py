@@ -22,7 +22,13 @@ import psutil
 import torch
 import yaml
 
-from minigpt.benchmark_v2_config import JsonValue, resolved_config_document, resolved_config_sha256
+from minigpt.benchmark_v2_config import (
+    JsonValue,
+    case_identity,
+    load_resolved_benchmark_v2_config,
+    resolved_config_document,
+    resolved_config_sha256,
+)
 from minigpt.benchmark_v2_statistics import BenchmarkV2Summary, summarize_replicates
 
 if TYPE_CHECKING:
@@ -876,6 +882,30 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
         msg = "run manifest has an invalid string field"
         raise ValueError(msg)
     config_sha256 = _require_sha256(document["config_sha256"], "run manifest config_sha256")
+    try:
+        resolved_config = load_resolved_benchmark_v2_config(
+            snapshots["resolved_config.yaml"].content,
+            resolved_run_directory / "resolved_config.yaml",
+        )
+    except ValueError as error:
+        msg = f"resolved config is invalid: {error}"
+        raise ValueError(msg) from error
+    recomputed_config_sha256 = resolved_config_sha256(resolved_config)
+    if config_sha256 != recomputed_config_sha256:
+        msg = "run manifest config_sha256 does not match snapshotted resolved config"
+        raise ValueError(msg)
+    expected_case_identities = {
+        (case.name, case_identity(resolved_config, case)) for case in resolved_config.cases
+    }
+    observed_case_identities = {
+        (case["case_name"], case["case_identity"]) for case in case_identities
+    }
+    if (
+        len(case_identities) != len(observed_case_identities)
+        or observed_case_identities != expected_case_identities
+    ):
+        msg = "run manifest case identities do not match snapshotted resolved config"
+        raise ValueError(msg)
     if path.parent.name != document["run_id"]:
         msg = "run manifest run_id does not match its run directory"
         raise ValueError(msg)
@@ -914,6 +944,9 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
     )
     if environment_config_sha256 != config_sha256:
         msg = "environment artifact config_sha256 does not match the manifest"
+        raise ValueError(msg)
+    if environment_config_sha256 != recomputed_config_sha256:
+        msg = "environment artifact config_sha256 does not match snapshotted resolved config"
         raise ValueError(msg)
     run_environment = _require_mapping(
         environment.get("run_environment"), "environment run_environment"

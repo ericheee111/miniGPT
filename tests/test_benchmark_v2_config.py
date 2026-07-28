@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import minigpt.benchmark_workload_methodology as methodology_module
 from minigpt.benchmark_v2_config import (
     InvalidBenchmarkV2ConfigError,
     case_identity,
@@ -97,6 +98,22 @@ def test_v2_config_accepts_zero_top_level_warmup(tmp_path: Path) -> None:
 
     # Then: zero is preserved as a valid no-warmup methodology.
     assert config.warmup_steps == 0
+
+
+def test_v2_config_rejects_duplicate_yaml_keys_before_schema_validation(tmp_path: Path) -> None:
+    """Reject duplicate YAML keys rather than silently accepting the last workload value."""
+    # Given: an otherwise valid config that declares two incompatible batch-size values.
+    path = write_v2_config(tmp_path)
+    _ = path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "    batch_size: 2", "    batch_size: 2\n    batch_size: 3", 1
+        ),
+        encoding="utf-8",
+    )
+
+    # When/Then: duplicate-safe parsing refuses the ambiguous benchmark methodology.
+    with pytest.raises(InvalidBenchmarkV2ConfigError, match="duplicate YAML mapping key"):
+        _ = load_benchmark_v2_config(path)
 
 
 @pytest.mark.parametrize(
@@ -213,6 +230,41 @@ def test_case_identity_changes_for_every_case_field(tmp_path: Path, field: str) 
 
     # Then: the workload identity changes.
     assert case_identity(config, case) != case_identity(config, changed)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("WORKLOAD_DEVICE", "cuda"),
+        ("WORKLOAD_DTYPE", "float64"),
+        ("MODEL_DROPOUT", 0.25),
+        ("MODEL_BIAS", True),
+        ("OPTIMIZER_TYPE", "sgd"),
+        ("OPTIMIZER_LEARNING_RATE", 0.001),
+        ("OPTIMIZER_MIN_LEARNING_RATE", 0.0001),
+        ("OPTIMIZER_WEIGHT_DECAY", 0.2),
+        ("OPTIMIZER_BETAS", (0.8, 0.9)),
+        ("GRAD_CLIP", 0.5),
+        ("ZERO_GRAD_SET_TO_NONE", False),
+        ("SYNTHETIC_CORPUS_MIN_TOKENS", 8192),
+        ("SYNTHETIC_CORPUS_BATCH_MULTIPLIER", 9),
+        ("SYNTHETIC_TOKEN_DTYPE", "uint32"),
+        ("BATCHER_METHOD", "token_batcher_next_batch_v2"),
+    ],
+)
+def test_case_identity_binds_each_explicit_workload_methodology_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, replacement: object
+) -> None:
+    """Changing any work-defining shared methodology setting changes a case identity."""
+    # Given: one parsed case using the published CPU training methodology.
+    config = load_benchmark_v2_config(write_v2_config(tmp_path))
+    before = case_identity(config, config.cases[0])
+
+    # When: exactly one methodology value used to build the real workload drifts.
+    monkeypatch.setattr(methodology_module, field, replacement)
+
+    # Then: comparison cannot mistake the changed workload for the original case.
+    assert before != case_identity(config, config.cases[0])
 
 
 @pytest.mark.parametrize(
