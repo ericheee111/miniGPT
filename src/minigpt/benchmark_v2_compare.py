@@ -225,7 +225,7 @@ class _ComparisonInput:
     manifest: RunManifest
     run_environment: dict[str, JsonValue]
     worker_environment_signatures: tuple[tuple[object, ...], ...]
-    task_worker_controls: tuple[tuple[str, int, _WorkerControls], ...]
+    case_worker_controls: tuple[tuple[str, frozenset[_WorkerControls]], ...]
     summaries: tuple[BenchmarkV2Summary, ...]
     regression_threshold_percent: float
 
@@ -1108,6 +1108,19 @@ def _validate_summaries_from_raw(
             )
 
 
+def _case_worker_control_sets(
+    records: tuple[_RawSummaryRecord, ...],
+) -> tuple[tuple[str, frozenset[_WorkerControls]], ...]:
+    """Normalize successful actual controls by case, excluding replicate-local process evidence."""
+    controls_by_case: dict[str, set[_WorkerControls]] = {}
+    for record in records:
+        if record.worker_controls is not None:
+            controls_by_case.setdefault(record.case_identity, set()).add(record.worker_controls)
+    return tuple(
+        (identity, frozenset(controls)) for identity, controls in sorted(controls_by_case.items())
+    )
+
+
 def _load_input(manifest_path: Path) -> _ComparisonInput:
     """Compose strict loader boundaries before any comparison calculation occurs."""
     try:
@@ -1136,15 +1149,11 @@ def _load_input(manifest_path: Path) -> _ComparisonInput:
     reported_signatures = tuple(
         _worker_environment_signature(item, manifest_path) for item in worker_values
     )
-    task_worker_controls = tuple(
-        sorted(
-            (record.case_identity, record.replicate_index, record.worker_controls)
-            for record in records
-            if record.worker_controls is not None
-        )
-    )
+    case_worker_controls = _case_worker_control_sets(records)
     raw_environment_signatures = tuple(
-        controls.environment_signature for _, _, controls in task_worker_controls
+        record.worker_controls.environment_signature
+        for record in records
+        if record.worker_controls is not None
     )
     if Counter(raw_environment_signatures) != Counter(reported_signatures):
         raise InvalidComparisonInputError(
@@ -1155,7 +1164,7 @@ def _load_input(manifest_path: Path) -> _ComparisonInput:
         manifest=manifest,
         run_environment=environment,
         worker_environment_signatures=reported_signatures,
-        task_worker_controls=task_worker_controls,
+        case_worker_controls=case_worker_controls,
         summaries=summaries,
         regression_threshold_percent=methodology.regression_threshold_percent,
     )
@@ -1228,6 +1237,15 @@ def _case_reasons(
     return tuple(reasons)
 
 
+def _inconsistent_worker_control_reason(
+    run_label: str, controls_by_case: dict[str, frozenset[_WorkerControls]]
+) -> str | None:
+    """Reject a complete case whose successful workers applied more than one control signature."""
+    if any(len(controls) != 1 for controls in controls_by_case.values()):
+        return f"{run_label} case has inconsistent applied worker controls"
+    return None
+
+
 def _run_reasons(
     baseline: _ComparisonInput,
     candidate: _ComparisonInput,
@@ -1241,17 +1259,25 @@ def _run_reasons(
         reasons.append(f"baseline run status is {baseline.manifest.status}")
     if candidate.manifest.status != "complete":
         reasons.append(f"candidate run status is {candidate.manifest.status}")
-    if baseline.manifest.config_sha256 != candidate.manifest.config_sha256:
-        reasons.append("config_sha256 differs")
     if missing or extra:
         reasons.append("case identity sets do not align")
     reasons.extend(f"environment differs: {mismatch.field}" for mismatch in environment_mismatches)
-    if (
-        baseline.manifest.status == "complete"
-        and candidate.manifest.status == "complete"
-        and baseline.task_worker_controls != candidate.task_worker_controls
-    ):
-        reasons.append("applied worker controls differ")
+    if baseline.manifest.status == "complete" and candidate.manifest.status == "complete":
+        baseline_controls = dict(baseline.case_worker_controls)
+        candidate_controls = dict(candidate.case_worker_controls)
+        for label, controls in (
+            ("baseline", baseline_controls),
+            ("candidate", candidate_controls),
+        ):
+            inconsistency = _inconsistent_worker_control_reason(label, controls)
+            if inconsistency is not None:
+                reasons.append(inconsistency)
+        if not any("inconsistent applied worker controls" in reason for reason in reasons):
+            aligned = baseline_controls.keys() & candidate_controls.keys()
+            if any(
+                baseline_controls[identity] != candidate_controls[identity] for identity in aligned
+            ):
+                reasons.append("applied worker controls differ")
     return reasons
 
 

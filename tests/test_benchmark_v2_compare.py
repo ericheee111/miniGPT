@@ -69,6 +69,13 @@ def _write_run_package(  # noqa: PLR0913
     summary_updates: dict[str, str] | None = None,
     config_sha256: str | None = None,
     threshold_percent: float = 5.0,
+    experiment_name: str = "synthetic_benchmark_v2_fixture",
+    output_root: str = "reports/benchmark_v2",
+    replicates: int = 3,
+    minimum_replicates: int = 3,
+    max_cv_percent: float = 10.0,
+    profile_warmup_steps: int = 1,
+    profile_active_steps: int = 1,
     case_identity: str = _CASE_IDENTITY,
 ) -> Path:
     """Create a hand-checked, hash-bound synthetic package without real timing claims."""
@@ -77,18 +84,18 @@ def _write_run_package(  # noqa: PLR0913
     case_name = "display-name-can-change" if case_identity == _CASE_IDENTITY else "different-case"
     config: dict[str, JsonValue] = {
         "schema_version": 2,
-        "experiment_name": "synthetic_benchmark_v2_fixture",
+        "experiment_name": experiment_name,
         "benchmark_seed": 1337,
         "vocab_size": 65,
-        "output_root": "reports/benchmark_v2",
+        "output_root": output_root,
         "worker_timeout_seconds": 60.0,
         "warmup_steps": 0,
         "measurement_steps": 1,
-        "replicates": 3,
+        "replicates": replicates,
         "torch_num_interop_threads": 1,
         "cpu_affinity": None,
-        "max_cv_percent": 10.0,
-        "minimum_replicates": 3,
+        "max_cv_percent": max_cv_percent,
+        "minimum_replicates": minimum_replicates,
         "regression_threshold_percent": threshold_percent,
         "relevant_environment_variables": ["OMP_NUM_THREADS"],
         "cases": [
@@ -106,8 +113,8 @@ def _write_run_package(  # noqa: PLR0913
         "profile": {
             "enabled": False,
             "case_name": case_name,
-            "warmup_steps": 1,
-            "active_steps": 1,
+            "warmup_steps": profile_warmup_steps,
+            "active_steps": profile_active_steps,
         },
     }
     config_content = yaml.safe_dump(config, sort_keys=False).encode("utf-8")
@@ -160,8 +167,8 @@ def _write_run_package(  # noqa: PLR0913
     summary: dict[str, str] = {
         "case_identity": case_identity,
         "case_name": case_name,
-        "replicate_count": "3",
-        "success_count": "3",
+        "replicate_count": str(replicates),
+        "success_count": str(replicates),
         "failure_count": "0",
         "median_step_time_ms": "100.0",
         "min_step_time_ms": "99.0",
@@ -199,15 +206,13 @@ def _write_run_package(  # noqa: PLR0913
         "relevant_environment_variables": {"OMP_NUM_THREADS": "1"},
     }
     environment["worker_environments"] = [
-        worker_environment,
-        worker_environment,
-        worker_environment,
+        *[worker_environment for _ in range(replicates)],
     ]
     _ = environment_path.write_text(
         json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
     )
     raw: list[dict[str, JsonValue]] = []
-    for index in range(3):
+    for index in range(replicates):
         response: dict[str, JsonValue] = {
             "protocol_version": 1,
             "status": "ok",
@@ -271,7 +276,7 @@ def _write_run_package(  # noqa: PLR0913
             "worker_pid": 1000 + index,
             "status": "ok",
         }
-        for index in range(3)
+        for index in range(replicates)
     ]
     _ = (run_directory / "execution_order.json").write_text(
         json.dumps(execution_order, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
@@ -292,9 +297,9 @@ def _write_run_package(  # noqa: PLR0913
         "ended_at_utc": "2026-07-28T01:02:04+00:00",
         "config_sha256": config_sha256,
         "git": cast("dict[str, JsonValue]", run_environment["git"]),
-        "expected_task_count": 3,
-        "completed_task_count": 3,
-        "successful_task_count": 3,
+        "expected_task_count": replicates,
+        "completed_task_count": replicates,
+        "successful_task_count": replicates,
         "failed_task_count": 0,
         "case_identities": [{"case_name": summary["case_name"], "case_identity": case_identity}],
         "artifacts": [
@@ -777,26 +782,45 @@ def test_compare_runs_refuses_regression_verdict_for_ineligible_evidence(
         assert comparison.case_comparisons[0].step_time_change_percent == 0.0
 
 
-def test_compare_runs_refuses_configuration_mismatch_but_reports_descriptive_delta(
+def test_compare_runs_allows_full_config_differences_excluded_from_case_identity(
     tmp_path: Path,
 ) -> None:
-    """Treat a different resolved configuration identity as a methodology incompatibility."""
-    # Given: equal case identities but distinct hash-bound resolved configuration identities.
+    """Use each complete run's own stable-sample rules despite allowed config hash differences."""
+    # Given: aligned workloads with distinct output/report/stability and threshold settings.
     baseline = _write_run_package(tmp_path, "baseline")
     candidate = _write_run_package(
         tmp_path,
         "candidate",
+        experiment_name="candidate_report_only_settings",
+        output_root="reports/candidate-only",
         threshold_percent=6.0,
-        summary_updates={"median_step_time_ms": "110.0", "median_tokens_per_second": "909.0"},
+        replicates=5,
+        minimum_replicates=4,
+        max_cv_percent=2.0,
+        profile_warmup_steps=2,
+        profile_active_steps=3,
+        summary_updates={
+            "median_step_time_ms": "105.5",
+            "median_tokens_per_second": "947.8672985781991",
+        },
     )
 
-    # When: comparison checks methodology/config identity before deciding regression status.
+    # When: comparison evaluates matching case identities and compatible actual environments.
     comparison = compare_runs(baseline, candidate)
 
-    # Then: the delta remains descriptive but no regression verdict is made.
-    assert comparison.verdict == "not_comparable"
-    assert "config_sha256 differs" in comparison.reasons
-    assert comparison.case_comparisons[0].step_time_change_percent == pytest.approx(10.0)
+    # Then: full config hashes may differ, and the candidate threshold controls the verdict.
+    baseline_manifest = cast(
+        "dict[str, JsonValue]", json.loads(baseline.read_text(encoding="utf-8"))
+    )
+    candidate_manifest = cast(
+        "dict[str, JsonValue]", json.loads(candidate.read_text(encoding="utf-8"))
+    )
+    assert baseline_manifest["config_sha256"] != candidate_manifest["config_sha256"]
+    assert comparison.verdict == "pass"
+    assert "config_sha256 differs" not in comparison.reasons
+    assert comparison.regression_threshold_percent == 6.0
+    assert comparison.case_comparisons[0].step_time_change_percent == pytest.approx(5.5)
+    assert comparison.case_comparisons[0].regressed is False
 
 
 def test_compare_step_times_uses_a_strict_regression_threshold() -> None:
@@ -1177,6 +1201,45 @@ def test_compare_runs_rejects_case_scoped_worker_control_swaps(tmp_path: Path) -
     assert second_identity in {case.case_identity for case in comparison.case_comparisons}
     assert comparison.verdict == "not_comparable"
     assert "applied worker controls differ" in comparison.reasons
+
+
+def test_compare_runs_rejects_multiple_actual_control_signatures_within_one_case(
+    tmp_path: Path,
+) -> None:
+    """Reject a case whose successful workers did not apply one normalized methodology signature."""
+    # Given: one replicate in a complete candidate records a different actual affinity.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    response = cast("dict[str, JsonValue]", raw_records[0]["worker_response"])
+    cast("dict[str, JsonValue]", response["environment"])["effective_cpu_affinity"] = [0]
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    environment_path = candidate.parent / "environment.json"
+    environment = cast(
+        "dict[str, JsonValue]", json.loads(environment_path.read_text(encoding="utf-8"))
+    )
+    workers = cast("list[dict[str, JsonValue]]", environment["worker_environments"])
+    workers[0]["effective_cpu_affinity"] = [0]
+    _ = environment_path.write_text(
+        json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+    _rehash_manifest_artifact(candidate, environment_path)
+
+    # When: comparison reduces controls per aligned case instead of relying on replicate positions.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: it fails closed because the one candidate case used multiple control signatures.
+    assert comparison.verdict == "not_comparable"
+    assert "candidate case has inconsistent applied worker controls" in comparison.reasons
 
 
 @pytest.mark.parametrize(
