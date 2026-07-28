@@ -1,7 +1,7 @@
 # Stage 7B — Isolated and Reproducible CPU Benchmark v2 Design
 
-Date: 2026-07-28  
-Status: approved for implementation  
+Date: 2026-07-28
+Status: approved for implementation
 Scope: trustworthy CPU measurement infrastructure, not performance optimization
 
 ## 1. Goal and non-goals
