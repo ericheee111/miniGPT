@@ -418,10 +418,7 @@ def _validate_raw_outer_fields(
             manifest_path, "successful raw record has invalid lifecycle fields"
         )
     if status == "error" and (
-        not isinstance(error_type, str)
-        or not error_type
-        or not isinstance(message, str)
-        or return_code == 0
+        not isinstance(error_type, str) or not error_type or not isinstance(message, str)
     ):
         raise InvalidComparisonInputError(
             manifest_path, "failed raw record has invalid lifecycle fields"
@@ -687,6 +684,11 @@ def _failed_raw_record(
             raise InvalidComparisonInputError(
                 manifest_path, "failed raw worker response has an invalid field set"
             )
+        _ = _nonempty_string(response["error_type"], manifest_path, "worker failure error_type")
+        if not isinstance(response["message"], str):
+            raise InvalidComparisonInputError(
+                manifest_path, "worker failure message must be a string"
+            )
         if (
             response["protocol_version"] != 1
             or response["status"] != "error"
@@ -701,11 +703,6 @@ def _failed_raw_record(
         ):
             raise InvalidComparisonInputError(
                 manifest_path, "failed raw worker response disagrees with raw record"
-            )
-        _ = _nonempty_string(response["error_type"], manifest_path, "worker failure error_type")
-        if not isinstance(response["message"], str):
-            raise InvalidComparisonInputError(
-                manifest_path, "worker failure message must be a string"
             )
     return _RawSummaryRecord(
         identity, name, replicate, worker_pid, None, status="error", worker_controls=None

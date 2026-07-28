@@ -1063,3 +1063,105 @@ def test_compare_runs_accepts_valid_worker_declared_and_parent_only_failures(
     # Then: both retain evidence yet refuse a performance pass/fail verdict for partial data.
     assert comparison.verdict == "not_comparable"
     assert "candidate run status is partial" in comparison.reasons
+
+
+def test_compare_runs_accepts_parent_classified_invalid_response_with_zero_return_code(
+    tmp_path: Path,
+) -> None:
+    """Accept production-shaped invalid child output after the child exits successfully."""
+    # Given: the parent classifies malformed stdout after a zero-return-code child process.
+    baseline, candidate = _write_partial_failure_package(tmp_path, worker_declared=False)
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    raw_records[-1].update(
+        {"return_code": 0, "error_type": "InvalidWorkerResponse", "message": "malformed stdout"}
+    )
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When: strict comparison loads parent-only failure evidence.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: the partial run remains valid evidence but cannot receive a performance verdict.
+    assert comparison.verdict == "not_comparable"
+
+
+def test_compare_runs_rejects_zero_return_code_when_a_worker_declared_failure_exists(
+    tmp_path: Path,
+) -> None:
+    """Keep zero exit codes invalid when a nested worker failure claims the process failed."""
+    # Given: a valid worker-declared failure forges only its parent process return code.
+    baseline, candidate = _write_partial_failure_package(tmp_path, worker_declared=True)
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    raw_records[-1]["return_code"] = 0
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When/Then: only the parent-classified null-response path may retain a zero return code.
+    with pytest.raises(ValueError, match=r"worker-declared failure.*return_code"):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_accepts_empty_worker_declared_failure_messages(tmp_path: Path) -> None:
+    """Allow production-valid empty strings while retaining outer/nested message equality."""
+    # Given: a worker-declared failure records an empty message in both exact protocol locations.
+    baseline, candidate = _write_partial_failure_package(tmp_path, worker_declared=True)
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    failed = raw_records[-1]
+    failed["message"] = ""
+    cast("dict[str, JsonValue]", failed["worker_response"])["message"] = ""
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When/Then: empty but equal protocol messages remain valid partial evidence.
+    assert compare_runs(baseline, candidate).verdict == "not_comparable"
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_compare_runs_rejects_nonstring_worker_declared_failure_messages(
+    tmp_path: Path, *, nested: bool
+) -> None:
+    """Require message fields to be strings while permitting only the empty-string value."""
+    # Given: a worker-declared failure forges either its outer or nested message type.
+    baseline, candidate = _write_partial_failure_package(tmp_path, worker_declared=True)
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    failed = raw_records[-1]
+    target = cast("dict[str, JsonValue]", failed["worker_response"]) if nested else failed
+    target["message"] = 42
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When/Then: malformed message types cannot be treated as failure diagnostics.
+    with pytest.raises(ValueError, match="message"):
+        _ = compare_runs(baseline, candidate)
