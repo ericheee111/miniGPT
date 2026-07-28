@@ -832,6 +832,10 @@ def _load_execution_order(
         raise InvalidComparisonInputError(
             manifest_path, "execution_order.json case set differs from manifest"
         )
+    if set(raw_by_task) - task_keys:
+        raise InvalidComparisonInputError(
+            manifest_path, "raw replicate task is absent from execution_order.json"
+        )
     for identity, replicate, name, worker_pid, status in entries:
         if name != manifest_cases[identity]:
             raise InvalidComparisonInputError(
@@ -938,7 +942,7 @@ def _load_run_environment(manifest_path: Path, manifest: RunManifest) -> dict[st
 def _load_summaries(  # noqa: C901
     manifest_path: Path, manifest: RunManifest
 ) -> tuple[BenchmarkV2Summary, ...]:
-    """Load an exact summary schema and verify it covers the manifest case identity set once."""
+    """Load exact summary rows before reconciling their identities against durable raw evidence."""
     try:
         text = _read_bound_artifact(manifest_path, manifest, "summary.csv").decode("utf-8")
     except UnicodeDecodeError as error:
@@ -1027,11 +1031,10 @@ def _load_summaries(  # noqa: C901
                 stability=cast("Literal['insufficient_samples', 'unstable', 'stable']", stability),
             )
         )
-    expected = {case["case_identity"] for case in manifest.case_identities}
     observed = {summary.case_identity for summary in summaries}
-    if len(summaries) != len(observed) or observed != expected:
+    if len(summaries) != len(observed):
         raise InvalidComparisonInputError(
-            manifest_path, "summary.csv case identities do not match manifest"
+            manifest_path, "summary.csv case identities are not unique"
         )
     return tuple(sorted(summaries, key=lambda summary: summary.case_identity))
 
@@ -1071,25 +1074,29 @@ def _load_methodology(manifest_path: Path, manifest: RunManifest) -> _Methodolog
 
 def _validate_summaries_from_raw(
     manifest_path: Path,
+    manifest: RunManifest,
     summaries: tuple[BenchmarkV2Summary, ...],
     records: tuple[_RawSummaryRecord, ...],
     methodology: _Methodology,
 ) -> None:
-    """Recompute every summary from raw successes so eligibility cannot be self-declared."""
+    """Recompute observed summaries and retain exact complete-run coverage requirements."""
     summary_identities = {summary.case_identity for summary in summaries}
     raw_identities = {record.case_identity for record in records}
     if raw_identities != summary_identities:
         raise InvalidComparisonInputError(
             manifest_path, "raw replicate case identities do not match summary.csv"
         )
+    manifest_identities = {case["case_identity"] for case in manifest.case_identities}
+    if manifest.status == "complete" and summary_identities != manifest_identities:
+        raise InvalidComparisonInputError(
+            manifest_path, "complete summary.csv case identities do not match manifest"
+        )
     for summary in summaries:
         case_records = tuple(
             record for record in records if record.case_identity == summary.case_identity
         )
         if not case_records:
-            raise InvalidComparisonInputError(
-                manifest_path, "summary case has no successful raw replicates"
-            )
+            raise InvalidComparisonInputError(manifest_path, "summary case has no raw replicates")
         recomputed = summarize_replicates(
             case_records,
             minimum_replicates=methodology.minimum_replicates,
@@ -1112,7 +1119,7 @@ def _load_input(manifest_path: Path) -> _ComparisonInput:
     methodology = _load_methodology(manifest_path, manifest)
     summaries = _load_summaries(manifest_path, manifest)
     records = _load_raw_records(manifest_path, manifest)
-    _validate_summaries_from_raw(manifest_path, summaries, records, methodology)
+    _validate_summaries_from_raw(manifest_path, manifest, summaries, records, methodology)
     _load_execution_order(manifest_path, manifest, records)
     environment = _load_run_environment(manifest_path, manifest)
     raw_environment = _strict_json_document(
@@ -1239,7 +1246,11 @@ def _run_reasons(
     if missing or extra:
         reasons.append("case identity sets do not align")
     reasons.extend(f"environment differs: {mismatch.field}" for mismatch in environment_mismatches)
-    if baseline.task_worker_controls != candidate.task_worker_controls:
+    if (
+        baseline.manifest.status == "complete"
+        and candidate.manifest.status == "complete"
+        and baseline.task_worker_controls != candidate.task_worker_controls
+    ):
         reasons.append("applied worker controls differ")
     return reasons
 

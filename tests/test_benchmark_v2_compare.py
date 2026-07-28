@@ -8,7 +8,7 @@ import math
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pytest
 import yaml
@@ -432,6 +432,144 @@ def _add_second_case(manifest_path: Path) -> str:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
     )
     return second_identity
+
+
+def _write_two_case_incomplete_candidate(
+    parent: Path, *, status: Literal["partial", "failed"]
+) -> tuple[Path, Path, str]:
+    """Create strict two-case evidence interrupted after one success or before any raw result."""
+    baseline = _write_run_package(parent, "baseline")
+    _ = _add_second_case(baseline)
+    candidate = _write_run_package(parent, "candidate")
+    _ = _add_second_case(candidate)
+    directory = candidate.parent
+    raw_path = directory / "raw_replicates.jsonl"
+    summary_path = directory / "summary.csv"
+    environment_path = directory / "environment.json"
+    order_path = directory / "execution_order.json"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    order = cast("list[dict[str, JsonValue]]", json.loads(order_path.read_text(encoding="utf-8")))
+    if status == "partial":
+        retained_records = raw_records[:1]
+        retained_identity = cast("str", retained_records[0]["case_identity"])
+        summary_header, first_summary, _second_summary = summary_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        summary = dict(zip(summary_header.split(","), first_summary.split(","), strict=True))
+        summary.update(
+            {
+                "replicate_count": "1",
+                "success_count": "1",
+                "failure_count": "0",
+                "stability": "insufficient_samples",
+            }
+        )
+        summary_content = (
+            summary_header + "\n" + ",".join(summary[field] for field in _SUMMARY_FIELDS) + "\n"
+        )
+        order[0]["status"] = "ok"
+        order[0]["worker_pid"] = retained_records[0]["worker_pid"]
+    else:
+        retained_records = []
+        retained_identity = ""
+        summary_header = summary_path.read_text(encoding="utf-8").splitlines()[0]
+        summary_content = summary_header + "\n"
+    for entry in order[1 if status == "partial" else 0 :]:
+        entry["status"] = "pending"
+        entry["worker_pid"] = None
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in retained_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _ = summary_path.write_text(summary_content, encoding="utf-8", newline="\n")
+    environment = cast(
+        "dict[str, JsonValue]", json.loads(environment_path.read_text(encoding="utf-8"))
+    )
+    environment["run_status"] = status
+    environment["worker_environments"] = (
+        cast("list[JsonValue]", environment["worker_environments"])[:1]
+        if status == "partial"
+        else []
+    )
+    _ = environment_path.write_text(
+        json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    _ = order_path.write_text(
+        json.dumps(order, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    manifest = cast("dict[str, JsonValue]", json.loads(candidate.read_text(encoding="utf-8")))
+    manifest.update(
+        {
+            "status": status,
+            "completed_task_count": len(retained_records),
+            "successful_task_count": len(retained_records),
+            "failed_task_count": 0,
+        }
+    )
+    entries = cast("list[dict[str, JsonValue]]", manifest["artifacts"])
+    for path in (raw_path, summary_path, environment_path, order_path):
+        next(entry for entry in entries if entry["path"] == path.name).update(_hash_entry(path))
+    _ = candidate.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    return baseline, candidate, retained_identity
+
+
+def test_compare_runs_accepts_two_case_partial_evidence_after_first_success(
+    tmp_path: Path,
+) -> None:
+    """A report with pending cases after its first success remains valid partial evidence."""
+    # Given: a strict two-case package interrupted after one successful worker result.
+    baseline, candidate, observed_identity = _write_two_case_incomplete_candidate(
+        tmp_path, status="partial"
+    )
+
+    # When: comparison reconciles summary rows only with observed raw case identities.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: it retains the aligned observed delta but explicitly refuses a performance verdict.
+    assert comparison.verdict == "not_comparable"
+    assert "candidate run status is partial" in comparison.reasons
+    assert tuple(case.case_identity for case in comparison.case_comparisons) == (observed_identity,)
+    assert comparison.case_comparisons[0].step_time_change_percent == 0.0
+
+
+def test_compare_runs_accepts_two_case_failed_evidence_before_any_raw_record(
+    tmp_path: Path,
+) -> None:
+    """A failed package with only pending tasks remains valid evidence rather than corruption."""
+    # Given: a strict two-case package finalized before any worker could append raw evidence.
+    baseline, candidate, _ = _write_two_case_incomplete_candidate(tmp_path, status="failed")
+
+    # When: comparison loads the empty raw and summary artifacts with their pending execution order.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: the failed status is explicit, without fabricated case statistics.
+    assert comparison.verdict == "not_comparable"
+    assert "candidate run status is failed" in comparison.reasons
+    assert not comparison.case_comparisons
+
+
+def test_compare_runs_rejects_a_partial_observed_case_without_its_summary(
+    tmp_path: Path,
+) -> None:
+    """An incomplete run may omit pending cases but cannot omit an observed case summary."""
+    # Given: an otherwise valid partial package has one observed raw case and an empty summary.
+    baseline, candidate, _ = _write_two_case_incomplete_candidate(tmp_path, status="partial")
+    summary_path = candidate.parent / "summary.csv"
+    header = summary_path.read_text(encoding="utf-8").splitlines()[0]
+    _ = summary_path.write_text(header + "\n", encoding="utf-8", newline="\n")
+    _rehash_manifest_artifact(candidate, summary_path)
+
+    # When/Then: comparison rejects the forged omission rather than dropping observed raw evidence.
+    with pytest.raises(
+        ValueError, match=r"raw replicate case identities do not match summary\.csv"
+    ):
+        _ = compare_runs(baseline, candidate)
 
 
 def _write_partial_failure_package(parent: Path, *, worker_declared: bool) -> tuple[Path, Path]:
