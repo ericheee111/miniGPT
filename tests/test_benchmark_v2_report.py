@@ -691,7 +691,7 @@ def test_load_run_manifest_rejects_exact_set_and_environment_identity_violations
     _ = artifacts.run_manifest_path.write_text(json.dumps(document), encoding="utf-8")
 
     # When/Then: strict loading rejects every invalid package boundary before returning a manifest.
-    with pytest.raises(ValueError, match=r"artifact|run_id|environment"):
+    with pytest.raises(ValueError, match=r"artifact|run_id|environment|filesystem"):
         _ = load_run_manifest(artifacts.run_manifest_path)
 
 
@@ -867,4 +867,158 @@ def test_load_run_manifest_rejects_matching_non_sha_config_identities(tmp_path: 
 
     # When/Then: matching values cannot bypass the SHA-256 format requirement.
     with pytest.raises(ValueError, match="config_sha256"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
+@pytest.mark.parametrize("commit_sha", ["a" * 40, "b" * 64])
+def test_load_run_manifest_accepts_writer_git_object_id_lengths(
+    tmp_path: Path, commit_sha: str
+) -> None:
+    """Git SHA-1 and SHA-256 object IDs emitted by the writer remain loadable evidence."""
+    # Given: the immutable writer snapshot holds a lowercase Git SHA-1 or SHA-256 object ID.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / f"valid-git-{len(commit_sha)}"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+        environment_snapshot={"git": {"commit_sha": commit_sha, "branch": "main", "dirty": False}},
+    )
+
+    # When: the strict loader reads writer-produced Git object identity evidence.
+    manifest = load_run_manifest(artifacts.run_manifest_path)
+
+    # Then: both supported object ID lengths retain their exact identity.
+    assert manifest.git["commit_sha"] == commit_sha
+
+
+@pytest.mark.parametrize("commit_sha", ["c" * 41, "d" * 65, "e" * 39, "F" * 40])
+def test_load_run_manifest_rejects_unsupported_git_object_ids(
+    tmp_path: Path, commit_sha: str
+) -> None:
+    """Only lowercase SHA-1 and SHA-256 Git object IDs qualify as durable Git identity."""
+    # Given: manifest and environment agree on an unsupported object ID with current hash bindings.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / f"invalid-git-{len(commit_sha)}"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+    )
+    manifest = cast(
+        "dict[str, object]", json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+    )
+    environment = cast(
+        "dict[str, object]", json.loads(artifacts.environment_path.read_text(encoding="utf-8"))
+    )
+    git_identity = {"commit_sha": commit_sha, "branch": None, "dirty": None}
+    manifest["git"] = git_identity
+    run_environment = cast("dict[str, object]", environment["run_environment"])
+    run_environment["git"] = git_identity
+    _ = artifacts.environment_path.write_text(json.dumps(environment), encoding="utf-8")
+    entries = cast("list[dict[str, object]]", manifest["artifacts"])
+    environment_entry = next(entry for entry in entries if entry["path"] == "environment.json")
+    environment_entry["size_bytes"] = artifacts.environment_path.stat().st_size
+    environment_entry["sha256"] = hashlib.sha256(
+        artifacts.environment_path.read_bytes()
+    ).hexdigest()
+    _ = artifacts.run_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # When/Then: matching copies cannot make unsupported Git object IDs valid evidence.
+    with pytest.raises(ValueError, match="commit_sha"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
+@pytest.mark.parametrize("mutation", ["replace", "add"])
+def test_load_run_manifest_rejects_filesystem_change_during_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """A replacement or added entry between initial enumeration and final check is rejected."""
+    # Given: a valid package and an open seam that changes filesystem state during snapshotting.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / f"racy-{mutation}"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+    )
+    real_open = cast("Callable[..., TextIO]", Path.open)
+    original_summary = artifacts.summary_csv_path.read_bytes()
+    changed = False
+
+    def change_before_open(path: Path, *args: object, **kwargs: object) -> TextIO:
+        nonlocal changed
+        if not changed and path.name == "summary.csv":
+            changed = True
+            if mutation == "replace":
+                replacement = path.with_name("summary-replacement.csv")
+                _ = replacement.write_bytes(original_summary)
+                _ = replacement.replace(path)
+            else:
+                _ = (path.parent / "late-extra.txt").write_text("late\n", encoding="utf-8")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", change_before_open)
+
+    # When/Then: a loader that snapshots from stable handles rejects both deterministic changes.
+    with pytest.raises(ValueError, match=r"changed|filesystem entries"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
+@pytest.mark.parametrize("entry_name", ["summary.csv", "run_manifest.json"])
+def test_load_run_manifest_rejects_symlinked_package_entries(
+    tmp_path: Path, entry_name: str
+) -> None:
+    """A symlink cannot substitute for any regular finalized-package entry."""
+    # Given: a valid package entry is replaced by a same-byte external symlink target.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / f"symlink-{entry_name.replace('.', '-')}"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+    )
+    entry_path = run_directory / entry_name
+    external_target = tmp_path / f"external-{entry_name}"
+    _ = external_target.write_bytes(entry_path.read_bytes())
+    entry_path.unlink()
+    try:
+        entry_path.symlink_to(external_target)
+    except OSError as error:
+        pytest.skip(f"symlink creation unavailable: {error}")
+
+    # When/Then: strict loading rejects symlink substitution before trusting its target bytes.
+    with pytest.raises(ValueError, match="regular"):
         _ = load_run_manifest(artifacts.run_manifest_path)

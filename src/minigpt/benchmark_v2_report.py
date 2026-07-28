@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -51,7 +52,7 @@ _ARTIFACT_ENTRY_KEYS = frozenset({"path", "size_bytes", "sha256"})
 _SHA256_HEX_LENGTH = 64
 _SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
 _ENVIRONMENT_SCHEMA_VERSION = 2
-_GIT_COMMIT_SHA_LENGTH = 40
+_GIT_COMMIT_SHA_LENGTHS = frozenset({40, 64})
 _GIT_IDENTITY_KEYS = frozenset({"commit_sha", "branch", "dirty"})
 _ENVIRONMENT_DOCUMENT_KEYS = frozenset(
     {
@@ -157,6 +158,14 @@ class ArtifactManifestEntry:
     path: str
     size_bytes: int
     sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _FileSnapshot:
+    """Bind one regular file's bytes to metadata observed before and after its single read."""
+
+    content: bytes
+    metadata: tuple[int, int, int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -700,7 +709,7 @@ def _require_git_identity(value: object, context: str) -> dict[str, JsonValue]:
     commit_sha, branch, dirty = git["commit_sha"], git["branch"], git["dirty"]
     if commit_sha is not None and (
         not isinstance(commit_sha, str)
-        or len(commit_sha) != _GIT_COMMIT_SHA_LENGTH
+        or len(commit_sha) not in _GIT_COMMIT_SHA_LENGTHS
         or any(character not in _SHA256_HEX_DIGITS for character in commit_sha)
     ):
         msg = f"{context} has an invalid commit_sha"
@@ -714,9 +723,71 @@ def _require_git_identity(value: object, context: str) -> dict[str, JsonValue]:
     return cast("dict[str, JsonValue]", git)
 
 
+def _regular_file_metadata(stat_result: os.stat_result, context: str) -> tuple[int, int, int, int]:
+    """Return stable identity metadata while rejecting symlinks and every non-regular file."""
+    if not stat.S_ISREG(stat_result.st_mode):
+        msg = f"{context} must be a regular file"
+        raise ValueError(msg)
+    return (
+        stat_result.st_dev,
+        stat_result.st_ino,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+    )
+
+
+def _snapshot_regular_file(path: Path) -> _FileSnapshot:
+    """Read a regular file exactly once and reject replacements or mutations around that read."""
+    before_path = _regular_file_metadata(path.lstat(), str(path))
+    with path.open("rb") as stream:
+        before_handle = _regular_file_metadata(os.fstat(stream.fileno()), str(path))
+        if before_path != before_handle:
+            msg = f"file changed before snapshot read: {path.name}"
+            raise ValueError(msg)
+        content = stream.read()
+        after_handle = _regular_file_metadata(os.fstat(stream.fileno()), str(path))
+    after_path = _regular_file_metadata(path.lstat(), str(path))
+    if before_path != after_handle or before_path != after_path or len(content) != before_path[2]:
+        msg = f"file changed during snapshot read: {path.name}"
+        raise ValueError(msg)
+    return _FileSnapshot(content=content, metadata=before_path)
+
+
+def _require_finalized_run_entries(run_directory: Path) -> None:
+    """Require the exact finalized seven-entry package and no lifecycle or temporary residue."""
+    if frozenset(entry.name for entry in run_directory.iterdir()) != _FINALIZED_RUN_ENTRIES:
+        msg = "finalized run directory has unexpected filesystem entries"
+        raise ValueError(msg)
+
+
+def _snapshot_finalized_run(run_directory: Path) -> dict[str, _FileSnapshot]:
+    """Take a stable single-read snapshot of every entry in one finalized run package."""
+    _require_finalized_run_entries(run_directory)
+    snapshots = {
+        entry_name: _snapshot_regular_file(run_directory / entry_name)
+        for entry_name in _FINALIZED_RUN_ENTRIES
+    }
+    _require_finalized_run_entries(run_directory)
+    for entry_name, snapshot in snapshots.items():
+        if (
+            _regular_file_metadata((run_directory / entry_name).lstat(), entry_name)
+            != snapshot.metadata
+        ):
+            msg = f"file changed after snapshot read: {entry_name}"
+            raise ValueError(msg)
+    return snapshots
+
+
 def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR0915
     """Load a strict self-excluded manifest without trusting malformed artifact metadata."""
-    raw_document = cast("object", json.loads(path.read_text(encoding="utf-8")))
+    if path.name != "run_manifest.json":
+        msg = "manifest path must be the finalized run_manifest.json entry"
+        raise ValueError(msg)
+    resolved_run_directory = path.parent.resolve()
+    snapshots = _snapshot_finalized_run(resolved_run_directory)
+    raw_document = cast(
+        "object", json.loads(snapshots["run_manifest.json"].content.decode("utf-8"))
+    )
     document = _require_mapping(raw_document, "run manifest")
     if frozenset(document) != _MANIFEST_KEYS:
         msg = "run manifest has an invalid field set"
@@ -762,22 +833,12 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
     if frozenset(artifact_paths) != _REQUIRED_BOUND_ARTIFACTS:
         msg = "run manifest artifact paths must be the required self-excluded set"
         raise ValueError(msg)
-    resolved_run_directory = path.parent.resolve()
-    if (
-        frozenset(entry.name for entry in resolved_run_directory.iterdir())
-        != _FINALIZED_RUN_ENTRIES
-    ):
-        msg = "finalized run directory has unexpected filesystem entries"
-        raise ValueError(msg)
     for artifact in artifacts:
         bound_path = (resolved_run_directory / artifact.path).resolve()
         if not bound_path.is_relative_to(resolved_run_directory):
             msg = f"bound artifact escapes run directory: {artifact.path}"
             raise ValueError(msg)
-        if not bound_path.is_file():
-            msg = f"bound artifact is missing: {artifact.path}"
-            raise ValueError(msg)
-        content = bound_path.read_bytes()
+        content = snapshots[artifact.path].content
         if (
             len(content) != artifact.size_bytes
             or hashlib.sha256(content).hexdigest() != artifact.sha256
@@ -821,7 +882,7 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
     git = _require_git_identity(document["git"], "run manifest git")
     raw_environment = cast(
         "object",
-        json.loads((resolved_run_directory / "environment.json").read_text(encoding="utf-8")),
+        json.loads(snapshots["environment.json"].content.decode("utf-8")),
     )
     environment = _require_mapping(raw_environment, "environment artifact")
     if frozenset(environment) != _ENVIRONMENT_DOCUMENT_KEYS:
