@@ -4,3 +4,4 @@ docs/results/reference-training/*.json text eol=crlf
 docs/results/reference-training/*.txt text eol=crlf
 docs/results/reference-training/*.yaml text eol=crlf
 docs/results/reference-training/*.png binary
+tests/fixtures/benchmark_v2/** text eol=lf

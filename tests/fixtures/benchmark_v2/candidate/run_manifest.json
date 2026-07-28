@@ -1,0 +1,22 @@
+{
+  "artifacts": [
+    {"path": "environment.json", "sha256": "a2afa7b551da5f9ff5c503e559ec6413949f5ab06bd54dde65cbcba7619404bc", "size_bytes": 967},
+    {"path": "resolved_config.yaml", "sha256": "662e77ce17c79d82a94ef365fddb5ff9fb5a7095de42ca204469894cfdb67f66", "size_bytes": 52},
+    {"path": "raw_replicates.jsonl", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "size_bytes": 0},
+    {"path": "summary.csv", "sha256": "1e7bfe288b9806f22ff4a27633889e350b8199ff5e6dd6909f4383fb4344a74f", "size_bytes": 435},
+    {"path": "summary.md", "sha256": "21f44f8bc06c4bc5aa5c6ac691711c910db1d8ceae8fc4a992e18ad22c64079e", "size_bytes": 134},
+    {"path": "execution_order.json", "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570", "size_bytes": 3}
+  ],
+  "case_identities": [{"case_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "case_name": "fixed-case"}],
+  "completed_task_count": 3,
+  "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "ended_at_utc": "2026-07-28T01:02:04+00:00",
+  "expected_task_count": 3,
+  "failed_task_count": 0,
+  "git": {"branch": "candidate", "commit_sha": "dddddddddddddddddddddddddddddddddddddddd", "dirty": true},
+  "run_id": "candidate",
+  "schema_version": 2,
+  "started_at_utc": "2026-07-28T01:02:03+00:00",
+  "status": "complete",
+  "successful_task_count": 3
+}
