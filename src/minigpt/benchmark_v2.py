@@ -756,12 +756,28 @@ def _append_durable_raw_record(raw_stream: TextIO, record: RawReplicate) -> None
         )
         raw_stream.flush()
         os.fsync(raw_stream.fileno())
-    except KeyboardInterrupt:
-        _ = raw_stream.seek(durable_offset)
-        _ = raw_stream.truncate()
-        raw_stream.flush()
-        os.fsync(raw_stream.fileno())
+    except (KeyboardInterrupt, Exception):
+        _rollback_durable_raw_record(raw_stream, durable_offset)
         raise
+
+
+def _rollback_durable_raw_record(raw_stream: TextIO, durable_offset: int) -> None:
+    """Attempt every rollback step without replacing the append operation's exception."""
+
+    def seek() -> None:
+        _ = raw_stream.seek(durable_offset)
+
+    def truncate() -> None:
+        _ = raw_stream.truncate()
+
+    def flush() -> None:
+        raw_stream.flush()
+
+    def sync() -> None:
+        os.fsync(raw_stream.fileno())
+
+    for rollback_operation in (seek, truncate, flush, sync):
+        _best_effort(rollback_operation)
 
 
 def run_benchmark_v2(

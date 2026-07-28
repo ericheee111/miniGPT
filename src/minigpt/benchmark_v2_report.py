@@ -50,6 +50,19 @@ _MANIFEST_KEYS = frozenset(
 _ARTIFACT_ENTRY_KEYS = frozenset({"path", "size_bytes", "sha256"})
 _SHA256_HEX_LENGTH = 64
 _SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
+_ENVIRONMENT_SCHEMA_VERSION = 2
+_GIT_COMMIT_SHA_LENGTH = 40
+_GIT_IDENTITY_KEYS = frozenset({"commit_sha", "branch", "dirty"})
+_ENVIRONMENT_DOCUMENT_KEYS = frozenset(
+    {
+        "schema_version",
+        "run_id",
+        "run_status",
+        "config_sha256",
+        "run_environment",
+        "worker_environments",
+    }
+)
 _REQUIRED_BOUND_ARTIFACTS = frozenset(
     {
         "environment.json",
@@ -60,6 +73,7 @@ _REQUIRED_BOUND_ARTIFACTS = frozenset(
         "execution_order.json",
     }
 )
+_FINALIZED_RUN_ENTRIES = _REQUIRED_BOUND_ARTIFACTS | frozenset({"run_manifest.json"})
 
 
 class _PriorityProcess(Protocol):
@@ -665,6 +679,41 @@ def _require_mapping(value: object, context: str) -> dict[str, object]:
     return cast("dict[str, object]", mapping)
 
 
+def _require_sha256(value: object, context: str) -> str:
+    """Validate a lowercase hexadecimal SHA-256 identity before it is compared or trusted."""
+    if (
+        not isinstance(value, str)
+        or len(value) != _SHA256_HEX_LENGTH
+        or any(character not in _SHA256_HEX_DIGITS for character in value)
+    ):
+        msg = f"{context} must be a lowercase SHA-256 digest"
+        raise ValueError(msg)
+    return value
+
+
+def _require_git_identity(value: object, context: str) -> dict[str, JsonValue]:
+    """Validate the complete Git identity schema emitted in immutable environment evidence."""
+    git = _require_mapping(value, context)
+    if frozenset(git) != _GIT_IDENTITY_KEYS:
+        msg = f"{context} has an invalid field set"
+        raise ValueError(msg)
+    commit_sha, branch, dirty = git["commit_sha"], git["branch"], git["dirty"]
+    if commit_sha is not None and (
+        not isinstance(commit_sha, str)
+        or len(commit_sha) != _GIT_COMMIT_SHA_LENGTH
+        or any(character not in _SHA256_HEX_DIGITS for character in commit_sha)
+    ):
+        msg = f"{context} has an invalid commit_sha"
+        raise ValueError(msg)
+    if branch is not None and not isinstance(branch, str):
+        msg = f"{context} has an invalid branch"
+        raise ValueError(msg)
+    if dirty is not None and not isinstance(dirty, bool):
+        msg = f"{context} has an invalid dirty flag"
+        raise ValueError(msg)
+    return cast("dict[str, JsonValue]", git)
+
+
 def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR0915
     """Load a strict self-excluded manifest without trusting malformed artifact metadata."""
     raw_document = cast("object", json.loads(path.read_text(encoding="utf-8")))
@@ -714,6 +763,12 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
         msg = "run manifest artifact paths must be the required self-excluded set"
         raise ValueError(msg)
     resolved_run_directory = path.parent.resolve()
+    if (
+        frozenset(entry.name for entry in resolved_run_directory.iterdir())
+        != _FINALIZED_RUN_ENTRIES
+    ):
+        msg = "finalized run directory has unexpected filesystem entries"
+        raise ValueError(msg)
     for artifact in artifacts:
         bound_path = (resolved_run_directory / artifact.path).resolve()
         if not bound_path.is_relative_to(resolved_run_directory):
@@ -755,29 +810,55 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
     ):
         msg = "run manifest has an invalid integer field"
         raise ValueError(msg)
-    string_fields = ("run_id", "started_at_utc", "ended_at_utc", "config_sha256")
+    string_fields = ("run_id", "started_at_utc", "ended_at_utc")
     if any(not isinstance(document[field], str) or not document[field] for field in string_fields):
         msg = "run manifest has an invalid string field"
         raise ValueError(msg)
+    config_sha256 = _require_sha256(document["config_sha256"], "run manifest config_sha256")
     if path.parent.name != document["run_id"]:
         msg = "run manifest run_id does not match its run directory"
         raise ValueError(msg)
-    git = _require_mapping(document["git"], "run manifest git")
+    git = _require_git_identity(document["git"], "run manifest git")
     raw_environment = cast(
         "object",
         json.loads((resolved_run_directory / "environment.json").read_text(encoding="utf-8")),
     )
     environment = _require_mapping(raw_environment, "environment artifact")
+    if frozenset(environment) != _ENVIRONMENT_DOCUMENT_KEYS:
+        msg = "environment artifact has an invalid field set"
+        raise ValueError(msg)
+    environment_schema_version = environment["schema_version"]
+    if (
+        not isinstance(environment_schema_version, int)
+        or isinstance(environment_schema_version, bool)
+        or environment_schema_version != _ENVIRONMENT_SCHEMA_VERSION
+    ):
+        msg = "environment artifact has an invalid schema_version"
+        raise ValueError(msg)
+    environment_status = environment["run_status"]
+    if environment_status not in {"complete", "partial", "failed"}:
+        msg = "environment artifact has an invalid run_status"
+        raise ValueError(msg)
+    if environment_status != status:
+        msg = "environment artifact run_status does not match the manifest"
+        raise ValueError(msg)
+    if not isinstance(environment["worker_environments"], list):
+        msg = "environment artifact worker_environments must be a list"
+        raise TypeError(msg)
     if environment.get("run_id") != document["run_id"]:
         msg = "environment artifact run_id does not match the manifest"
         raise ValueError(msg)
-    if environment.get("config_sha256") != document["config_sha256"]:
+    environment_config_sha256 = _require_sha256(
+        environment["config_sha256"], "environment artifact config_sha256"
+    )
+    if environment_config_sha256 != config_sha256:
         msg = "environment artifact config_sha256 does not match the manifest"
         raise ValueError(msg)
     run_environment = _require_mapping(
         environment.get("run_environment"), "environment run_environment"
     )
-    if run_environment.get("git") != git:
+    environment_git = _require_git_identity(run_environment.get("git"), "environment artifact git")
+    if environment_git != git:
         msg = "environment artifact git identity does not match the manifest"
         raise ValueError(msg)
     return RunManifest(
@@ -786,8 +867,8 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
         status=cast("RunStatus", status),
         started_at_utc=cast("str", document["started_at_utc"]),
         ended_at_utc=cast("str", document["ended_at_utc"]),
-        config_sha256=cast("str", document["config_sha256"]),
-        git=cast("dict[str, JsonValue]", git),
+        config_sha256=config_sha256,
+        git=git,
         expected_task_count=cast("int", document["expected_task_count"]),
         completed_task_count=cast("int", document["completed_task_count"]),
         successful_task_count=cast("int", document["successful_task_count"]),

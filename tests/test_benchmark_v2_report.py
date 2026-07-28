@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import replace
@@ -21,6 +22,7 @@ from minigpt.benchmark_v2_types import BenchmarkV2Case, BenchmarkV2Config, Profi
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import TextIO
 
     from minigpt.benchmark_v2 import BenchmarkTask
     from minigpt.benchmark_v2_config import JsonValue
@@ -141,6 +143,49 @@ def failed_record(task: BenchmarkTask) -> RawReplicate:
         stderr="",
         worker_response=None,
     )
+
+
+class RollbackFailingStream:
+    """Inject independent rollback-operation failures after one interrupted raw write."""
+
+    def __init__(self, interruption: KeyboardInterrupt) -> None:
+        """Retain the exact interruption that a write operation raises."""
+        self.interruption: KeyboardInterrupt = interruption
+        self.calls: list[str] = []
+
+    def tell(self) -> int:
+        """Report a stable pre-write offset."""
+        return 0
+
+    def write(self, content: str) -> int:
+        """Interrupt the raw write before any bytes become durable."""
+        _ = content
+        raise self.interruption
+
+    def seek(self, offset: int) -> int:
+        """Fail the first rollback action after recording its attempted execution."""
+        _ = offset
+        self.calls.append("seek")
+        msg = "seek rollback failed"
+        raise RuntimeError(msg)
+
+    def truncate(self, size: int | None = None) -> int:
+        """Fail the second rollback action after recording its attempted execution."""
+        _ = size
+        self.calls.append("truncate")
+        msg = "truncate rollback failed"
+        raise RuntimeError(msg)
+
+    def flush(self) -> None:
+        """Fail the third rollback action after recording its attempted execution."""
+        self.calls.append("flush")
+        msg = "flush rollback failed"
+        raise RuntimeError(msg)
+
+    def fileno(self) -> int:
+        """Supply a descriptor so the injected fsync can fail independently."""
+        self.calls.append("fileno")
+        return 123
 
 
 @pytest.mark.parametrize(
@@ -388,7 +433,7 @@ def test_load_run_manifest_verifies_each_bound_artifact(tmp_path: Path, mutation
         )
 
     # When/Then: strict loading detects a broken bound artifact before returning metadata.
-    with pytest.raises(ValueError, match=r"artifact|bound"):
+    with pytest.raises(ValueError, match=r"artifact|bound|filesystem"):
         _ = load_run_manifest(artifacts.run_manifest_path)
 
 
@@ -578,7 +623,9 @@ def test_snapshot_without_git_commit_never_rereads_repository(
     assert run_id.split("-")[1] == "unknown00000"
 
 
-@pytest.mark.parametrize("mutation", ["drive", "missing", "extra", "run_id", "environment"])
+@pytest.mark.parametrize(
+    "mutation", ["drive", "missing", "extra", "run_id", "environment", "status"]
+)
 def test_load_run_manifest_rejects_exact_set_and_environment_identity_violations(
     tmp_path: Path, mutation: str
 ) -> None:
@@ -619,7 +666,7 @@ def test_load_run_manifest_rejects_exact_set_and_environment_identity_violations
         )
     elif mutation == "run_id":
         document["run_id"] = "different-run"
-    else:
+    elif mutation == "environment":
         environment = cast(
             "dict[str, object]", json.loads(artifacts.environment_path.read_text(encoding="utf-8"))
         )
@@ -630,8 +677,194 @@ def test_load_run_manifest_rejects_exact_set_and_environment_identity_violations
         environment_entry["sha256"] = hashlib.sha256(
             artifacts.environment_path.read_bytes()
         ).hexdigest()
+    else:
+        environment = cast(
+            "dict[str, object]", json.loads(artifacts.environment_path.read_text(encoding="utf-8"))
+        )
+        environment["run_status"] = "failed"
+        _ = artifacts.environment_path.write_text(json.dumps(environment), encoding="utf-8")
+        environment_entry = next(entry for entry in entries if entry["path"] == "environment.json")
+        environment_entry["size_bytes"] = artifacts.environment_path.stat().st_size
+        environment_entry["sha256"] = hashlib.sha256(
+            artifacts.environment_path.read_bytes()
+        ).hexdigest()
     _ = artifacts.run_manifest_path.write_text(json.dumps(document), encoding="utf-8")
 
     # When/Then: strict loading rejects every invalid package boundary before returning a manifest.
     with pytest.raises(ValueError, match=r"artifact|run_id|environment"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
+def test_raw_rollback_preserves_original_interrupt_and_finalizes_failed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An interrupted raw append survives every rollback failure and still reaches finalization."""
+    # Given: raw rollback seeks, truncates, flushes, and fsyncs all fail after one exact interrupt.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    interruption = KeyboardInterrupt("raw write interrupted")
+    rollback_stream = RollbackFailingStream(interruption)
+    append_record = cast(
+        "Callable[[TextIO, RawReplicate], None]",
+        benchmark_module.__dict__["_append_durable_raw_record"],
+    )
+    real_fsync = os.fsync
+
+    def fail_fsync(descriptor: int) -> None:
+        if descriptor != 123:
+            real_fsync(descriptor)
+            return
+        rollback_stream.calls.append("fsync")
+        msg = "fsync rollback failed"
+        raise RuntimeError(msg)
+
+    def interrupt_raw_append(raw_stream: TextIO, record: RawReplicate) -> None:
+        _ = raw_stream
+        append_record(cast("TextIO", cast("object", rollback_stream)), record)
+
+    def successful_launcher(
+        command: list[str], request_json: str, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (request_json, timeout)
+        return subprocess.CompletedProcess(
+            command, 0, json.dumps(worker_success_document(tasks[0], 12_345)), ""
+        )
+
+    monkeypatch.setattr(os, "fsync", fail_fsync)
+    monkeypatch.setattr(benchmark_module, "_append_durable_raw_record", interrupt_raw_append)
+
+    # When: the first real worker record encounters the interrupted, rollback-failing append.
+    with pytest.raises(KeyboardInterrupt) as raised:
+        _ = run_benchmark_v2(config, launcher=successful_launcher)
+
+    # Then: the exact original interrupt survives and the outer lifecycle finalizes failed evidence.
+    assert raised.value is interruption
+    assert str(raised.value) == "raw write interrupted"
+    assert rollback_stream.calls == ["seek", "truncate", "flush", "fileno", "fsync"]
+    (run_directory,) = tuple(tmp_path.iterdir())
+    assert load_run_manifest(run_directory / "run_manifest.json").status == "failed"
+    assert not (run_directory / "run_state.json").exists()
+
+
+@pytest.mark.parametrize("unexpected_entry", ["extra.txt", "run_state.json", "unfinished"])
+def test_load_run_manifest_rejects_unbound_finalized_run_entries(
+    tmp_path: Path, unexpected_entry: str
+) -> None:
+    """A finalized package admits only its six bound artifacts and self-excluded manifest."""
+    # Given: a valid package gains one unbound file, lifecycle state, or directory entry.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / f"unbound-{unexpected_entry}"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+    )
+    unexpected_path = run_directory / unexpected_entry
+    if unexpected_entry == "unfinished":
+        unexpected_path.mkdir()
+    else:
+        _ = unexpected_path.write_text("unexpected\n", encoding="utf-8")
+
+    # When/Then: exact finalized-package membership rejects every extra filesystem entry.
+    with pytest.raises(ValueError, match="filesystem entries"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
+@pytest.mark.parametrize(
+    "git_identity",
+    [
+        {"commit_sha": "a" * 39, "branch": None, "dirty": None},
+        {"commit_sha": None, "branch": 42, "dirty": False},
+        {"commit_sha": None, "branch": None, "dirty": None, "extra": "forbidden"},
+    ],
+)
+def test_load_run_manifest_rejects_matching_malformed_git_identities(
+    tmp_path: Path, git_identity: dict[str, object]
+) -> None:
+    """Matching manifest and environment Git mappings must still conform to the writer schema."""
+    # Given: both identity copies agree on a malformed commit, type, or forbidden key.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / "malformed-git"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+    )
+    manifest = cast(
+        "dict[str, object]", json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+    )
+    environment = cast(
+        "dict[str, object]", json.loads(artifacts.environment_path.read_text(encoding="utf-8"))
+    )
+    manifest["git"] = git_identity
+    run_environment = cast("dict[str, object]", environment["run_environment"])
+    run_environment["git"] = git_identity
+    _ = artifacts.environment_path.write_text(json.dumps(environment), encoding="utf-8")
+    entries = cast("list[dict[str, object]]", manifest["artifacts"])
+    environment_entry = next(entry for entry in entries if entry["path"] == "environment.json")
+    environment_entry["size_bytes"] = artifacts.environment_path.stat().st_size
+    environment_entry["sha256"] = hashlib.sha256(
+        artifacts.environment_path.read_bytes()
+    ).hexdigest()
+    _ = artifacts.run_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # When/Then: matching values cannot bypass the strict Git identity schema.
+    with pytest.raises(ValueError, match="git"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
+
+
+def test_load_run_manifest_rejects_matching_non_sha_config_identities(tmp_path: Path) -> None:
+    """Matching manifest and environment config identities must be lowercase SHA-256 digests."""
+    # Given: both identity copies agree on a non-SHA config token and the hash binding is updated.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0 + task.replicate_index) for task in tasks)
+    run_directory = tmp_path / "malformed-config-sha"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc="2026-07-28T01:02:03+00:00",
+        ended_at_utc="2026-07-28T01:02:04+00:00",
+    )
+    manifest = cast(
+        "dict[str, object]", json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+    )
+    environment = cast(
+        "dict[str, object]", json.loads(artifacts.environment_path.read_text(encoding="utf-8"))
+    )
+    non_sha = "a" * 63
+    manifest["config_sha256"] = non_sha
+    environment["config_sha256"] = non_sha
+    _ = artifacts.environment_path.write_text(json.dumps(environment), encoding="utf-8")
+    entries = cast("list[dict[str, object]]", manifest["artifacts"])
+    environment_entry = next(entry for entry in entries if entry["path"] == "environment.json")
+    environment_entry["size_bytes"] = artifacts.environment_path.stat().st_size
+    environment_entry["sha256"] = hashlib.sha256(
+        artifacts.environment_path.read_bytes()
+    ).hexdigest()
+    _ = artifacts.run_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # When/Then: matching values cannot bypass the SHA-256 format requirement.
+    with pytest.raises(ValueError, match="config_sha256"):
         _ = load_run_manifest(artifacts.run_manifest_path)
