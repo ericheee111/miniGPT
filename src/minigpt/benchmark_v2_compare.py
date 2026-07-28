@@ -10,8 +10,10 @@ import os
 import uuid
 from collections import Counter
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from decimal import Decimal
 from io import StringIO
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 import yaml
@@ -21,8 +23,6 @@ from minigpt.benchmark_v2_report import load_run_manifest
 from minigpt.benchmark_v2_statistics import BenchmarkV2Summary, summarize_replicates
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from minigpt.benchmark_v2_config import JsonValue
     from minigpt.benchmark_v2_report import RunManifest
 
@@ -90,6 +90,57 @@ _RAW_REPLICATE_KEYS = frozenset(
         "stdout",
         "stderr",
         "worker_response",
+    }
+)
+_SUCCESS_RESPONSE_KEYS = frozenset(
+    {
+        "protocol_version",
+        "status",
+        "worker_pid",
+        "started_at_utc",
+        "ended_at_utc",
+        "case_identity",
+        "case_name",
+        "replicate_index",
+        "warmup_steps",
+        "measurement_steps",
+        "elapsed_seconds",
+        "step_time_ms",
+        "tokens_per_second",
+        "tokens_per_step",
+        "parameter_count",
+        "final_rss_mib",
+        "peak_rss_mib",
+        "peak_rss_method",
+        "peak_rss_sampling_interval_ms",
+        "environment",
+    }
+)
+_FAILURE_RESPONSE_KEYS = frozenset(
+    {
+        "protocol_version",
+        "status",
+        "worker_pid",
+        "started_at_utc",
+        "ended_at_utc",
+        "case_identity",
+        "case_name",
+        "replicate_index",
+        "error_type",
+        "message",
+    }
+)
+_PEAK_RSS_METHODS = frozenset({"windows_peak_working_set", "linux_getrusage_ru_maxrss"})
+_EXECUTION_ORDER_KEYS = frozenset(
+    {
+        "execution_index",
+        "task_id",
+        "case_name",
+        "case_identity",
+        "replicate_index",
+        "worker_seed",
+        "worker_pid",
+        "status",
     }
 )
 
@@ -174,8 +225,18 @@ class _ComparisonInput:
     manifest: RunManifest
     run_environment: dict[str, JsonValue]
     worker_environment_signatures: tuple[tuple[object, ...], ...]
+    task_worker_controls: tuple[tuple[str, int, _WorkerControls], ...]
     summaries: tuple[BenchmarkV2Summary, ...]
     regression_threshold_percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerControls:
+    """Bind all worker-observed methodology controls that can affect timing comparison."""
+
+    protocol_version: int
+    peak_rss_method: str
+    environment_signature: tuple[object, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,8 +246,10 @@ class _RawSummaryRecord:
     case_identity: str
     case_name: str
     replicate_index: int
+    worker_pid: int | None
     worker_response: dict[str, JsonValue] | None
     status: Literal["ok", "error"]
+    worker_controls: _WorkerControls | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +269,38 @@ def _require_mapping(value: object, path: Path, context: str) -> dict[str, objec
     if any(not isinstance(key, str) for key in mapping):
         raise InvalidComparisonInputError(path, f"{context} must be an object with string keys")
     return cast("dict[str, object]", mapping)
+
+
+def _reject_json_constant(value: str) -> object:
+    """Refuse JavaScript-style non-finite constants that Python's permissive decoder accepts."""
+    raise InvalidComparisonInputError(Path("<json>"), f"non-finite JSON constant {value!r}")
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Build one decoded JSON object while rejecting duplicate keys at every nesting level."""
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise InvalidComparisonInputError(Path("<json>"), f"duplicate JSON object key {key!r}")
+        document[key] = value
+    return document
+
+
+def _strict_json_document(content: bytes, path: Path, context: str) -> object:
+    """Decode one UTF-8 JSON artifact with duplicate-key and non-finite-value rejection."""
+    try:
+        return cast(
+            "object",
+            json.loads(
+                content.decode("utf-8"),
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_json_constant,
+            ),
+        )
+    except UnicodeDecodeError as error:
+        raise InvalidComparisonInputError(path, f"{context} is not valid UTF-8 JSON") from error
+    except json.JSONDecodeError as error:
+        raise InvalidComparisonInputError(path, f"{context} is not valid JSON") from error
 
 
 def _require_sha256(value: object, path: Path, context: str) -> str:
@@ -228,6 +323,110 @@ def _require_integer(value: str, path: Path, context: str) -> int:
     if parsed < 0 or str(parsed) != value:
         raise InvalidComparisonInputError(path, f"{context} must be a non-negative integer")
     return parsed
+
+
+def _optional_worker_pid(value: object, path: Path, context: str) -> int | None:
+    """Read an absent or positive worker PID without treating booleans as integers."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise InvalidComparisonInputError(path, f"{context} must be a positive integer or null")
+    return value
+
+
+def _integer_value(
+    value: object, path: Path, context: str, *, positive: bool, non_negative: bool
+) -> int:
+    """Require one strict JSON integer with the requested lower-bound contract."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidComparisonInputError(path, f"{context} must be an integer")
+    if positive and value <= 0:
+        raise InvalidComparisonInputError(path, f"{context} must be positive")
+    if non_negative and value < 0:
+        raise InvalidComparisonInputError(path, f"{context} must be non-negative")
+    return value
+
+
+def _positive_finite_number(value: object, path: Path, context: str) -> float:
+    """Require a finite positive JSON number while rejecting booleans and non-finite floats."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InvalidComparisonInputError(path, f"{context} must be a positive finite number")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise InvalidComparisonInputError(path, f"{context} must be a positive finite number")
+    return number
+
+
+def _nonempty_string(value: object, path: Path, context: str) -> str:
+    """Require one protocol string that is not empty."""
+    if not isinstance(value, str) or not value:
+        raise InvalidComparisonInputError(path, f"{context} must be a non-empty string")
+    return value
+
+
+def _timestamp(value: object, path: Path, context: str) -> datetime:
+    """Require one timezone-aware ISO timestamp and return it for lifecycle ordering checks."""
+    if not isinstance(value, str):
+        raise InvalidComparisonInputError(path, f"{context} must be a timestamp string")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise InvalidComparisonInputError(path, f"{context} must be an ISO timestamp") from error
+    if parsed.tzinfo is None:
+        raise InvalidComparisonInputError(path, f"{context} must be timezone-aware")
+    return parsed
+
+
+def _validate_raw_outer_fields(
+    document: dict[str, object], manifest_path: Path, status: Literal["ok", "error"]
+) -> int | None:
+    """Validate every outer raw-record field before interpreting its worker response evidence."""
+    worker_pid = _optional_worker_pid(document["worker_pid"], manifest_path, "raw worker_pid")
+    started = document["started_at_utc"]
+    ended = document["ended_at_utc"]
+    if (started is None) != (ended is None):
+        raise InvalidComparisonInputError(
+            manifest_path, "raw worker timestamps must both be null or set"
+        )
+    if started is not None and _timestamp(
+        started, manifest_path, "raw started_at_utc"
+    ) > _timestamp(ended, manifest_path, "raw ended_at_utc"):
+        raise InvalidComparisonInputError(
+            manifest_path, "raw worker lifecycle ends before it starts"
+        )
+    if not isinstance(document["stdout"], str) or not isinstance(document["stderr"], str):
+        raise InvalidComparisonInputError(manifest_path, "raw stdout and stderr must be strings")
+    return_code = document["return_code"]
+    if return_code is not None:
+        _ = _integer_value(
+            return_code, manifest_path, "raw return_code", positive=False, non_negative=False
+        )
+    error_type = document["error_type"]
+    message = document["message"]
+    if error_type is not None and not isinstance(error_type, str):
+        raise InvalidComparisonInputError(manifest_path, "raw error_type must be a string or null")
+    if message is not None and not isinstance(message, str):
+        raise InvalidComparisonInputError(manifest_path, "raw message must be a string or null")
+    if status == "ok" and (
+        worker_pid is None
+        or started is None
+        or return_code != 0
+        or error_type is not None
+        or message is not None
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path, "successful raw record has invalid lifecycle fields"
+        )
+    if status == "error" and (
+        not isinstance(error_type, str)
+        or not error_type
+        or not isinstance(message, str)
+        or return_code == 0
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path, "failed raw record has invalid lifecycle fields"
+        )
+    return worker_pid
 
 
 def _require_number(value: str, path: Path, context: str, *, nullable: bool) -> float | None:
@@ -302,7 +501,7 @@ def _worker_variables(
     return tuple(sorted((name, cast("str | None", item)) for name, item in variables.items()))
 
 
-def _worker_signature(value: object, path: Path) -> tuple[object, ...]:
+def _worker_environment_signature(value: object, path: Path) -> tuple[object, ...]:
     """Validate and normalize the worker-applied controls relevant to performance comparison."""
     environment = _require_mapping(value, path, "worker environment")
     if frozenset(environment) != _WORKER_ENVIRONMENT_KEYS:
@@ -346,14 +545,25 @@ def _raw_record_identity(
 
 
 def _successful_raw_record(
-    document: dict[str, object], manifest_path: Path, identity: str, name: str, replicate: int
-) -> tuple[_RawSummaryRecord, tuple[object, ...]]:
+    document: dict[str, object],
+    manifest_path: Path,
+    task: tuple[str, str, int, int | None],
+) -> _RawSummaryRecord:
     """Validate the metrics and actual controls reported by one successful worker."""
+    identity, name, replicate, worker_pid = task
     response = _require_mapping(
         document["worker_response"], manifest_path, "successful raw worker response"
     )
+    if frozenset(response) != _SUCCESS_RESPONSE_KEYS:
+        raise InvalidComparisonInputError(
+            manifest_path, "successful raw worker response has an invalid field set"
+        )
     if (
-        response.get("status") != "ok"
+        response["protocol_version"] != 1
+        or response["status"] != "ok"
+        or response.get("worker_pid") != worker_pid
+        or response.get("started_at_utc") != document["started_at_utc"]
+        or response.get("ended_at_utc") != document["ended_at_utc"]
         or response.get("case_identity") != identity
         or response.get("case_name") != name
         or response.get("replicate_index") != replicate
@@ -361,52 +571,146 @@ def _successful_raw_record(
         raise InvalidComparisonInputError(
             manifest_path, "successful raw worker response disagrees with raw record"
         )
-    for field in ("step_time_ms", "tokens_per_second", "final_rss_mib", "peak_rss_mib"):
-        value = response.get(field)
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(float(value))
-            or float(value) <= 0.0
-        ):
-            raise InvalidComparisonInputError(
-                manifest_path, f"successful raw worker response has invalid {field}"
-            )
-    return (
-        _RawSummaryRecord(
-            identity, name, replicate, cast("dict[str, JsonValue]", response), status="ok"
+    _ = _optional_worker_pid(response["worker_pid"], manifest_path, "worker response PID")
+    started = _timestamp(response["started_at_utc"], manifest_path, "worker response start time")
+    ended = _timestamp(response["ended_at_utc"], manifest_path, "worker response end time")
+    if started > ended:
+        raise InvalidComparisonInputError(
+            manifest_path, "worker response lifecycle ends before it starts"
+        )
+    _ = _integer_value(
+        response["replicate_index"],
+        manifest_path,
+        "worker response replicate_index",
+        positive=False,
+        non_negative=True,
+    )
+    _ = _integer_value(
+        response["warmup_steps"],
+        manifest_path,
+        "worker response warmup_steps",
+        positive=False,
+        non_negative=True,
+    )
+    _ = _integer_value(
+        response["measurement_steps"],
+        manifest_path,
+        "worker response measurement_steps",
+        positive=True,
+        non_negative=False,
+    )
+    for field in ("elapsed_seconds", "step_time_ms", "tokens_per_second"):
+        _ = _positive_finite_number(response[field], manifest_path, f"worker response {field}")
+    final_rss_mib = _positive_finite_number(
+        response["final_rss_mib"], manifest_path, "worker response final_rss_mib"
+    )
+    peak_rss_mib = _positive_finite_number(
+        response["peak_rss_mib"], manifest_path, "worker response peak_rss_mib"
+    )
+    _ = _integer_value(
+        response["tokens_per_step"],
+        manifest_path,
+        "worker response tokens_per_step",
+        positive=True,
+        non_negative=False,
+    )
+    _ = _integer_value(
+        response["parameter_count"],
+        manifest_path,
+        "worker response parameter_count",
+        positive=True,
+        non_negative=False,
+    )
+    if peak_rss_mib < final_rss_mib:
+        raise InvalidComparisonInputError(
+            manifest_path, "worker response peak_rss_mib must not be below final_rss_mib"
+        )
+    peak_method = _nonempty_string(
+        response["peak_rss_method"], manifest_path, "worker response peak_rss_method"
+    )
+    if (
+        peak_method not in _PEAK_RSS_METHODS
+        or response["peak_rss_sampling_interval_ms"] is not None
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path, "worker response has invalid peak RSS evidence"
+        )
+    return _RawSummaryRecord(
+        identity,
+        name,
+        replicate,
+        worker_pid,
+        cast("dict[str, JsonValue]", response),
+        status="ok",
+        worker_controls=_WorkerControls(
+            protocol_version=1,
+            peak_rss_method=peak_method,
+            environment_signature=_worker_environment_signature(
+                response.get("environment"), manifest_path
+            ),
         ),
-        _worker_signature(response.get("environment"), manifest_path),
     )
 
 
-def _parse_raw_record(
-    line: str, manifest_path: Path, index: int
-) -> tuple[_RawSummaryRecord, tuple[object, ...] | None]:
+def _failed_raw_record(
+    document: dict[str, object],
+    manifest_path: Path,
+    task: tuple[str, str, int, int | None],
+) -> _RawSummaryRecord:
+    """Validate optional protocol failure evidence while retaining subprocess-only failures."""
+    identity, name, replicate, worker_pid = task
+    raw_response = document["worker_response"]
+    if raw_response is not None:
+        response = _require_mapping(raw_response, manifest_path, "failed raw worker response")
+        if frozenset(response) != _FAILURE_RESPONSE_KEYS:
+            raise InvalidComparisonInputError(
+                manifest_path, "failed raw worker response has an invalid field set"
+            )
+        if (
+            response["protocol_version"] != 1
+            or response["status"] != "error"
+            or response["worker_pid"] != worker_pid
+            or response["case_identity"] != identity
+            or response["case_name"] != name
+            or response["replicate_index"] != replicate
+            or response["started_at_utc"] != document["started_at_utc"]
+            or response["ended_at_utc"] != document["ended_at_utc"]
+        ):
+            raise InvalidComparisonInputError(
+                manifest_path, "failed raw worker response disagrees with raw record"
+            )
+        _ = _nonempty_string(response["error_type"], manifest_path, "worker failure error_type")
+        if not isinstance(response["message"], str):
+            raise InvalidComparisonInputError(
+                manifest_path, "worker failure message must be a string"
+            )
+    return _RawSummaryRecord(
+        identity, name, replicate, worker_pid, None, status="error", worker_controls=None
+    )
+
+
+def _parse_raw_record(line: str, manifest_path: Path, index: int) -> _RawSummaryRecord:
     """Parse one exact raw JSONL record without collapsing worker failure evidence."""
     if not line:
         raise InvalidComparisonInputError(manifest_path, f"raw replicate line {index} is empty")
-    try:
-        document = _require_mapping(
-            cast("object", json.loads(line)), manifest_path, f"raw replicate line {index}"
-        )
-    except json.JSONDecodeError as error:
-        raise InvalidComparisonInputError(
-            manifest_path, f"raw replicate line {index} is invalid JSON"
-        ) from error
+    document = _require_mapping(
+        _strict_json_document(line.encode("utf-8"), manifest_path, f"raw replicate line {index}"),
+        manifest_path,
+        f"raw replicate line {index}",
+    )
     if frozenset(document) != _RAW_REPLICATE_KEYS:
         raise InvalidComparisonInputError(
             manifest_path, f"raw replicate line {index} has an invalid field set"
         )
     status, identity, name, replicate = _raw_record_identity(document, manifest_path, index)
+    worker_pid = _validate_raw_outer_fields(document, manifest_path, status)
+    task = (identity, name, replicate, worker_pid)
     if status == "error":
-        return _RawSummaryRecord(identity, name, replicate, None, status="error"), None
-    return _successful_raw_record(document, manifest_path, identity, name, replicate)
+        return _failed_raw_record(document, manifest_path, task)
+    return _successful_raw_record(document, manifest_path, task)
 
 
-def _load_raw_records(
-    manifest_path: Path, manifest: RunManifest
-) -> tuple[tuple[_RawSummaryRecord, ...], tuple[tuple[object, ...], ...]]:
+def _load_raw_records(manifest_path: Path, manifest: RunManifest) -> tuple[_RawSummaryRecord, ...]:
     """Strictly reconcile bound raw records with manifest counts and recomputed case statistics."""
     content = _read_bound_artifact(manifest_path, manifest, "raw_replicates.jsonl")
     try:
@@ -415,12 +719,10 @@ def _load_raw_records(
         raise InvalidComparisonInputError(
             manifest_path, "raw_replicates.jsonl is not valid UTF-8"
         ) from error
-    parsed = tuple(
+    records = tuple(
         _parse_raw_record(line, manifest_path, index) for index, line in enumerate(lines, 1)
     )
-    records = tuple(record for record, _ in parsed)
     tasks = {(record.case_identity, record.replicate_index) for record in records}
-    signatures = tuple(signature for _, signature in parsed if signature is not None)
     if len(tasks) != len(records):
         raise InvalidComparisonInputError(
             manifest_path, "raw replicate task identities are not unique"
@@ -440,19 +742,147 @@ def _load_raw_records(
         raise InvalidComparisonInputError(
             manifest_path, "complete manifest has incomplete or failed raw replicates"
         )
-    return records, signatures
+    return records
+
+
+def _execution_entry(
+    value: object, manifest_path: Path, index: int
+) -> tuple[str, int, str, int | None, Literal["ok", "error", "pending"]]:
+    """Validate one immutable execution-order entry before reconciling it with raw evidence."""
+    entry = _require_mapping(value, manifest_path, f"execution_order entry {index}")
+    if frozenset(entry) != _EXECUTION_ORDER_KEYS:
+        raise InvalidComparisonInputError(
+            manifest_path, f"execution_order entry {index} has an invalid field set"
+        )
+    identity = _require_sha256(
+        entry["case_identity"], manifest_path, "execution-order case identity"
+    )
+    replicate = entry["replicate_index"]
+    seed = entry["worker_seed"]
+    name = entry["case_name"]
+    status = entry["status"]
+    if (
+        entry["execution_index"] != index
+        or not isinstance(name, str)
+        or not name
+        or isinstance(replicate, bool)
+        or not isinstance(replicate, int)
+        or replicate < 0
+        or isinstance(seed, bool)
+        or not isinstance(seed, int)
+        or seed < 0
+        or entry["task_id"] != f"{identity}:{replicate}"
+        or status not in {"ok", "error", "pending"}
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path, f"execution_order entry {index} is invalid"
+        )
+    return (
+        identity,
+        replicate,
+        name,
+        _optional_worker_pid(entry["worker_pid"], manifest_path, "execution-order worker_pid"),
+        cast("Literal['ok', 'error', 'pending']", status),
+    )
+
+
+def _load_execution_order(
+    manifest_path: Path, manifest: RunManifest, records: tuple[_RawSummaryRecord, ...]
+) -> None:
+    """Reconcile ordered tasks with finalized raw records, PID/status, and the case manifest."""
+    document = _strict_json_document(
+        _read_bound_artifact(manifest_path, manifest, "execution_order.json"),
+        manifest_path,
+        "execution_order.json",
+    )
+    if not isinstance(document, list):
+        raise InvalidComparisonInputError(manifest_path, "execution_order.json must be a list")
+    values = cast("list[object]", document)
+    entries = tuple(
+        _execution_entry(value, manifest_path, index) for index, value in enumerate(values)
+    )
+    task_keys = {(identity, replicate) for identity, replicate, _, _, _ in entries}
+    raw_by_task = {(record.case_identity, record.replicate_index): record for record in records}
+    manifest_cases = {case["case_identity"]: case["case_name"] for case in manifest.case_identities}
+    if len(entries) != manifest.expected_task_count or len(task_keys) != len(entries):
+        raise InvalidComparisonInputError(
+            manifest_path, "execution_order.json task count is invalid"
+        )
+    if {identity for identity, _, _, _, _ in entries} != set(manifest_cases):
+        raise InvalidComparisonInputError(
+            manifest_path, "execution_order.json case set differs from manifest"
+        )
+    for identity, replicate, name, worker_pid, status in entries:
+        if name != manifest_cases[identity]:
+            raise InvalidComparisonInputError(
+                manifest_path, "execution_order.json case name differs from manifest"
+            )
+        record = raw_by_task.get((identity, replicate))
+        if record is None:
+            if status != "pending" or worker_pid is not None:
+                raise InvalidComparisonInputError(
+                    manifest_path, "execution_order.json missing raw task is not pending"
+                )
+            continue
+        if (record.case_name, record.worker_pid, record.status) != (name, worker_pid, status):
+            raise InvalidComparisonInputError(
+                manifest_path, "execution_order.json disagrees with raw replicate evidence"
+            )
+
+
+def _validate_run_environment(environment: dict[str, object], manifest_path: Path) -> None:
+    """Validate every run-level methodology field before compatibility comparison."""
+    for field in ("platform", "machine", "python_version", "torch_version", "numpy_version"):
+        _ = _nonempty_string(environment[field], manifest_path, f"run_environment {field}")
+    cpu_name = environment["cpu_name"]
+    if cpu_name is not None:
+        _ = _nonempty_string(cpu_name, manifest_path, "run_environment cpu_name")
+    for field in ("physical_cpu_count", "logical_cpu_count"):
+        value = environment[field]
+        if value is not None:
+            _ = _integer_value(
+                value,
+                manifest_path,
+                f"run_environment {field}",
+                positive=True,
+                non_negative=False,
+            )
+    if not isinstance(environment["cuda_available"], bool):
+        raise InvalidComparisonInputError(
+            manifest_path, "run_environment cuda_available must be boolean"
+        )
+    for field in (
+        "parent_torch_num_threads",
+        "parent_torch_num_interop_threads",
+        "configured_torch_num_interop_threads",
+    ):
+        _ = _integer_value(
+            environment[field],
+            manifest_path,
+            f"run_environment {field}",
+            positive=True,
+            non_negative=False,
+        )
+    _ = _worker_affinity(environment, manifest_path, "configured_cpu_affinity")
+    _ = _worker_variables(environment, manifest_path)
+    _ = _nonempty_string(environment["process_priority"], manifest_path, "run_environment priority")
+    power_scheme = _require_mapping(environment["power_scheme"], manifest_path, "power scheme")
+    if frozenset(power_scheme) != frozenset({"value", "reason"}):
+        raise InvalidComparisonInputError(manifest_path, "power scheme has an invalid field set")
+    for field in ("value", "reason"):
+        if power_scheme[field] is not None and not isinstance(power_scheme[field], str):
+            raise InvalidComparisonInputError(
+                manifest_path, f"power scheme {field} must be text or null"
+            )
 
 
 def _load_run_environment(manifest_path: Path, manifest: RunManifest) -> dict[str, JsonValue]:
     """Load and validate the complete parent environment used for compatibility checks."""
-    try:
-        raw_document = cast(
-            "object", json.loads(_read_bound_artifact(manifest_path, manifest, "environment.json"))
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise InvalidComparisonInputError(
-            manifest_path, "environment.json is not valid UTF-8 JSON"
-        ) from error
+    raw_document = _strict_json_document(
+        _read_bound_artifact(manifest_path, manifest, "environment.json"),
+        manifest_path,
+        "environment.json",
+    )
     document = _require_mapping(raw_document, manifest_path, "environment.json")
     if frozenset(document) != _ENVIRONMENT_DOCUMENT_KEYS:
         raise InvalidComparisonInputError(
@@ -481,6 +911,7 @@ def _load_run_environment(manifest_path: Path, manifest: RunManifest) -> dict[st
         raise InvalidComparisonInputError(
             manifest_path, "run_environment Git identity differs from manifest"
         )
+    _validate_run_environment(environment, manifest_path)
     return cast("dict[str, JsonValue]", environment)
 
 
@@ -652,14 +1083,22 @@ def _validate_summaries_from_raw(
 
 def _load_input(manifest_path: Path) -> _ComparisonInput:
     """Compose strict loader boundaries before any comparison calculation occurs."""
+    try:
+        manifest_content = manifest_path.read_bytes()
+    except OSError as error:
+        raise InvalidComparisonInputError(manifest_path, "cannot read run_manifest.json") from error
+    _ = _strict_json_document(manifest_content, manifest_path, "run_manifest.json")
     manifest = load_run_manifest(manifest_path)
     methodology = _load_methodology(manifest_path, manifest)
     summaries = _load_summaries(manifest_path, manifest)
-    records, raw_signatures = _load_raw_records(manifest_path, manifest)
+    records = _load_raw_records(manifest_path, manifest)
     _validate_summaries_from_raw(manifest_path, summaries, records, methodology)
+    _load_execution_order(manifest_path, manifest, records)
     environment = _load_run_environment(manifest_path, manifest)
-    raw_environment = cast(
-        "object", json.loads(_read_bound_artifact(manifest_path, manifest, "environment.json"))
+    raw_environment = _strict_json_document(
+        _read_bound_artifact(manifest_path, manifest, "environment.json"),
+        manifest_path,
+        "environment.json",
     )
     worker_documents = _require_mapping(raw_environment, manifest_path, "environment.json")[
         "worker_environments"
@@ -667,8 +1106,20 @@ def _load_input(manifest_path: Path) -> _ComparisonInput:
     if not isinstance(worker_documents, list):
         raise InvalidComparisonInputError(manifest_path, "worker_environments must be a list")
     worker_values = cast("list[object]", worker_documents)
-    reported_signatures = tuple(_worker_signature(item, manifest_path) for item in worker_values)
-    if Counter(raw_signatures) != Counter(reported_signatures):
+    reported_signatures = tuple(
+        _worker_environment_signature(item, manifest_path) for item in worker_values
+    )
+    task_worker_controls = tuple(
+        sorted(
+            (record.case_identity, record.replicate_index, record.worker_controls)
+            for record in records
+            if record.worker_controls is not None
+        )
+    )
+    raw_environment_signatures = tuple(
+        controls.environment_signature for _, _, controls in task_worker_controls
+    )
+    if Counter(raw_environment_signatures) != Counter(reported_signatures):
         raise InvalidComparisonInputError(
             manifest_path, "worker environments disagree with successful raw records"
         )
@@ -677,6 +1128,7 @@ def _load_input(manifest_path: Path) -> _ComparisonInput:
         manifest=manifest,
         run_environment=environment,
         worker_environment_signatures=reported_signatures,
+        task_worker_controls=task_worker_controls,
         summaries=summaries,
         regression_threshold_percent=methodology.regression_threshold_percent,
     )
@@ -767,9 +1219,7 @@ def _run_reasons(
     if missing or extra:
         reasons.append("case identity sets do not align")
     reasons.extend(f"environment differs: {mismatch.field}" for mismatch in environment_mismatches)
-    if Counter(baseline.worker_environment_signatures) != Counter(
-        candidate.worker_environment_signatures
-    ):
+    if baseline.task_worker_controls != candidate.task_worker_controls:
         reasons.append("applied worker controls differ")
     return reasons
 

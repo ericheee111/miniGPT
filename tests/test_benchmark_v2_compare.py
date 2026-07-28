@@ -213,7 +213,22 @@ def _write_run_package(  # noqa: PLR0913
         newline="\n",
     )
     _ = (run_directory / "summary.md").write_text("# fixture\n", encoding="utf-8", newline="\n")
-    _ = (run_directory / "execution_order.json").write_text("[]\n", encoding="utf-8", newline="\n")
+    execution_order = [
+        {
+            "execution_index": index,
+            "task_id": f"{case_identity}:{index}",
+            "case_name": summary["case_name"],
+            "case_identity": case_identity,
+            "replicate_index": index,
+            "worker_seed": index,
+            "worker_pid": 1000 + index,
+            "status": "ok",
+        }
+        for index in range(3)
+    ]
+    _ = (run_directory / "execution_order.json").write_text(
+        json.dumps(execution_order, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
     artifact_names = (
         "environment.json",
         "resolved_config.yaml",
@@ -234,9 +249,7 @@ def _write_run_package(  # noqa: PLR0913
         "completed_task_count": 3,
         "successful_task_count": 3,
         "failed_task_count": 0,
-        "case_identities": [
-            {"case_name": "display-name-can-change", "case_identity": case_identity}
-        ],
+        "case_identities": [{"case_name": summary["case_name"], "case_identity": case_identity}],
         "artifacts": [
             _hash_entry(run_directory / artifact_name) for artifact_name in artifact_names
         ],
@@ -246,6 +259,116 @@ def _write_run_package(  # noqa: PLR0913
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
     )
     return manifest_path
+
+
+def _rehash_manifest_artifact(manifest_path: Path, artifact_path: Path) -> None:
+    """Rebind one deliberately modified synthetic artifact to its fixture manifest."""
+    manifest = cast("dict[str, object]", json.loads(manifest_path.read_text(encoding="utf-8")))
+    entries = cast("list[dict[str, object]]", manifest["artifacts"])
+    next(entry for entry in entries if entry["path"] == artifact_path.name).update(
+        _hash_entry(artifact_path)
+    )
+    _ = manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+
+
+def _add_second_case(manifest_path: Path) -> str:
+    """Add a hash-bound second three-replicate case to one synthetic fixture package."""
+    directory = manifest_path.parent
+    second_identity = "d" * 64
+    second_name = "second-case"
+    raw_path = directory / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    second_records: list[dict[str, JsonValue]] = []
+    for raw_record in raw_records:
+        duplicate = cast("dict[str, JsonValue]", json.loads(json.dumps(raw_record)))
+        response = cast("dict[str, JsonValue]", duplicate["worker_response"])
+        worker_pid = cast("int", duplicate["worker_pid"]) + 100
+        duplicate.update(
+            {
+                "case_identity": second_identity,
+                "case_name": second_name,
+                "worker_pid": worker_pid,
+            }
+        )
+        response.update(
+            {
+                "case_identity": second_identity,
+                "case_name": second_name,
+                "worker_pid": worker_pid,
+            }
+        )
+        worker_environment = cast("dict[str, JsonValue]", response["environment"])
+        worker_environment["torch_num_threads"] = 2
+        second_records.append(duplicate)
+    raw_records.extend(second_records)
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    summary_path = directory / "summary.csv"
+    header, first_row = summary_path.read_text(encoding="utf-8").splitlines()
+    summary = dict(zip(header.split(","), first_row.split(","), strict=True))
+    summary.update({"case_identity": second_identity, "case_name": second_name})
+    _ = summary_path.write_text(
+        header
+        + "\n"
+        + first_row
+        + "\n"
+        + ",".join(summary[field] for field in _SUMMARY_FIELDS)
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    environment_path = directory / "environment.json"
+    environment = cast(
+        "dict[str, JsonValue]", json.loads(environment_path.read_text(encoding="utf-8"))
+    )
+    worker_environments = cast("list[JsonValue]", environment["worker_environments"])
+    worker_environments.extend(cast("list[JsonValue]", json.loads(json.dumps(worker_environments))))
+    for worker in worker_environments[3:]:
+        cast("dict[str, JsonValue]", worker)["torch_num_threads"] = 2
+    _ = environment_path.write_text(
+        json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    order_path = directory / "execution_order.json"
+    order = cast("list[dict[str, JsonValue]]", json.loads(order_path.read_text(encoding="utf-8")))
+    order.extend(
+        {
+            "execution_index": 3 + index,
+            "task_id": f"{second_identity}:{index}",
+            "case_name": second_name,
+            "case_identity": second_identity,
+            "replicate_index": index,
+            "worker_seed": 3 + index,
+            "worker_pid": 1100 + index,
+            "status": "ok",
+        }
+        for index in range(3)
+    )
+    _ = order_path.write_text(
+        json.dumps(order, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    manifest = cast("dict[str, JsonValue]", json.loads(manifest_path.read_text(encoding="utf-8")))
+    manifest.update(
+        {"expected_task_count": 6, "completed_task_count": 6, "successful_task_count": 6}
+    )
+    case_identities = cast("list[JsonValue]", manifest["case_identities"])
+    case_identities.append({"case_name": second_name, "case_identity": second_identity})
+    entries = cast("list[dict[str, JsonValue]]", manifest["artifacts"])
+    for artifact_path in (raw_path, summary_path, environment_path, order_path):
+        next(entry for entry in entries if entry["path"] == artifact_path.name).update(
+            _hash_entry(artifact_path)
+        )
+    _ = manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    return second_identity
 
 
 def test_compare_runs_aligns_identity_not_display_name_and_writes_deterministic_outputs(
@@ -462,6 +585,12 @@ def test_compare_runs_reconciles_partial_raw_failures_before_refusing_a_verdict(
         encoding="utf-8",
         newline="\n",
     )
+    order_path = candidate.parent / "execution_order.json"
+    order = cast("list[dict[str, JsonValue]]", json.loads(order_path.read_text(encoding="utf-8")))
+    order[-1]["status"] = "error"
+    _ = order_path.write_text(
+        json.dumps(order, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
     summary_path = candidate.parent / "summary.csv"
     summary_header, summary_record = summary_path.read_text(encoding="utf-8").splitlines()
     summary = dict(zip(summary_header.split(","), summary_record.split(","), strict=True))
@@ -486,7 +615,7 @@ def test_compare_runs_reconciles_partial_raw_failures_before_refusing_a_verdict(
     manifest = cast("dict[str, JsonValue]", json.loads(candidate.read_text(encoding="utf-8")))
     manifest.update({"status": "partial", "successful_task_count": 2, "failed_task_count": 1})
     entries = cast("list[dict[str, JsonValue]]", manifest["artifacts"])
-    for path in (raw_path, summary_path, environment_path):
+    for path in (raw_path, summary_path, environment_path, order_path):
         next(entry for entry in entries if entry["path"] == path.name).update(_hash_entry(path))
     _ = candidate.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
@@ -597,3 +726,177 @@ def test_fixed_fixture_packages_are_hash_valid_and_have_no_real_timing_claims() 
     # Then: their synthetic-only report keeps an explicitly neutral comparison result.
     assert comparison.verdict == "pass"
     assert comparison.case_comparisons[0].step_time_change_percent == 0.0
+
+
+def test_compare_runs_rejects_duplicate_keys_inside_a_nested_raw_worker_environment(
+    tmp_path: Path,
+) -> None:
+    """Reject JSON whose parser would otherwise silently keep the last nested object key."""
+    # Given: a valid raw artifact is rehashed after duplicating one nested worker-control key.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    _ = raw_path.write_text(
+        raw_path.read_text(encoding="utf-8").replace(
+            '"platform": "test-platform"',
+            '"platform": "forged", "platform": "test-platform"',
+            1,
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When/Then: strict decoding refuses the duplicate instead of accepting the final value.
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_rejects_nonfinite_environment_json_constants(tmp_path: Path) -> None:
+    """Reject JavaScript-style non-finite constants before compatibility checks can inspect them."""
+    # Given: a bound environment replaces a finite CPU count with a permissive JSON NaN token.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    environment_path = candidate.parent / "environment.json"
+    _ = environment_path.write_text(
+        environment_path.read_text(encoding="utf-8").replace(
+            '"physical_cpu_count": 4', '"physical_cpu_count": NaN'
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, environment_path)
+
+    # When/Then: strict JSON constants reject non-finite evidence before delta calculation.
+    with pytest.raises(ValueError, match="non-finite JSON constant"):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_rejects_an_empty_bound_execution_order(tmp_path: Path) -> None:
+    """Reject a manifest-bound order that cannot account for any finalized raw task."""
+    # Given: a complete package rebinds an empty execution-order artifact.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    order_path = candidate.parent / "execution_order.json"
+    _ = order_path.write_text("[]\n", encoding="utf-8", newline="\n")
+    _rehash_manifest_artifact(candidate, order_path)
+
+    # When/Then: comparison must reconcile the order before accepting the otherwise valid summaries.
+    with pytest.raises(ValueError, match="execution_order"):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_rejects_malformed_worker_peak_method_and_environment(tmp_path: Path) -> None:
+    """Reject invalid worker methodology evidence before comparing its otherwise valid medians."""
+    # Given: a candidate rebinds unsupported peak-memory method and malformed actual affinity.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    response = cast("dict[str, JsonValue]", raw_records[0]["worker_response"])
+    environment = cast("dict[str, JsonValue]", response["environment"])
+    response["peak_rss_method"] = "unsupported"
+    environment["effective_cpu_affinity"] = []
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When/Then: the full worker schema refuses either malformed methodology field.
+    with pytest.raises(ValueError, match=r"peak RSS evidence|effective_cpu_affinity"):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_rejects_malformed_worker_environment_affinity(tmp_path: Path) -> None:
+    """Reject an invalid actual worker affinity with otherwise valid response evidence."""
+    # Given: a candidate keeps valid peak evidence but rebinds an empty effective affinity.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    response = cast("dict[str, JsonValue]", raw_records[0]["worker_response"])
+    environment = cast("dict[str, JsonValue]", response["environment"])
+    environment["effective_cpu_affinity"] = []
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When/Then: the worker's exact actual-affinity contract is enforced.
+    with pytest.raises(ValueError, match="effective_cpu_affinity"):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_rejects_execution_order_status_or_pid_that_disagrees_with_raw(
+    tmp_path: Path,
+) -> None:
+    """Reject a bound execution order that rewrites a completed task's process evidence."""
+    # Given: a complete candidate changes its first execution entry without changing raw evidence.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    order_path = candidate.parent / "execution_order.json"
+    order = cast("list[dict[str, JsonValue]]", json.loads(order_path.read_text(encoding="utf-8")))
+    order[0].update({"status": "error", "worker_pid": 9999})
+    _ = order_path.write_text(
+        json.dumps(order, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    _rehash_manifest_artifact(candidate, order_path)
+
+    # When/Then: the ordered task must remain identical to its raw task status and PID.
+    with pytest.raises(ValueError, match=r"execution_order\.json disagrees"):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_rejects_case_scoped_worker_control_swaps(tmp_path: Path) -> None:
+    """Reject case-level control swaps even when global control counts remain equal."""
+    # Given: two cases exchange their actual candidate worker thread counts.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    second_identity = _add_second_case(baseline)
+    _ = _add_second_case(candidate)
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    raw_records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    for raw_record in raw_records:
+        response = cast("dict[str, JsonValue]", raw_record["worker_response"])
+        environment = cast("dict[str, JsonValue]", response["environment"])
+        environment["torch_num_threads"] = 2 if raw_record["case_identity"] == _CASE_IDENTITY else 1
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in raw_records),
+        encoding="utf-8",
+        newline="\n",
+    )
+    environment_path = candidate.parent / "environment.json"
+    environment_document = cast(
+        "dict[str, JsonValue]", json.loads(environment_path.read_text(encoding="utf-8"))
+    )
+    workers = cast("list[dict[str, JsonValue]]", environment_document["worker_environments"])
+    for index, worker in enumerate(workers):
+        worker["torch_num_threads"] = 2 if index < 3 else 1
+    _ = environment_path.write_text(
+        json.dumps(environment_document, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+    _rehash_manifest_artifact(candidate, environment_path)
+
+    # When: comparison aligns controls by durable case/replicate identity, not a global Counter.
+    comparison = compare_runs(baseline, candidate)
+
+    # Then: equal global control counts cannot hide the per-case methodology swap.
+    assert second_identity in {case.case_identity for case in comparison.case_comparisons}
+    assert comparison.verdict == "not_comparable"
+    assert "applied worker controls differ" in comparison.reasons

@@ -1,1 +1,32 @@
-[]
+[
+  {
+    "case_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "case_name": "display-name-can-change",
+    "execution_index": 0,
+    "replicate_index": 0,
+    "status": "ok",
+    "task_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:0",
+    "worker_pid": 1000,
+    "worker_seed": 0
+  },
+  {
+    "case_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "case_name": "display-name-can-change",
+    "execution_index": 1,
+    "replicate_index": 1,
+    "status": "ok",
+    "task_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1",
+    "worker_pid": 1001,
+    "worker_seed": 1
+  },
+  {
+    "case_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "case_name": "display-name-can-change",
+    "execution_index": 2,
+    "replicate_index": 2,
+    "status": "ok",
+    "task_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2",
+    "worker_pid": 1002,
+    "worker_seed": 2
+  }
+]
