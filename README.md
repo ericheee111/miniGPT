@@ -230,52 +230,130 @@ x = x + MLP(LayerNorm(x))
 
 ## 性能分析
 
-### Benchmark
+### Benchmark v1 与 v2
 
-运行完整矩阵或 smoke 矩阵：
+`benchmark.py` 是保留的 **v1 legacy/descriptive** 入口，用于既有教学 smoke 矩阵和历史
+描述；它不是新的回归基线格式。新的 CPU 测量、可审查证据和候选比较应使用 **Benchmark
+v2**：[`benchmark_v2.py`](benchmark_v2.py)。v2 的设计和实施边界见
+[Stage 7B design](docs/superpowers/specs/2026-07-28-stage7b-cpu-benchmark-v2-design.md) 与
+[Stage 7B plan](docs/superpowers/plans/2026-07-28-stage7b-cpu-benchmark-v2.md)。
+
+v2 的配置显式列出 case，而不是展开隐式 Cartesian product；每个
+`case × replicate` 都在一个 fresh process 中顺序执行，因此不会复用模型、optimizer、
+PyTorch 线程池或进程 RSS。`benchmark_seed` 决定 case/replicate 的随机执行顺序；每个
+worker 的实际 PID、顺序和状态都会保存在证据包中。
+
+Windows 的项目虚拟环境可以使用下列命令；在其他受支持的平台将
+`.\\.venv\\Scripts\\python.exe` 替换为当前环境的 `python`。
+
+```powershell
+.\.venv\Scripts\python.exe benchmark_v2.py --config configs/benchmark_v2_smoke.yaml
+```
+
+[v2 smoke 配置](configs/benchmark_v2_smoke.yaml) 是 correctness-only 的小型合同：一个 tiny
+模型、两个明确的 intra-op thread cases（1 和 2）、每 case 两个 replicate、一次 warmup
+和两个 measured steps。它的输出目录是 gitignored 的 `reports/benchmark-v2/`；该命令产出的
+数字不是已提交的性能结果，也不应用来排名机器。
+
+### Canonical v2 method
+
+每个 worker 在构建 workload 前设置该 case 的 **intra-op** `torch_num_threads`，并设置配置
+级别的 **inter-op** `torch_num_interop_threads`；inter-op 不是每个 case 的变量。线程设置在
+fresh process 中完成，避免 PyTorch 在已经并行运行后不能安全重设 inter-op 线程数的问题。
+可选 `cpu_affinity` 会记录 requested/effective CPU IDs，但在 hybrid CPU 上应谨慎使用：只在
+确认 logical IDs、P/E-core 拓扑和系统允许设置 affinity 后才固定它。
+
+先运行 `warmup_steps`，再垃圾回收并临时禁用 GC。唯一 canonical timer 是一个
+`time.perf_counter()` 区间，包含完整 measurement loop 的 batch acquisition、
+`optimizer.zero_grad(set_to_none=True)`、forward/cross-entropy loss、backward、gradient
+clipping 和 optimizer step。它明确排除 worker startup/import、CPU/environment/thread setup、
+model/optimizer/batcher construction、warmup、pre-timer GC、post-timer memory/environment reads、
+JSON transport、logging/report I/O、profiler instrumentation、checkpoint、validation 和 text
+generation。不要把 profiler 或额外 phase timers 包进该 timer。
+
+`final_rss_mib` 是 canonical loop 结束后读取的 RSS；`peak_rss_mib` 是 OS-native、整个 worker
+生命周期的高水位（Windows peak working set 或 Linux `getrusage` `ru_maxrss`）。后者包含 import、
+construction、warmup 和 measurement，因而不是 model-only memory；两者也没有 polling thread，
+`peak_rss_sampling_interval_ms` 为 `null`。
+
+每个成功 replicate 贡献一个聚合 `step_time_ms`。v2 保留全部
+`raw_replicates.jsonl` 记录，包含失败记录及其 stdout/stderr；不会自动删除或过滤任何 outlier。
+每 case 的 `summary.csv` 计算 median、min、max、population standard deviation (`pstdev`)、MAD 和
+CV，以及 median throughput、median final RSS 与 max native peak RSS。少于
+`minimum_replicates` 个成功样本为 `insufficient_samples`；否则 CV 严格大于 `max_cv_percent`
+为 `unstable`，不大于该阈值为 `stable`。温度、电源策略、后台负载、CPU 频率和
+PyTorch/BLAS 版本均可能造成漂移，所以先看 raw replicate、CV 和环境证据，再讨论差异。
+
+一个完成或 partial run 的目录包含 `run_manifest.json`、`environment.json`、
+`resolved_config.yaml`、`execution_order.json`、`raw_replicates.jsonl`、`summary.csv` 与
+`summary.md`。manifest 将每个非自身 artifact 的 run-relative path、byte size 和 SHA-256 绑定；
+environment 记录 Git、platform/CPU、Python/PyTorch/NumPy、power scheme、priority、相关环境变量
+和每个成功 worker 的有效控制。字段及严格加载规则见
+[artifact/report schema](src/minigpt/benchmark_v2_report.py)。报告、raw runs、trace 和机器特定
+数字都被 gitignore，不能作为源码或默认基线提交。
+
+### Recommended local reference methodology
+
+以下命令推荐在同一台空闲机器、相同电源策略、相同 Python/PyTorch/NumPy 与相关环境变量下执行；
+它没有在本阶段自动执行，也不代表仓库已经取得任何 reference result。
+
+```powershell
+.\.venv\Scripts\python.exe benchmark_v2.py --config configs/benchmark_v2_reference.yaml
+```
+
+[reference 配置](configs/benchmark_v2_reference.yaml) 使用 4-layer/4-head/128-embedding teaching
+model、10 warmup、20 measured steps 和 7 replicates。它只声明 10 个 one-factor cases：shared
+baseline 一次、threads 1/4/8/12/20、block size 64/128/256 和 batch size 4/8/16/32；不是完整
+矩阵。若需要跨机结论，重新运行并把环境差异视为不可直接比较，而不是把旧数字移植过来。
+
+### Compare compatible v2 evidence
+
+用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
+
+```powershell
+.\.venv\Scripts\python.exe compare_benchmarks.py `
+  --baseline reports/benchmark-v2/<baseline-run>/run_manifest.json `
+  --candidate reports/benchmark-v2/<candidate-run>/run_manifest.json
+```
+
+比较按 `case_identity` 对齐，并拒绝 incomplete run、缺失/额外 case、未达到样本数、`unstable`
+summary，或 CPU/toolchain/power-scheme/relevant environment variables/worker controls/methodology
+不兼容的证据。即使 verdict 是 `not_comparable`，输出仍保留 descriptive deltas；它们不是性能
+结论。只有兼容且 `stable` 的 cases 才会得到 pass/fail。candidate step time 相对 baseline
+**strictly greater than** `regression_threshold_percent` 才是 regression；恰好等于阈值不是
+regression。比较也不会过滤 outlier，且不修改任一来源 run。
+
+### Separate v2 profiler
+
+[`profile_benchmark_v2.py`](profile_benchmark_v2.py) 对配置中 `profile.enabled: true` 的一个命名
+case 创建单独的 fresh-process operator profile；它不调用 canonical benchmark timer，也不会写
+`raw_replicates.jsonl` 或 `summary.csv`。
+
+```powershell
+.\.venv\Scripts\python.exe profile_benchmark_v2.py --config path/to/profile-enabled.yaml
+```
+
+该 profile 目录包含 `profile_manifest.json`、`top_operators.csv`、`profile_report.md` 和
+`trace.json`，并绑定 config hash、case identity、Git/environment 与 artifact hashes。Profiler 的
+instrumentation overhead 使其 timing 不适合 benchmark throughput 或 baseline/candidate comparison；
+它仅用于解释 operator 层开销。旧的 [`profile_model.py`](profile_model.py) 同样是 v1 的独立
+profile 入口，不应作为 v2 benchmark 数字。
+
+### v1 historical smoke observation
+
+v1 的历史 smoke 命令仍可运行，但只用于描述旧接口：
 
 ```powershell
 python benchmark.py --config configs/benchmark.yaml
 python benchmark.py --config configs/benchmark_smoke.yaml
-```
-
-[benchmark smoke 配置](configs/benchmark_smoke.yaml) 使用 1/4 线程、32/64 序列长度、
-batch size 2 和 small 模型。每个 case 先预热，再重复计时；计时区域包含数据准备、
-forward/backward 和 AdamW step，不包含模型构造、日志和文件 I/O。报告同时保留原始
-repeat 数据与 median、population standard deviation、MAD、CV。
-
-### PyTorch Profiler
-
-```powershell
 python profile_model.py --config configs/benchmark_smoke.yaml
 ```
 
-Profiler trace 位于配置的 report 目录，可用 `chrome://tracing` 或 Perfetto 打开。
-自定义 scope 包括 `data_preparation`、`forward_backward` 和 `optimizer_step`，便于把
-Python 训练阶段与底层 operator 对齐。
-
-### Smoke benchmark 结果
-
-以下数据来自一次本机 smoke run：Python 3.14.5、PyTorch 2.12.1+cpu、Windows 11、
-Intel Core i7-14700（20 physical / 28 logical cores）。
-
-| Case | Params | Median ms | Tokens/s | CV % | RSS MiB |
-|---|---:|---:|---:|---:|---:|
-| small-t1-b2-s32 | 108,992 | 4.577 | 14,010.0 | 4.28 | 290.9 |
-| small-t1-b2-s64 | 111,040 | 5.596 | 22,880.4 | 1.49 | 292.8 |
-| small-t4-b2-s32 | 108,992 | 4.311 | 14,937.0 | 7.86 | 292.9 |
-| small-t4-b2-s64 | 111,040 | 4.932 | 25,956.4 | 0.70 | 293.7 |
-
-观察：
-
-- 本次样本中 `small-t4-b2-s64` 吞吐最高，为 25,956.4 tokens/s。
-- 长序列提高每个 step 的总时延，但也提高单位时间处理的 token 数。
-- 4 线程对 64-token case 的收益更明显；32-token case 的 CV 较高，需要更多 repeats
-  才适合做细粒度回归判断。
-- RSS 随 case 仅小幅变化，但这里是极小模型，不能外推到大模型内存曲线。
-
-结果不是跨机器排名。CPU 温度、功耗策略、后台负载、PyTorch/BLAS 版本和重复次数都会
-显著影响数字；评估优化时应在同一机器、同一电源策略下重复运行。
+[benchmark v1 smoke 配置](configs/benchmark_smoke.yaml) 与 v2 evidence schema、fresh process
+isolation、comparison rules 均不同；不要混合它们的输出。共享的 CI runner（shared CI runner）只验证正确性：当前
+pytest 中的 v2 subprocess smoke 合同检查 CLI/artifact 形状和独立 worker PID，不设置性能
+threshold，也不把 CI 的 timing 当作性能真相。这里没有额外 workflow CLI step，避免与该已覆盖的
+端到端 smoke 重复执行。
 
 ### Smoke 训练证据
 
