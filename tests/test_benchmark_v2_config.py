@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -16,6 +17,8 @@ from minigpt.benchmark_v2_config import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from minigpt.benchmark_v2_types import BenchmarkV2Case
 
 
 def write_v2_config(tmp_path: Path, replacement: str = "") -> Path:
@@ -103,6 +106,83 @@ def test_case_identity_excludes_execution_and_reporting_settings(tmp_path: Path)
     # Then: provenance changes, but the workload's case identity does not.
     assert resolved_config_sha256(first) != resolved_config_sha256(second)
     assert first_identity == case_identity(second, second.cases[0])
+
+
+@pytest.mark.parametrize(
+    ("original", "updated"),
+    [
+        (
+            "warmup_steps: 2\nmeasurement_steps: 5",
+            "warmup_steps: 3\nmeasurement_steps: 5",
+        ),
+        ("measurement_steps: 5", "measurement_steps: 6"),
+        ("torch_num_interop_threads: 1", "torch_num_interop_threads: 2"),
+        ("cpu_affinity: [0, 1]", "cpu_affinity: [1, 2]"),
+        ("benchmark_seed: 1337", "benchmark_seed: 1338"),
+        ("vocab_size: 65", "vocab_size: 66"),
+    ],
+)
+def test_case_identity_changes_for_workload_and_methodology_settings(
+    tmp_path: Path, original: str, updated: str
+) -> None:
+    """Distinguish workloads and benchmark methodologies that affect a case."""
+    # Given: one explicit workload and methodology.
+    path = write_v2_config(tmp_path)
+    first = load_benchmark_v2_config(path)
+
+    # When: one workload or methodology field changes independently.
+    _ = path.write_text(
+        path.read_text(encoding="utf-8").replace(original, updated), encoding="utf-8"
+    )
+    second = load_benchmark_v2_config(path)
+
+    # Then: the case identity changes.
+    assert case_identity(first, first.cases[0]) != case_identity(second, second.cases[0])
+
+
+def changed_case(case: BenchmarkV2Case, field: str) -> BenchmarkV2Case:
+    """Return one case with exactly one field changed for identity coverage."""
+    changes = {
+        "name": replace(case, name="different_name"),
+        "model_name": replace(case, model_name="different_model"),
+        "n_layer": replace(case, n_layer=case.n_layer + 1),
+        "n_head": replace(case, n_head=case.n_head + 1),
+        "n_embd": replace(case, n_embd=case.n_embd + 1),
+        "torch_num_threads": replace(case, torch_num_threads=case.torch_num_threads + 1),
+        "block_size": replace(case, block_size=case.block_size + 1),
+        "batch_size": replace(case, batch_size=case.batch_size + 1),
+    }
+    try:
+        return changes[field]
+    except KeyError as error:
+        msg = f"unsupported case field {field!r}"
+        raise ValueError(msg) from error
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "name",
+        "model_name",
+        "n_layer",
+        "n_head",
+        "n_embd",
+        "torch_num_threads",
+        "block_size",
+        "batch_size",
+    ],
+)
+def test_case_identity_changes_for_every_case_field(tmp_path: Path, field: str) -> None:
+    """Include every explicit case field in the workload identity."""
+    # Given: one parsed explicit case.
+    config = load_benchmark_v2_config(write_v2_config(tmp_path))
+    case = config.cases[0]
+
+    # When: exactly one case field changes.
+    changed = changed_case(case, field)
+
+    # Then: the workload identity changes.
+    assert case_identity(config, case) != case_identity(config, changed)
 
 
 @pytest.mark.parametrize(

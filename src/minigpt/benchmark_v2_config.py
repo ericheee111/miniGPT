@@ -344,6 +344,10 @@ def _workload_document(config: BenchmarkV2Config, case: BenchmarkV2Case) -> dict
     return {
         "benchmark_seed": config.benchmark_seed,
         "vocab_size": config.vocab_size,
+        "warmup_steps": config.warmup_steps,
+        "measurement_steps": config.measurement_steps,
+        "torch_num_interop_threads": config.torch_num_interop_threads,
+        "cpu_affinity": list(config.cpu_affinity) if config.cpu_affinity is not None else None,
         "case": {
             "name": case.name,
             "model_name": case.model_name,
