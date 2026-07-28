@@ -241,7 +241,6 @@ def test_case_identity_changes_for_every_case_field(tmp_path: Path, field: str) 
         ("MODEL_BIAS", True),
         ("OPTIMIZER_TYPE", "sgd"),
         ("OPTIMIZER_LEARNING_RATE", 0.001),
-        ("OPTIMIZER_MIN_LEARNING_RATE", 0.0001),
         ("OPTIMIZER_WEIGHT_DECAY", 0.2),
         ("OPTIMIZER_BETAS", (0.8, 0.9)),
         ("GRAD_CLIP", 0.5),

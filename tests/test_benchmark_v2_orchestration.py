@@ -13,7 +13,10 @@ import psutil
 import pytest
 
 import minigpt.benchmark_v2 as benchmark_module
+import minigpt.benchmark_workload_methodology as methodology_module
 from minigpt.benchmark_v2_types import BenchmarkV2Case, BenchmarkV2Config, ProfileV2Settings
+from minigpt.model import expected_gpt_parameter_count
+from minigpt.settings import GPTConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -108,8 +111,18 @@ def worker_success_document(task: BenchmarkTask, worker_pid: int) -> dict[str, J
         "elapsed_seconds": 0.5,
         "step_time_ms": 500.0,
         "tokens_per_second": 128.0,
-        "tokens_per_step": 64,
-        "parameter_count": 123,
+        "tokens_per_step": task.case.batch_size * task.case.block_size,
+        "parameter_count": expected_gpt_parameter_count(
+            GPTConfig(
+                vocab_size=task.vocab_size,
+                block_size=task.case.block_size,
+                n_layer=task.case.n_layer,
+                n_head=task.case.n_head,
+                n_embd=task.case.n_embd,
+                dropout=methodology_module.MODEL_DROPOUT,
+                bias=methodology_module.MODEL_BIAS,
+            )
+        ),
         "final_rss_mib": 128.0,
         "peak_rss_mib": 160.0,
         "peak_rss_method": "windows_peak_working_set",
@@ -165,6 +178,11 @@ def invalid_worker_document(
         "peak_method": ("peak_rss_method", "sampled"),
         "peak_interval": ("peak_rss_sampling_interval_ms", 1.0),
         "task_count": ("warmup_steps", task.warmup_steps + 1),
+        "measurement_task_count": ("measurement_steps", task.measurement_steps + 1),
+        "tokens_per_step": ("tokens_per_step", 1),
+        "parameter_count": ("parameter_count", 1),
+        "elapsed_relationship": ("elapsed_seconds", 0.25),
+        "throughput_relationship": ("tokens_per_second", 127.0),
     }
     if mutation in scalar_mutations:
         field, value = scalar_mutations[mutation]
@@ -357,6 +375,11 @@ def test_partial_run_keeps_every_raw_record_in_execution_order(tmp_path: Path) -
         "environment_variables",
         "failure_field_type",
         "task_count",
+        "measurement_task_count",
+        "tokens_per_step",
+        "parameter_count",
+        "elapsed_relationship",
+        "throughput_relationship",
     ],
 )
 def test_invalid_complete_worker_response_is_a_failed_raw_failure(

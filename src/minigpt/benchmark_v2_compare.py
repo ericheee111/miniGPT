@@ -19,12 +19,21 @@ from typing import TYPE_CHECKING, Literal, cast
 import yaml
 from typing_extensions import override
 
+import minigpt.benchmark_workload_methodology as methodology_module
+from minigpt.benchmark_v2_config import (
+    case_identity,
+    load_resolved_benchmark_v2_config,
+    resolved_config_sha256,
+)
 from minigpt.benchmark_v2_report import load_run_manifest
 from minigpt.benchmark_v2_statistics import BenchmarkV2Summary, summarize_replicates
+from minigpt.model import expected_gpt_parameter_count
+from minigpt.settings import GPTConfig
 
 if TYPE_CHECKING:
     from minigpt.benchmark_v2_config import JsonValue
     from minigpt.benchmark_v2_report import RunManifest
+    from minigpt.benchmark_v2_types import BenchmarkV2Config
 
 ComparisonVerdict = Literal["pass", "fail", "not_comparable"]
 _SUMMARY_FIELDS = tuple(BenchmarkV2Summary.__dataclass_fields__)
@@ -148,6 +157,7 @@ _EXECUTION_ORDER_KEYS = frozenset(
         "status",
     }
 )
+_METRIC_RELATIVE_TOLERANCE = 1e-9
 
 
 @dataclass(slots=True)
@@ -264,6 +274,7 @@ class _Methodology:
     regression_threshold_percent: float
     minimum_replicates: int
     max_cv_percent: float
+    config: BenchmarkV2Config
 
 
 def _require_mapping(value: object, path: Path, context: str) -> dict[str, object]:
@@ -546,10 +557,11 @@ def _raw_record_identity(
     return cast("Literal['ok', 'error']", status), identity, name, replicate
 
 
-def _successful_raw_record(
+def _successful_raw_record(  # noqa: C901
     document: dict[str, object],
     manifest_path: Path,
     task: tuple[str, str, int, int | None],
+    config: BenchmarkV2Config,
 ) -> _RawSummaryRecord:
     """Validate the metrics and actual controls reported by one successful worker."""
     identity, name, replicate, worker_pid = task
@@ -587,36 +599,43 @@ def _successful_raw_record(
         positive=False,
         non_negative=True,
     )
-    _ = _integer_value(
+    warmup_steps = _integer_value(
         response["warmup_steps"],
         manifest_path,
         "worker response warmup_steps",
         positive=False,
         non_negative=True,
     )
-    _ = _integer_value(
+    measurement_steps = _integer_value(
         response["measurement_steps"],
         manifest_path,
         "worker response measurement_steps",
         positive=True,
         non_negative=False,
     )
-    for field in ("elapsed_seconds", "step_time_ms", "tokens_per_second"):
-        _ = _positive_finite_number(response[field], manifest_path, f"worker response {field}")
+    elapsed_seconds = _positive_finite_number(
+        response["elapsed_seconds"], manifest_path, "worker response elapsed_seconds"
+    )
+    step_time_ms = _positive_finite_number(
+        response["step_time_ms"], manifest_path, "worker response step_time_ms"
+    )
+    tokens_per_second = _positive_finite_number(
+        response["tokens_per_second"], manifest_path, "worker response tokens_per_second"
+    )
     final_rss_mib = _positive_finite_number(
         response["final_rss_mib"], manifest_path, "worker response final_rss_mib"
     )
     peak_rss_mib = _positive_finite_number(
         response["peak_rss_mib"], manifest_path, "worker response peak_rss_mib"
     )
-    _ = _integer_value(
+    tokens_per_step = _integer_value(
         response["tokens_per_step"],
         manifest_path,
         "worker response tokens_per_step",
         positive=True,
         non_negative=False,
     )
-    _ = _integer_value(
+    parameter_count = _integer_value(
         response["parameter_count"],
         manifest_path,
         "worker response parameter_count",
@@ -636,6 +655,56 @@ def _successful_raw_record(
     ):
         raise InvalidComparisonInputError(
             manifest_path, "worker response has invalid peak RSS evidence"
+        )
+    matching_case = next(
+        (case for case in config.cases if case_identity(config, case) == identity), None
+    )
+    if matching_case is None or matching_case.name != name:
+        raise InvalidComparisonInputError(
+            manifest_path, "successful raw worker response case is absent from resolved config"
+        )
+    if warmup_steps != config.warmup_steps or measurement_steps != config.measurement_steps:
+        raise InvalidComparisonInputError(
+            manifest_path, "successful raw worker response step counts differ from resolved config"
+        )
+    if tokens_per_step != matching_case.batch_size * matching_case.block_size:
+        raise InvalidComparisonInputError(
+            manifest_path,
+            "successful raw worker response tokens_per_step differs from resolved case",
+        )
+    expected_parameter_count = expected_gpt_parameter_count(
+        GPTConfig(
+            vocab_size=config.vocab_size,
+            block_size=matching_case.block_size,
+            n_layer=matching_case.n_layer,
+            n_head=matching_case.n_head,
+            n_embd=matching_case.n_embd,
+            dropout=methodology_module.MODEL_DROPOUT,
+            bias=methodology_module.MODEL_BIAS,
+        )
+    )
+    if parameter_count != expected_parameter_count:
+        raise InvalidComparisonInputError(
+            manifest_path,
+            "successful raw worker response parameter_count differs from resolved case",
+        )
+    if not math.isclose(
+        step_time_ms,
+        elapsed_seconds * 1_000 / measurement_steps,
+        rel_tol=_METRIC_RELATIVE_TOLERANCE,
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path,
+            "successful raw worker response step_time_ms disagrees with elapsed_seconds",
+        )
+    if not math.isclose(
+        tokens_per_second,
+        tokens_per_step * measurement_steps / elapsed_seconds,
+        rel_tol=_METRIC_RELATIVE_TOLERANCE,
+    ):
+        raise InvalidComparisonInputError(
+            manifest_path,
+            "successful raw worker response tokens_per_second disagrees with timed work",
         )
     return _RawSummaryRecord(
         identity,
@@ -714,7 +783,9 @@ def _failed_raw_record(
     )
 
 
-def _parse_raw_record(line: str, manifest_path: Path, index: int) -> _RawSummaryRecord:
+def _parse_raw_record(
+    line: str, manifest_path: Path, index: int, config: BenchmarkV2Config
+) -> _RawSummaryRecord:
     """Parse one exact raw JSONL record without collapsing worker failure evidence."""
     if not line:
         raise InvalidComparisonInputError(manifest_path, f"raw replicate line {index} is empty")
@@ -732,10 +803,12 @@ def _parse_raw_record(line: str, manifest_path: Path, index: int) -> _RawSummary
     task = (identity, name, replicate, worker_pid)
     if status == "error":
         return _failed_raw_record(document, manifest_path, task)
-    return _successful_raw_record(document, manifest_path, task)
+    return _successful_raw_record(document, manifest_path, task, config)
 
 
-def _load_raw_records(manifest_path: Path, manifest: RunManifest) -> tuple[_RawSummaryRecord, ...]:
+def _load_raw_records(
+    manifest_path: Path, manifest: RunManifest, config: BenchmarkV2Config
+) -> tuple[_RawSummaryRecord, ...]:
     """Strictly reconcile bound raw records with manifest counts and recomputed case statistics."""
     content = _read_bound_artifact(manifest_path, manifest, "raw_replicates.jsonl")
     try:
@@ -745,7 +818,7 @@ def _load_raw_records(manifest_path: Path, manifest: RunManifest) -> tuple[_RawS
             manifest_path, "raw_replicates.jsonl is not valid UTF-8"
         ) from error
     records = tuple(
-        _parse_raw_record(line, manifest_path, index) for index, line in enumerate(lines, 1)
+        _parse_raw_record(line, manifest_path, index, config) for index, line in enumerate(lines, 1)
     )
     tasks = {(record.case_identity, record.replicate_index) for record in records}
     if len(tasks) != len(records):
@@ -753,6 +826,19 @@ def _load_raw_records(manifest_path: Path, manifest: RunManifest) -> tuple[_RawS
             manifest_path, "raw replicate task identities are not unique"
         )
     failures = sum(record.status == "error" for record in records)
+    expected_tasks = {
+        (case_identity(config, case), replicate)
+        for case in config.cases
+        for replicate in range(config.replicates)
+    }
+    if manifest.expected_task_count != len(expected_tasks):
+        raise InvalidComparisonInputError(
+            manifest_path, "manifest expected_task_count differs from resolved config"
+        )
+    if not tasks <= expected_tasks:
+        raise InvalidComparisonInputError(
+            manifest_path, "raw replicate task is absent from resolved config"
+        )
     if (
         len(records) != manifest.completed_task_count
         or sum(record.status == "ok" for record in records) != manifest.successful_task_count
@@ -762,7 +848,7 @@ def _load_raw_records(manifest_path: Path, manifest: RunManifest) -> tuple[_RawS
             manifest_path, "raw replicate counts disagree with manifest"
         )
     if manifest.status == "complete" and (
-        len(records) != manifest.expected_task_count or failures != 0
+        len(records) != manifest.expected_task_count or failures != 0 or tasks != expected_tasks
     ):
         raise InvalidComparisonInputError(
             manifest_path, "complete manifest has incomplete or failed raw replicates"
@@ -812,7 +898,10 @@ def _execution_entry(
 
 
 def _load_execution_order(
-    manifest_path: Path, manifest: RunManifest, records: tuple[_RawSummaryRecord, ...]
+    manifest_path: Path,
+    manifest: RunManifest,
+    records: tuple[_RawSummaryRecord, ...],
+    config: BenchmarkV2Config,
 ) -> None:
     """Reconcile ordered tasks with finalized raw records, PID/status, and the case manifest."""
     document = _strict_json_document(
@@ -829,11 +918,23 @@ def _load_execution_order(
     task_keys = {(identity, replicate) for identity, replicate, _, _, _ in entries}
     raw_by_task = {(record.case_identity, record.replicate_index): record for record in records}
     manifest_cases = {case["case_identity"]: case["case_name"] for case in manifest.case_identities}
-    if len(entries) != manifest.expected_task_count or len(task_keys) != len(entries):
+    expected_tasks = {
+        (case_identity(config, case), replicate)
+        for case in config.cases
+        for replicate in range(config.replicates)
+    }
+    expected_case_names = {case_identity(config, case): case.name for case in config.cases}
+    if (
+        len(entries) != manifest.expected_task_count
+        or len(task_keys) != len(entries)
+        or task_keys != expected_tasks
+    ):
         raise InvalidComparisonInputError(
-            manifest_path, "execution_order.json task count is invalid"
+            manifest_path, "execution_order.json task set differs from resolved config"
         )
-    if {identity for identity, _, _, _, _ in entries} != set(manifest_cases):
+    if {identity for identity, _, _, _, _ in entries} != set(
+        manifest_cases
+    ) or manifest_cases != expected_case_names:
         raise InvalidComparisonInputError(
             manifest_path, "execution_order.json case set differs from manifest"
         )
@@ -1047,10 +1148,12 @@ def _load_summaries(  # noqa: C901
 def _load_methodology(manifest_path: Path, manifest: RunManifest) -> _Methodology:
     """Read the candidate's bound strict regression threshold without trusting a CLI default."""
     try:
-        document = yaml.safe_load(
-            _read_bound_artifact(manifest_path, manifest, "resolved_config.yaml").decode("utf-8")
+        content = _read_bound_artifact(manifest_path, manifest, "resolved_config.yaml")
+        resolved_config = load_resolved_benchmark_v2_config(
+            content, manifest_path.parent / "resolved_config.yaml"
         )
-    except (UnicodeDecodeError, yaml.YAMLError) as error:
+        document = yaml.safe_load(content.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, yaml.YAMLError) as error:
         raise InvalidComparisonInputError(
             manifest_path, "resolved_config.yaml is invalid"
         ) from error
@@ -1072,8 +1175,15 @@ def _load_methodology(manifest_path: Path, manifest: RunManifest) -> _Methodolog
     minimum = config.get("minimum_replicates")
     if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum <= 0:
         raise InvalidComparisonInputError(manifest_path, "config minimum_replicates is invalid")
+    if resolved_config_sha256(resolved_config) != manifest.config_sha256:
+        raise InvalidComparisonInputError(
+            manifest_path, "resolved_config.yaml hash differs from manifest config_sha256"
+        )
     return _Methodology(
-        positive_number("regression_threshold_percent"), minimum, positive_number("max_cv_percent")
+        positive_number("regression_threshold_percent"),
+        minimum,
+        positive_number("max_cv_percent"),
+        resolved_config,
     )
 
 
@@ -1136,9 +1246,9 @@ def _load_input(manifest_path: Path) -> _ComparisonInput:
     manifest = load_run_manifest(manifest_path)
     methodology = _load_methodology(manifest_path, manifest)
     summaries = _load_summaries(manifest_path, manifest)
-    records = _load_raw_records(manifest_path, manifest)
+    records = _load_raw_records(manifest_path, manifest, methodology.config)
     _validate_summaries_from_raw(manifest_path, manifest, summaries, records, methodology)
-    _load_execution_order(manifest_path, manifest, records)
+    _load_execution_order(manifest_path, manifest, records, methodology.config)
     environment = _load_run_environment(manifest_path, manifest)
     raw_environment = _strict_json_document(
         _read_bound_artifact(manifest_path, manifest, "environment.json"),

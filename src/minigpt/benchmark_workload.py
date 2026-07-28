@@ -10,28 +10,12 @@ import torch
 from torch.profiler import record_function
 from typing_extensions import override
 
+import minigpt.benchmark_workload_methodology as methodology
 from minigpt.batching import TokenBatcher
 from minigpt.benchmark_types import BenchmarkCase
-from minigpt.benchmark_workload_methodology import (
-    BATCHER_METHOD,
-    GRAD_CLIP,
-    MODEL_BIAS,
-    MODEL_DROPOUT,
-    OPTIMIZER_BETAS,
-    OPTIMIZER_LEARNING_RATE,
-    OPTIMIZER_MIN_LEARNING_RATE,
-    OPTIMIZER_TYPE,
-    OPTIMIZER_WEIGHT_DECAY,
-    SYNTHETIC_CORPUS_BATCH_MULTIPLIER,
-    SYNTHETIC_CORPUS_MIN_TOKENS,
-    WORKLOAD_DEVICE,
-    ZERO_GRAD_SET_TO_NONE,
-    synthetic_token_dtype,
-    workload_torch_dtype,
-)
 from minigpt.model import GPT
-from minigpt.optimization import create_adamw, seed_everything
-from minigpt.settings import GPTConfig, OptimizerSettings
+from minigpt.optimization import seed_everything
+from minigpt.settings import GPTConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -61,17 +45,17 @@ class TrainingStepWorkload:
         """Initialize a deterministic model, optimizer, and synthetic corpus."""
         seed_everything(seed, case.thread_count)
         corpus_size = max(
-            SYNTHETIC_CORPUS_MIN_TOKENS,
-            case.batch_size * (case.block_size + 1) * SYNTHETIC_CORPUS_BATCH_MULTIPLIER,
+            methodology.SYNTHETIC_CORPUS_MIN_TOKENS,
+            case.batch_size * (case.block_size + 1) * methodology.SYNTHETIC_CORPUS_BATCH_MULTIPLIER,
         )
-        if BATCHER_METHOD != "TokenBatcher.next_batch":
-            msg = f"unsupported synthetic batcher method {BATCHER_METHOD!r}"
+        if methodology.BATCHER_METHOD != "TokenBatcher.next_batch":
+            msg = f"unsupported synthetic batcher method {methodology.BATCHER_METHOD!r}"
             raise ValueError(msg)
         tokens = np.random.default_rng(seed).integers(
             0,
             vocab_size,
             size=corpus_size,
-            dtype=synthetic_token_dtype(),
+            dtype=methodology.synthetic_token_dtype(),
         )
         self.batcher = TokenBatcher(
             tokens,
@@ -86,21 +70,15 @@ class TrainingStepWorkload:
                 n_layer=case.n_layer,
                 n_head=case.n_head,
                 n_embd=case.n_embd,
-                dropout=MODEL_DROPOUT,
-                bias=MODEL_BIAS,
+                dropout=methodology.MODEL_DROPOUT,
+                bias=methodology.MODEL_BIAS,
             )
         )
-        _ = self.model.to(device=WORKLOAD_DEVICE, dtype=workload_torch_dtype())
-        settings = OptimizerSettings(
-            optimizer_type=OPTIMIZER_TYPE,
-            learning_rate=OPTIMIZER_LEARNING_RATE,
-            min_learning_rate=OPTIMIZER_MIN_LEARNING_RATE,
-            weight_decay=OPTIMIZER_WEIGHT_DECAY,
-            beta1=OPTIMIZER_BETAS[0],
-            beta2=OPTIMIZER_BETAS[1],
-            grad_clip=GRAD_CLIP,
+        _ = self.model.to(
+            device=methodology.WORKLOAD_DEVICE, dtype=methodology.workload_torch_dtype()
         )
-        self.optimizer = create_adamw(self.model, settings)
+        settings = methodology.benchmark_optimizer_settings()
+        self.optimizer = methodology.create_benchmark_optimizer(self.model)
         self.grad_clip = settings.grad_clip
         self.tokens_per_step = case.batch_size * case.block_size
 
@@ -112,7 +90,7 @@ class TrainingStepWorkload:
     def step(self) -> None:
         """Execute one uninstrumented forward/backward/optimizer training step."""
         inputs, targets = self.batcher.next_batch()
-        self.optimizer.zero_grad(set_to_none=ZERO_GRAD_SET_TO_NONE)
+        self.optimizer.zero_grad(set_to_none=methodology.ZERO_GRAD_SET_TO_NONE)
         _, loss = cast("tuple[torch.Tensor, torch.Tensor | None]", self.model(inputs, targets))
         if loss is None:
             raise InvalidBenchmarkStateError(MISSING_LOSS_REASON)
@@ -127,7 +105,7 @@ class TrainingStepWorkload:
         with record_function("data_preparation"):
             inputs, targets = self.batcher.next_batch()
         with record_function("forward_backward"):
-            self.optimizer.zero_grad(set_to_none=ZERO_GRAD_SET_TO_NONE)
+            self.optimizer.zero_grad(set_to_none=methodology.ZERO_GRAD_SET_TO_NONE)
             _, loss = cast("tuple[torch.Tensor, torch.Tensor | None]", self.model(inputs, targets))
             if loss is None:
                 raise InvalidBenchmarkStateError(MISSING_LOSS_REASON)

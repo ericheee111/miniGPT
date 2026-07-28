@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Literal, Never, Protocol, cast
 
 from typing_extensions import override
 
+import minigpt.benchmark_workload_methodology as methodology
 from minigpt.benchmark_v2_config import JsonValue, case_identity, resolved_config_sha256
 from minigpt.benchmark_v2_report import RunStatus, capture_run_environment, write_run_artifacts
 from minigpt.benchmark_v2_worker import (
@@ -23,8 +24,11 @@ from minigpt.benchmark_v2_worker import (
     WorkerRequest,
     worker_request_document,
 )
+from minigpt.model import expected_gpt_parameter_count
+from minigpt.settings import GPTConfig
 
 _GIT_SHORT_SHA_LENGTH = 12
+_METRIC_RELATIVE_TOLERANCE = 1e-9
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -448,10 +452,41 @@ def _validate_success_response(task: BenchmarkTask, response: dict[str, object])
     )
     if measurement_steps != task.measurement_steps:
         _invalid_worker_response("measurement_steps does not match the task")
-    for field in ("elapsed_seconds", "step_time_ms", "tokens_per_second"):
-        _ = _positive_finite_number(response[field], field)
-    _ = _integer(response["tokens_per_step"], "tokens_per_step", positive=True)
-    _ = _integer(response["parameter_count"], "parameter_count", positive=True)
+    elapsed_seconds = _positive_finite_number(response["elapsed_seconds"], "elapsed_seconds")
+    step_time_ms = _positive_finite_number(response["step_time_ms"], "step_time_ms")
+    tokens_per_second = _positive_finite_number(response["tokens_per_second"], "tokens_per_second")
+    tokens_per_step = _integer(response["tokens_per_step"], "tokens_per_step", positive=True)
+    parameter_count = _integer(response["parameter_count"], "parameter_count", positive=True)
+    expected_tokens_per_step = task.case.batch_size * task.case.block_size
+    if tokens_per_step != expected_tokens_per_step:
+        _invalid_worker_response("tokens_per_step does not match the task")
+    expected_parameter_count = expected_gpt_parameter_count(
+        GPTConfig(
+            vocab_size=task.vocab_size,
+            block_size=task.case.block_size,
+            n_layer=task.case.n_layer,
+            n_head=task.case.n_head,
+            n_embd=task.case.n_embd,
+            dropout=methodology.MODEL_DROPOUT,
+            bias=methodology.MODEL_BIAS,
+        )
+    )
+    if parameter_count != expected_parameter_count:
+        _invalid_worker_response("parameter_count does not match the task")
+    expected_step_time_ms = elapsed_seconds * 1_000 / measurement_steps
+    if not math.isclose(
+        step_time_ms,
+        expected_step_time_ms,
+        rel_tol=_METRIC_RELATIVE_TOLERANCE,
+    ):
+        _invalid_worker_response("step_time_ms does not match elapsed_seconds")
+    expected_tokens_per_second = tokens_per_step * measurement_steps / elapsed_seconds
+    if not math.isclose(
+        tokens_per_second,
+        expected_tokens_per_second,
+        rel_tol=_METRIC_RELATIVE_TOLERANCE,
+    ):
+        _invalid_worker_response("tokens_per_second does not match timed work")
     final_rss_mib = _positive_finite_number(response["final_rss_mib"], "final_rss_mib")
     peak_rss_mib = _positive_finite_number(response["peak_rss_mib"], "peak_rss_mib")
     if peak_rss_mib < final_rss_mib:

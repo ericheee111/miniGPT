@@ -14,7 +14,13 @@ import pytest
 import yaml
 
 import minigpt.benchmark_v2_compare as compare_module
-from minigpt.benchmark_v2_compare import compare_runs, compare_step_times, write_comparison
+import minigpt.benchmark_workload_methodology as methodology_module
+from minigpt.benchmark_v2_compare import (
+    InvalidComparisonInputError,
+    compare_runs,
+    compare_step_times,
+    write_comparison,
+)
 from minigpt.benchmark_v2_config import (
     case_identity as derive_case_identity,
 )
@@ -22,6 +28,8 @@ from minigpt.benchmark_v2_config import (
     load_resolved_benchmark_v2_config,
     resolved_config_sha256,
 )
+from minigpt.model import expected_gpt_parameter_count
+from minigpt.settings import GPTConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -176,7 +184,7 @@ def _write_run_package(  # noqa: PLR0913
         "population_stddev_step_time_ms": "0.8",
         "median_absolute_deviation_step_time_ms": "1.0",
         "coefficient_of_variation_percent": "0.8",
-        "median_tokens_per_second": "1000.0",
+        "median_tokens_per_second": "640.0",
         "median_final_rss_mib": "100.0",
         "max_peak_rss_mib": "120.0",
         "stability": "stable",
@@ -184,7 +192,8 @@ def _write_run_package(  # noqa: PLR0913
     if summary_updates is not None:
         summary.update(summary_updates)
     step_time = float(summary["median_step_time_ms"])
-    tokens = float(summary["median_tokens_per_second"])
+    tokens = 64 / (step_time / 1000)
+    summary["median_tokens_per_second"] = str(tokens)
     summary.update(
         {
             "min_step_time_ms": str(step_time),
@@ -228,7 +237,17 @@ def _write_run_package(  # noqa: PLR0913
             "step_time_ms": step_time,
             "tokens_per_second": tokens,
             "tokens_per_step": 64,
-            "parameter_count": 100,
+            "parameter_count": expected_gpt_parameter_count(
+                GPTConfig(
+                    vocab_size=65,
+                    block_size=32,
+                    n_layer=1,
+                    n_head=1,
+                    n_embd=8,
+                    dropout=methodology_module.MODEL_DROPOUT,
+                    bias=methodology_module.MODEL_BIAS,
+                )
+            ),
             "final_rss_mib": 100.0,
             "peak_rss_mib": 120.0,
             "peak_rss_method": "windows_peak_working_set",
@@ -663,7 +682,7 @@ def test_compare_runs_aligns_identity_not_display_name_and_writes_deterministic_
         "candidate",
         summary_updates={
             "median_step_time_ms": "105.0",
-            "median_tokens_per_second": "952.3809523809524",
+            "median_tokens_per_second": "609.5238095238095",
         },
     )
 
@@ -679,6 +698,76 @@ def test_compare_runs_aligns_identity_not_display_name_and_writes_deterministic_
     assert artifacts.markdown_path == candidate.parent.parent / "candidate-comparison-baseline.md"
     assert '"verdict": "pass"' in artifacts.json_path.read_text(encoding="utf-8")
     assert "| display-name-can-change |" in artifacts.markdown_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("measurement_steps", 2),
+        ("tokens_per_step", 1),
+        ("parameter_count", 1),
+        ("tokens_per_second", 1.0),
+    ],
+)
+def test_compare_runs_rejects_hash_consistent_forged_success_metrics(
+    tmp_path: Path, field: str, value: JsonValue
+) -> None:
+    """A rehashed package cannot replace config-bound worker measurement facts."""
+    # Given: a complete package whose one raw response is forged then manifest-rebound.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    raw_path = candidate.parent / "raw_replicates.jsonl"
+    records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    for record in records:
+        response = cast("dict[str, JsonValue]", record["worker_response"])
+        response[field] = value
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8", newline="\n"
+    )
+    _rehash_manifest_artifact(candidate, raw_path)
+
+    # When/Then: strict loading rejects the internally forged but hash-consistent package.
+    with pytest.raises(InvalidComparisonInputError):
+        _ = compare_runs(baseline, candidate)
+
+
+def test_compare_runs_rejects_manifest_task_count_that_differs_from_resolved_config(
+    tmp_path: Path,
+) -> None:
+    """A bound config with five replicates cannot claim a three-task complete run."""
+    # Given: a package whose resolved config is changed from three to five replicates and rehashed.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    config_path = candidate.parent / "resolved_config.yaml"
+    config = cast("dict[str, JsonValue]", yaml.safe_load(config_path.read_text(encoding="utf-8")))
+    config["replicates"] = 5
+    _ = config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8", newline="\n"
+    )
+    resolved_config = load_resolved_benchmark_v2_config(config_path.read_bytes(), config_path)
+    config_sha256 = resolved_config_sha256(resolved_config)
+    environment_path = candidate.parent / "environment.json"
+    environment = cast(
+        "dict[str, JsonValue]", json.loads(environment_path.read_text(encoding="utf-8"))
+    )
+    environment["config_sha256"] = config_sha256
+    _ = environment_path.write_text(
+        json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    manifest = cast("dict[str, JsonValue]", json.loads(candidate.read_text(encoding="utf-8")))
+    manifest["config_sha256"] = config_sha256
+    _ = candidate.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    _rehash_manifest_artifact(candidate, config_path)
+    _rehash_manifest_artifact(candidate, environment_path)
+
+    # When/Then: manifest cardinality must match the expanded config task set.
+    with pytest.raises(InvalidComparisonInputError):
+        _ = compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_identically_unavailable_cpu_evidence(tmp_path: Path) -> None:
@@ -749,7 +838,10 @@ def test_compare_runs_reports_performance_environment_mismatches_but_keeps_delta
         tmp_path,
         "candidate",
         environment_updates={field: candidate_value},
-        summary_updates={"median_step_time_ms": "110.0", "median_tokens_per_second": "909.0"},
+        summary_updates={
+            "median_step_time_ms": "110.0",
+            "median_tokens_per_second": "581.8181818181819",
+        },
     )
 
     # When: comparison checks the complete environment evidence.
@@ -848,7 +940,7 @@ def test_compare_runs_allows_full_config_differences_excluded_from_case_identity
         profile_active_steps=3,
         summary_updates={
             "median_step_time_ms": "105.5",
-            "median_tokens_per_second": "947.8672985781991",
+            "median_tokens_per_second": "606.6350710900474",
         },
     )
 

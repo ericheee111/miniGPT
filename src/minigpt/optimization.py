@@ -4,17 +4,38 @@ from __future__ import annotations
 
 import math
 import random
-from typing import TYPE_CHECKING, Final
+from typing import Final, Protocol
 
 import numpy as np
 import torch
 from torch import nn
 
-if TYPE_CHECKING:
-    from minigpt.settings import OptimizerSettings
-
 _DECAY_DIMENSION_THRESHOLD: Final = 2
 _SAMPLE_SEED_OFFSET: Final = 2
+
+
+class AdamWSettings(Protocol):
+    """Describe exactly the settings consumed while constructing AdamW."""
+
+    @property
+    def learning_rate(self) -> float:
+        """Return the AdamW learning rate."""
+        ...
+
+    @property
+    def weight_decay(self) -> float:
+        """Return the decayed parameter-group weight decay."""
+        ...
+
+    @property
+    def beta1(self) -> float:
+        """Return AdamW's first beta coefficient."""
+        ...
+
+    @property
+    def beta2(self) -> float:
+        """Return AdamW's second beta coefficient."""
+        ...
 
 
 def seed_everything(seed: int, num_threads: int) -> None:
@@ -53,7 +74,7 @@ def learning_rate_at_step(
     return min_learning_rate + cosine * (max_learning_rate - min_learning_rate)
 
 
-def create_adamw(model: nn.Module, settings: OptimizerSettings) -> torch.optim.AdamW:
+def create_adamw(model: nn.Module, settings: AdamWSettings) -> torch.optim.AdamW:
     """Create AdamW with decay limited to matrix-like parameters."""
     decayed_parameters: list[nn.Parameter] = []
     non_decayed_parameters: list[nn.Parameter] = []
