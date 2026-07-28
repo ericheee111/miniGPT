@@ -315,7 +315,10 @@ def _positive_finite_number(value: object, field: str) -> float:
     """Require one positive finite JSON number."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _invalid_worker_response(f"{field} must be a number")
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        _invalid_worker_response(f"{field} must be positive and finite")
     if not math.isfinite(number) or number <= 0.0:
         _invalid_worker_response(f"{field} must be positive and finite")
     return number
