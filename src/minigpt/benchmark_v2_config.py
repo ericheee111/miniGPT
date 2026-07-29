@@ -457,6 +457,7 @@ def resolved_config_sha256(config: BenchmarkV2Config) -> str:
 def _workload_document(config: BenchmarkV2Config, case: BenchmarkV2Case) -> dict[str, JsonValue]:
     """Select only settings that define the work performed by one case."""
     return {
+        "case_identity_schema_version": 3,
         "benchmark_seed": config.benchmark_seed,
         "vocab_size": config.vocab_size,
         "warmup_steps": config.warmup_steps,
@@ -464,8 +465,6 @@ def _workload_document(config: BenchmarkV2Config, case: BenchmarkV2Case) -> dict
         "torch_num_interop_threads": config.torch_num_interop_threads,
         "cpu_affinity": list(config.cpu_affinity) if config.cpu_affinity is not None else None,
         "case": {
-            "name": case.name,
-            "model_name": case.model_name,
             "n_layer": case.n_layer,
             "n_head": case.n_head,
             "n_embd": case.n_embd,

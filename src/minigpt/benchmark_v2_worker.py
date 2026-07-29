@@ -399,9 +399,9 @@ def run_worker_request(request: WorkerRequest) -> WorkerResult:
     started_at_utc = _utc_now_iso()
     if request.protocol_version != WORKER_PROTOCOL_VERSION:
         _invalid(f"protocol_version must be {WORKER_PROTOCOL_VERSION}")
+    effective_cpu_affinity = apply_cpu_affinity(request.cpu_affinity)
     torch.set_num_threads(request.case.torch_num_threads)
     torch.set_num_interop_threads(request.torch_num_interop_threads)
-    effective_cpu_affinity = apply_cpu_affinity(request.cpu_affinity)
     workload = create_training_step_workload(
         request.case,
         seed=request.benchmark_seed,

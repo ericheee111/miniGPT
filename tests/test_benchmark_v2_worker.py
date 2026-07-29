@@ -135,6 +135,7 @@ def test_worker_keeps_warmup_construction_and_evidence_outside_timer(
     timer_values = iter((10.0, 11.5))
     timer_calls = 0
     controls = {"threads": False, "interop": False, "affinity": False}
+    setup_order: list[str] = []
     workloads: list[CountingWorkload] = []
 
     def fake_perf_counter() -> float:
@@ -144,16 +145,20 @@ def test_worker_keeps_warmup_construction_and_evidence_outside_timer(
 
     def fake_set_num_threads(_threads: int) -> None:
         controls["threads"] = True
+        setup_order.append("torch_num_threads")
 
     def fake_set_num_interop_threads(_threads: int) -> None:
         controls["interop"] = True
+        setup_order.append("torch_num_interop_threads")
 
     def fake_affinity(_requested: tuple[int, ...] | None) -> tuple[int, ...] | None:
         controls["affinity"] = True
+        setup_order.append("cpu_affinity")
         return None
 
     def fake_factory(_case: BenchmarkV2Case, *, seed: int, vocab_size: int) -> CountingWorkload:
         del seed, vocab_size
+        setup_order.append("workload")
         workload = CountingWorkload(
             timer_call_count=lambda: timer_calls,
             constructed_before_timer=timer_calls == 0 and all(controls.values()),
@@ -200,6 +205,12 @@ def test_worker_keeps_warmup_construction_and_evidence_outside_timer(
 
     # Then: setup and warmup precede exactly two timer reads, and RSS follows the timer.
     workload = workloads[0]
+    assert setup_order == [
+        "cpu_affinity",
+        "torch_num_threads",
+        "torch_num_interop_threads",
+        "workload",
+    ]
     assert workload.constructed_before_timer is True
     assert workload.warmup_calls == request.warmup_steps
     assert workload.measured_calls == request.measurement_steps

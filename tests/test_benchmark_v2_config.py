@@ -209,8 +209,6 @@ def changed_case(case: BenchmarkV2Case, field: str) -> BenchmarkV2Case:
 @pytest.mark.parametrize(
     "field",
     [
-        "name",
-        "model_name",
         "n_layer",
         "n_head",
         "n_embd",
@@ -220,7 +218,7 @@ def changed_case(case: BenchmarkV2Case, field: str) -> BenchmarkV2Case:
     ],
 )
 def test_case_identity_changes_for_every_case_field(tmp_path: Path, field: str) -> None:
-    """Include every explicit case field in the workload identity."""
+    """Include every work-defining resolved case field in the workload identity."""
     # Given: one parsed explicit case.
     config = load_benchmark_v2_config(write_v2_config(tmp_path))
     case = config.cases[0]
@@ -230,6 +228,22 @@ def test_case_identity_changes_for_every_case_field(tmp_path: Path, field: str) 
 
     # Then: the workload identity changes.
     assert case_identity(config, case) != case_identity(config, changed)
+
+
+@pytest.mark.parametrize("field", ["name", "model_name"])
+def test_case_identity_excludes_case_and_model_display_aliases(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    # Given: one parsed case and its resolved model dimensions.
+    config = load_benchmark_v2_config(write_v2_config(tmp_path))
+    case = config.cases[0]
+
+    # When: only its case label or model alias changes.
+    changed = changed_case(case, field)
+
+    # Then: display-only metadata does not fragment workload identity.
+    assert case_identity(config, case) == case_identity(config, changed)
 
 
 @pytest.mark.parametrize(
