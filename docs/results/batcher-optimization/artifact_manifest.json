@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "package": "stage8-batcher-mmap-optimization",
+  "generated_by_git_sha": "3d6ae83e5c0b421954f1ecf067e41ccf45970904",
+  "source_identities": {
+    "reference_config_sha256": "73f82ff3bbb339904babcf165d7d3d9e1f2483f394eba298b42c13fefbb3f6bb",
+    "batcher_config_sha256": "9a167a404c370ee28a4e9dd7c5374c6ae5492117cf54e7d10bae265abadd191e",
+    "comparison_policy_sha256": "36ddd5faa00837d921a9e46f9085cf82d557e3a614f5c1108aa8fe936e92876c",
+    "profile_config_sha256": "c7dbbef8002792c9c8b890778bb1d910797b21406a71c833eab7f58b91b5d7dc"
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "cfb4aa1ae45b9aff22380091d7ab7c19a42b801c6e446568856c7b8b3581040c",
+      "size_bytes": 7046
+    },
+    {
+      "path": "summary.json",
+      "sha256": "10140083226f5b884336ea61ee62a36354bfd44ff3451a0feb865dbeb84efde6",
+      "size_bytes": 1571
+    },
+    {
+      "path": "evidence/batcher-baseline-manifest.json",
+      "sha256": "457fbe9ea516544f60efa1b7812fcc1d60f9bf2a9d64ea373332bad636edaeb4",
+      "size_bytes": 3946
+    },
+    {
+      "path": "evidence/batcher-candidate-manifest.json",
+      "sha256": "fbe8ecd8e829f861fc45ac658c1cdc3ccb266cfebb47398c6646e87502424eda",
+      "size_bytes": 3951
+    },
+    {
+      "path": "evidence/profiler-baseline-manifest.json",
+      "sha256": "f035cdb8dd743ea2245d189d4835270843eaf65e3c37dbc6aa8acd64f17cf5cf",
+      "size_bytes": 4183
+    },
+    {
+      "path": "evidence/profiler-baseline-top-operators.csv",
+      "sha256": "20f92ef299981efc2c3066002601d71664a3f29dcb5874a52482a368932e890c",
+      "size_bytes": 4857
+    },
+    {
+      "path": "evidence/profiler-candidate-manifest.json",
+      "sha256": "805dc643f38db16656131aed3878405ecc80018c922040c3fa405bddb1e69575",
+      "size_bytes": 4183
+    },
+    {
+      "path": "evidence/profiler-candidate-top-operators.csv",
+      "sha256": "49ec6fbae993c095d7cf2cfb3140fa736575b9239920834696661cd15e027382",
+      "size_bytes": 4854
+    },
+    {
+      "path": "evidence/reference-baseline-1-manifest.json",
+      "sha256": "623ca808b2789093aa7de8eef838dbc00115edcb8e1bf07f666a2df2021e1839",
+      "size_bytes": 3066
+    },
+    {
+      "path": "evidence/reference-baseline-2-manifest.json",
+      "sha256": "2fe5bb876aa5321426425d477cfab5a82196415998f49061187e34dabddb3efd",
+      "size_bytes": 3066
+    },
+    {
+      "path": "evidence/reference-candidate-manifest.json",
+      "sha256": "e1f62afe46963650f1f1e9b1069bf0c1248fc506d44223e795a150305ac4bfef",
+      "size_bytes": 3066
+    },
+    {
+      "path": "evidence/reference-comparison-baseline-1.json",
+      "sha256": "850f1194bf0ad8717c4c1be926edba0f527f61203345a8f9ef65e90c04fdf3d2",
+      "size_bytes": 7145
+    },
+    {
+      "path": "evidence/reference-comparison-baseline-2.json",
+      "sha256": "9ed438a9d1867ea790d53d5b3fa80bdf28f1407a6d80cd2f3c11fddbec188412",
+      "size_bytes": 7138
+    },
+    {
+      "path": "evidence/reference-same-code-comparison.json",
+      "sha256": "d16967eb7063ffd2b9208aff745c7cca252532b817282ea57f9edb8949369129",
+      "size_bytes": 7135
+    }
+  ]
+}

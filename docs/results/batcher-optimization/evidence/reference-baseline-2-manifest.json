@@ -1,0 +1,92 @@
+{
+  "artifacts": [
+    {
+      "path": "environment.json",
+      "sha256": "f2aaeb92d2620017f3a9bc0270ef9524525288fa7acfe564fc8ad8b5d7b7b4b0",
+      "size_bytes": 56954
+    },
+    {
+      "path": "resolved_config.yaml",
+      "sha256": "5006355cc9cc72a4a6c4d0f2c9380b992c0974be2ed74c0a3d8b1daea64b6b2f",
+      "size_bytes": 2087
+    },
+    {
+      "path": "raw_replicates.jsonl",
+      "sha256": "b6dd94e7c7ec23f211161cd5a6f740289fcb55a9fcda010f25b5661905382fec",
+      "size_bytes": 180449
+    },
+    {
+      "path": "summary.csv",
+      "sha256": "8fa1be76c6356cb2dc08d04bacc40c23ba583495b416992b4cf73253825f4761",
+      "size_bytes": 3004
+    },
+    {
+      "path": "summary.md",
+      "sha256": "dfa167f81a55d206289a2d7c46ee283b316eb5379d87d1f516b07ebbccacd9ba",
+      "size_bytes": 2443
+    },
+    {
+      "path": "execution_order.json",
+      "sha256": "3c3b6ba33575ac3ba73098b5b05eaf784427ed43b23efdf4d2c170e993a6d805",
+      "size_bytes": 24236
+    }
+  ],
+  "case_identities": [
+    {
+      "case_identity": "120a623b68e39c4842138009b8883bda54c0899f51436814ab5becac95a830eb",
+      "case_name": "teaching_t12_s64_b16"
+    },
+    {
+      "case_identity": "af03fb16c6c00af492d7a6d57b812bbe2e2133da3a8c212446e463edefda8f76",
+      "case_name": "teaching_t1_s128_b16"
+    },
+    {
+      "case_identity": "fda788e9a9d299543a7a52899a2b73fbcf2ec328d8f5a4c0fe0cbda0d6b242cf",
+      "case_name": "teaching_t12_s128_b4"
+    },
+    {
+      "case_identity": "de1ecfae22d8908fa1ab7aadde51f07eb28cdf17fea34319daf7c2700ccb82a9",
+      "case_name": "teaching_t4_s128_b16"
+    },
+    {
+      "case_identity": "bd5f13c28cbf84f95229501c4f7b0419c7860282626e50b3047f1082c3678d0d",
+      "case_name": "teaching_t12_s128_b32"
+    },
+    {
+      "case_identity": "9f1f4da1f62b91fb42485a428a55939fe24dbf93c81fdcf468b666527bd4d11f",
+      "case_name": "teaching_t20_s128_b16"
+    },
+    {
+      "case_identity": "6e66294fe879949165e512ede7ddd70ea1c2511e33f23fcd67c53acf71f50f48",
+      "case_name": "teaching_t12_s128_b16"
+    },
+    {
+      "case_identity": "3e835f6d9d38d3bf591f92d5f01dceeb8ba625eeb0c934c8d391aebc6d791185",
+      "case_name": "teaching_t12_s128_b8"
+    },
+    {
+      "case_identity": "7da2119ac1ccf68b77a600fd68019c187eb0ce3f61b61ccd82c46d04eec84a80",
+      "case_name": "teaching_t8_s128_b16"
+    },
+    {
+      "case_identity": "13fca906fb2955b7b8c9027b1a4719b407071c3a0e62d7695d4cee335d1a4a32",
+      "case_name": "teaching_t12_s256_b16"
+    }
+  ],
+  "completed_task_count": 70,
+  "config_sha256": "73f82ff3bbb339904babcf165d7d3d9e1f2483f394eba298b42c13fefbb3f6bb",
+  "ended_at_utc": "2026-07-29T15:58:45.302251+00:00",
+  "expected_task_count": 70,
+  "failed_task_count": 0,
+  "git": {
+    "branch": "codex/stage8-batcher-mmap-optimization",
+    "commit_sha": "18436725aee764660bfdb99938af98c04fb5a87c",
+    "dirty": false
+  },
+  "peak_rss_scope": "worker_lifetime",
+  "run_id": "20260729T153745Z-18436725aee7-73f82ff3bbb3",
+  "schema_version": 3,
+  "started_at_utc": "2026-07-29T15:37:45.209339+00:00",
+  "status": "complete",
+  "successful_task_count": 70
+}

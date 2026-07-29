@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "stage": "stage8-batcher-mmap-optimization",
+  "baseline_git_commit_sha": "18436725aee764660bfdb99938af98c04fb5a87c",
+  "candidate_git_commit_sha": "3d6ae83e5c0b421954f1ecf067e41ccf45970904",
+  "reference_config_sha256": "73f82ff3bbb339904babcf165d7d3d9e1f2483f394eba298b42c13fefbb3f6bb",
+  "comparison_policy_sha256": "36ddd5faa00837d921a9e46f9085cf82d557e3a614f5c1108aa8fe936e92876c",
+  "reference_runs": {
+    "baseline_1": "20260729T151337Z-18436725aee7-73f82ff3bbb3",
+    "baseline_2": "20260729T153745Z-18436725aee7-73f82ff3bbb3",
+    "candidate": "20260729T171606Z-3d6ae83e5c0b-73f82ff3bbb3",
+    "candidate_successful_replicates": 70,
+    "candidate_stable_cases": 10,
+    "comparison_verdicts": [
+      "pass",
+      "pass"
+    ]
+  },
+  "batch_only_runs": {
+    "baseline": "20260729T162518Z-91d9ba65bf67-9a167a404c37",
+    "candidate": "20260729T164353Z-3d6ae83e5c0b-9a167a404c37",
+    "stable_cases": 4,
+    "step_time_change_percent_range": [
+      -48.04,
+      -10.10
+    ],
+    "worker_lifetime_peak_rss_change_mib_range": [
+      -8.03,
+      -7.47
+    ]
+  },
+  "profiler_runs": {
+    "baseline": "profile-20260729T160108Z-c7dbbef80027",
+    "candidate": "profile-20260729T173854Z-c7dbbef80027",
+    "data_preparation_baseline_total_ms": 3.1032,
+    "data_preparation_candidate_total_ms": 2.5267,
+    "interpretation_only": true
+  },
+  "conclusions": {
+    "batch_only_improvement_detected": true,
+    "end_to_end_improvement_detected": false,
+    "end_to_end_regression_detected": false,
+    "cross_machine_claim": false
+  }
+}

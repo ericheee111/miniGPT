@@ -295,24 +295,42 @@ environment 记录 Git、platform/CPU、Python/PyTorch/NumPy、power scheme、pr
 [artifact/report schema](src/minigpt/benchmark_v2_report.py)。报告、raw runs、trace 和机器特定
 数字都被 gitignore，不能作为源码或默认基线提交。
 
-### Recommended local reference methodology
+### Calibrated Stage 8 reference methodology
 
-以下命令推荐在同一台空闲机器、相同电源策略、相同 Python/PyTorch/NumPy 与相关环境变量下执行；
-它没有在本阶段自动执行，也不代表仓库已经取得任何 reference result。
+以下命令必须在同一台空闲机器、相同电源策略、相同 Python/PyTorch/NumPy 与相关环境变量下执行：
 
 ```powershell
 .\.venv\Scripts\python.exe benchmark_v2.py --config configs/benchmark_v2_reference.yaml
 ```
 
-[reference 配置](configs/benchmark_v2_reference.yaml) 使用 4-layer/4-head/128-embedding teaching
-model、10 warmup、20 measured steps 和 7 replicates。它只声明 10 个 one-factor cases：shared
-baseline 一次、threads 1/4/8/12/20、block size 64/128/256 和 batch size 4/8/16/32；不是完整
-矩阵。若需要跨机结论，重新运行并把环境差异视为不可直接比较，而不是把旧数字移植过来。
+[reference 配置](configs/benchmark_v2_reference.yaml) 是在文档所述 i7-14700 Windows 主机上
+通过两次 same-code baseline 校准后的 Stage 8 方法：4-layer/4-head/128-embedding teaching
+model、15 warmup、200 measured steps、7 replicates，并固定 logical CPUs `0..15`。它只声明
+10 个 one-factor cases：shared baseline 一次、threads 1/4/8/12/20、block size 64/128/256
+和 batch size 4/8/16/32；不是完整矩阵。其它 CPU 拓扑不能直接复用该 affinity，必须重新校准。
 
 [comparison policy](configs/benchmark_v2_comparison.yaml) 的保守初值要求至少 5 个成功
 replicate、CV 不高于 5%、step-time regression 严格高于 7.5%，并要求两侧 raw replicate
-数量相同。这些值尚未声明具有统计显著性；正式采用前，应在稳定机器上对相同代码、相同配置
-独立运行两次 baseline，用观测到的自然噪声校准 CV 与 regression threshold。
+数量相同。这些值不声明具有统计显著性；Stage 8 在同机、同代码、同配置上独立运行两次
+baseline，观察到每 case step-time 漂移 -3.29% 到 +6.58%，随后才运行 candidate。
+
+### Stage 8 batcher / mmap evidence
+
+[`benchmark_batcher.py`](benchmark_batcher.py) 是严格隔离的 batch-only 工具：每个 replicate
+使用 fresh process 和只读 `uint16` mmap，只计时 `TokenBatcher.next_batch()`；它不能代替
+完整训练 benchmark。
+
+```powershell
+.\.venv\Scripts\python.exe benchmark_batcher.py `
+  --config configs/batcher_benchmark_reference.yaml
+.\.venv\Scripts\python.exe profile_benchmark_v2.py `
+  --config configs/benchmark_v2_stage8_profile.yaml
+```
+
+[Stage 8 精简证据包](docs/results/batcher-optimization/README.md) 保存两份 baseline、一份有效
+candidate、两份 comparison、batch-only manifests 与 Profiler 摘要。结果显示 batch-only
+中位 step time 改善 10.1%–48.0%，而完整训练 step 的变化落在自然噪声内；因此只声称数据
+路径本身更快，不声称端到端训练显著提速或跨机器领先。
 
 ### Compare compatible v2 evidence
 

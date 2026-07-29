@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -14,8 +16,6 @@ from minigpt.batcher_benchmark import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from minigpt.benchmark_v2_config import JsonValue
 
 
@@ -101,3 +101,43 @@ def test_run_batcher_benchmark_writes_valid_fresh_process_evidence(tmp_path: Pat
     assert manifest["raw_replicate_count"] == 2
     assert artifacts.summary_csv_path.is_file()
     assert artifacts.summary_markdown_path.is_file()
+
+
+def test_committed_stage8_evidence_manifest_verifies_all_artifacts() -> None:
+    # Given: the compact Stage 8 package and its reviewable artifact manifest.
+    result_directory = Path(__file__).parents[1] / "docs" / "results" / "batcher-optimization"
+    manifest_value = cast(
+        "object",
+        json.loads(
+            (result_directory / "artifact_manifest.json").read_text(encoding="utf-8"),
+        ),
+    )
+    assert isinstance(manifest_value, dict)
+    manifest = cast("dict[str, object]", manifest_value)
+    artifacts_value = manifest["artifacts"]
+    assert isinstance(artifacts_value, list)
+    artifacts = cast("list[object]", artifacts_value)
+
+    # When: every declared path, byte count, and SHA-256 is recomputed.
+    verified_paths: set[str] = set()
+    for entry_value in artifacts:
+        assert isinstance(entry_value, dict)
+        entry = cast("dict[str, object]", entry_value)
+        relative_path = entry["path"]
+        expected_sha256 = entry["sha256"]
+        expected_size = entry["size_bytes"]
+        assert isinstance(relative_path, str)
+        assert isinstance(expected_sha256, str)
+        assert isinstance(expected_size, int)
+        artifact_path = result_directory / relative_path
+        verified_paths.add(relative_path)
+        assert artifact_path.stat().st_size == expected_size
+        assert hashlib.sha256(artifact_path.read_bytes()).hexdigest() == expected_sha256
+
+    # Then: the report, summary, and every copied evidence file are bound by the manifest.
+    expected_paths = {
+        path.relative_to(result_directory).as_posix()
+        for path in result_directory.rglob("*")
+        if path.is_file() and path.name != "artifact_manifest.json"
+    }
+    assert verified_paths == expected_paths

@@ -112,7 +112,7 @@ def test_benchmark_v2_cli_runs_canonical_smoke_in_fresh_workers(tmp_path: Path) 
 
 
 def test_reference_config_is_explicit_recommended_methodology() -> None:
-    """Keep the reference matrix small, explicit, and free of machine-result claims."""
+    """Keep the calibrated Stage 8 reference matrix small and explicit."""
     # Given: the committed reference configuration.
     reference = load_benchmark_v2_config(_REFERENCE_CONFIG_PATH)
 
@@ -123,5 +123,6 @@ def test_reference_config_is_explicit_recommended_methodology() -> None:
     assert len(case_names) == 10
     assert len(case_names) == len(set(case_names))
     assert reference.replicates == 7
-    assert reference.warmup_steps == 10
-    assert reference.measurement_steps == 20
+    assert reference.warmup_steps == 15
+    assert reference.measurement_steps == 200
+    assert reference.cpu_affinity == tuple(range(16))

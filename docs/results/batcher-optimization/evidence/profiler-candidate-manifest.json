@@ -1,0 +1,159 @@
+{
+  "artifacts": [
+    {
+      "path": "top_operators.csv",
+      "sha256": "49ec6fbae993c095d7cf2cfb3140fa736575b9239920834696661cd15e027382",
+      "size_bytes": 4854
+    },
+    {
+      "path": "profile_report.md",
+      "sha256": "7406eb4e1a0f56d43637283480692913bcd474a3ee33450ba72e3384c1216cdd",
+      "size_bytes": 827
+    },
+    {
+      "path": "trace.json",
+      "sha256": "98d3311ed7d89dfe79555a9721c3d0dddb5f53913adf50e6c041ea1e3405541e",
+      "size_bytes": 50636073
+    }
+  ],
+  "case_identity": "6e66294fe879949165e512ede7ddd70ea1c2511e33f23fcd67c53acf71f50f48",
+  "case_name": "teaching_t12_s128_b16",
+  "config_sha256": "c7dbbef8002792c9c8b890778bb1d910797b21406a71c833eab7f58b91b5d7dc",
+  "ended_at_utc": "2026-07-29T17:39:04.929920+00:00",
+  "environment": {
+    "parent": {
+      "captured_before_first_worker": true,
+      "configured_cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "configured_torch_num_interop_threads": 1,
+      "cpu_name": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+      "cuda_available": false,
+      "git": {
+        "branch": "codex/stage8-batcher-mmap-optimization",
+        "commit_sha": "3d6ae83e5c0b37a423d60abfb73377cf02fab51f",
+        "dirty": false
+      },
+      "logical_cpu_count": 28,
+      "machine": "AMD64",
+      "numpy_version": "2.5.1",
+      "parent_torch_num_interop_threads": 20,
+      "parent_torch_num_threads": 20,
+      "physical_cpu_count": 20,
+      "platform": "Windows-11-10.0.26200-SP0",
+      "power_scheme": {
+        "reason": null,
+        "value": "电源方案 GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (高性能)"
+      },
+      "process_priority": "32",
+      "python_version": "3.14.6",
+      "relevant_environment_variables": {
+        "MKL_NUM_THREADS": null,
+        "OMP_NUM_THREADS": null
+      },
+      "torch_version": "2.13.0+cpu"
+    },
+    "worker": {
+      "effective_cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "logical_cpu_count": 28,
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python_version": "3.14.6",
+      "relevant_environment_variables": {
+        "MKL_NUM_THREADS": null,
+        "OMP_NUM_THREADS": null
+      },
+      "requested_cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "torch_num_interop_threads": 1,
+      "torch_num_threads": 12,
+      "torch_version": "2.13.0+cpu"
+    }
+  },
+  "git": {
+    "branch": "codex/stage8-batcher-mmap-optimization",
+    "commit_sha": "3d6ae83e5c0b37a423d60abfb73377cf02fab51f",
+    "dirty": false
+  },
+  "method": {
+    "active_steps": 20,
+    "activities": [
+      "CPU"
+    ],
+    "canonical_benchmark_timer_used": false,
+    "profile_memory": true,
+    "record_shapes": true,
+    "schedule": {
+      "active": 20,
+      "repeat": 1,
+      "wait": 0,
+      "warmup": 0
+    },
+    "warmup_steps": 15,
+    "worker_mode": "dedicated_profiled_step"
+  },
+  "profile_run_id": "profile-20260729T173854Z-c7dbbef80027",
+  "profiling_timings_are_not_benchmark_timings": true,
+  "schema_version": 1,
+  "source": {
+    "case_identity": "6e66294fe879949165e512ede7ddd70ea1c2511e33f23fcd67c53acf71f50f48",
+    "case_name": "teaching_t12_s128_b16",
+    "config_path": "D:/Projects/miniGPT/.worktrees/stage8-batcher-mmap-optimization/reports/benchmark-v2/stage8a-profile.yaml",
+    "config_sha256": "c7dbbef8002792c9c8b890778bb1d910797b21406a71c833eab7f58b91b5d7dc"
+  },
+  "source_run": {
+    "benchmark_run_id": null,
+    "benchmark_run_manifest": null,
+    "case_identity": "6e66294fe879949165e512ede7ddd70ea1c2511e33f23fcd67c53acf71f50f48",
+    "config_sha256": "c7dbbef8002792c9c8b890778bb1d910797b21406a71c833eab7f58b91b5d7dc",
+    "kind": "profiled_case_only"
+  },
+  "started_at_utc": "2026-07-29T17:38:54.082420+00:00"
+}
