@@ -10,9 +10,9 @@ measurement_steps: 20
 replicates: 7
 torch_num_interop_threads: 1
 cpu_affinity: null
-max_cv_percent: 10.0
+max_cv_percent: 5.0
 minimum_replicates: 5
-regression_threshold_percent: 5.0
+regression_threshold_percent: 7.5
 relevant_environment_variables:
   - OMP_NUM_THREADS
   - MKL_NUM_THREADS

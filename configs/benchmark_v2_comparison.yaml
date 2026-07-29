@@ -1,0 +1,5 @@
+schema_version: 1
+minimum_successful_replicates: 5
+max_cv_percent: 5.0
+regression_threshold_percent: 7.5
+require_equal_replicate_count: true

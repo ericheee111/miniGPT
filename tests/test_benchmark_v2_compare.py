@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import statistics
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -21,6 +23,7 @@ from minigpt.benchmark_v2_compare import (
     compare_step_times,
     write_comparison,
 )
+from minigpt.benchmark_v2_comparison_policy import ComparisonPolicy
 from minigpt.benchmark_v2_config import (
     case_identity as derive_case_identity,
 )
@@ -56,6 +59,52 @@ _SUMMARY_FIELDS = (
     "stability",
 )
 _CASE_IDENTITY = "a" * 64
+_DEFAULT_POLICY = ComparisonPolicy(
+    schema_version=1,
+    minimum_successful_replicates=3,
+    max_cv_percent=10.0,
+    regression_threshold_percent=5.0,
+    require_equal_replicate_count=True,
+    sha256="d" * 64,
+    source_path=Path("<test-policy>"),
+)
+
+
+def _write_policy_file(
+    directory: Path,
+    *,
+    minimum_successful_replicates: int = 3,
+    max_cv_percent: float = 10.0,
+    regression_threshold_percent: float = 5.0,
+    require_equal_replicate_count: bool = True,
+) -> Path:
+    """Write one strict comparison policy for public CLI tests."""
+    policy_path = directory / "comparison-policy.yaml"
+    _ = policy_path.write_text(
+        "\n".join(
+            (
+                "schema_version: 1",
+                f"minimum_successful_replicates: {minimum_successful_replicates}",
+                f"max_cv_percent: {max_cv_percent}",
+                f"regression_threshold_percent: {regression_threshold_percent}",
+                "require_equal_replicate_count: "
+                + str(require_equal_replicate_count).lower(),
+                "",
+            )
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    return policy_path
+
+
+def _compare_runs(
+    baseline: Path,
+    candidate: Path,
+    policy: ComparisonPolicy = _DEFAULT_POLICY,
+) -> compare_module.BenchmarkComparison:
+    """Compare fixture packages under one explicit authoritative test policy."""
+    return compare_runs(baseline, candidate, policy)
 
 
 def _hash_entry(path: Path) -> dict[str, JsonValue]:
@@ -344,6 +393,55 @@ def _rehash_manifest_artifact(manifest_path: Path, artifact_path: Path) -> None:
     )
 
 
+def _set_successful_step_times(manifest_path: Path, step_times_ms: tuple[float, ...]) -> None:
+    """Rewrite valid synthetic raw timings and their run-config-derived summary."""
+    raw_path = manifest_path.parent / "raw_replicates.jsonl"
+    records = cast(
+        "list[dict[str, JsonValue]]",
+        [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
+    )
+    for record, step_time_ms in zip(records, step_times_ms, strict=True):
+        response = cast("dict[str, JsonValue]", record["worker_response"])
+        response["elapsed_seconds"] = step_time_ms / 1_000
+        response["step_time_ms"] = step_time_ms
+        response["tokens_per_second"] = 64 / (step_time_ms / 1_000)
+    _ = raw_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    summary_path = manifest_path.parent / "summary.csv"
+    header, row = summary_path.read_text(encoding="utf-8").splitlines()
+    summary = dict(zip(header.split(","), row.split(","), strict=True))
+    median_step_time = statistics.median(step_times_ms)
+    standard_deviation = statistics.pstdev(step_times_ms)
+    summary.update(
+        {
+            "median_step_time_ms": str(median_step_time),
+            "min_step_time_ms": str(min(step_times_ms)),
+            "max_step_time_ms": str(max(step_times_ms)),
+            "population_stddev_step_time_ms": str(standard_deviation),
+            "median_absolute_deviation_step_time_ms": str(
+                statistics.median(abs(value - median_step_time) for value in step_times_ms)
+            ),
+            "coefficient_of_variation_percent": str(
+                standard_deviation / statistics.fmean(step_times_ms) * 100
+            ),
+            "median_tokens_per_second": str(
+                statistics.median(64 / (value / 1_000) for value in step_times_ms)
+            ),
+        }
+    )
+    _ = summary_path.write_text(
+        header + "\n" + ",".join(summary[field] for field in _SUMMARY_FIELDS) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    _rehash_manifest_artifact(manifest_path, raw_path)
+    _rehash_manifest_artifact(manifest_path, summary_path)
+
+
 def _add_second_case(manifest_path: Path) -> str:
     """Add a hash-bound second three-replicate case to one synthetic fixture package."""
     directory = manifest_path.parent
@@ -553,7 +651,7 @@ def test_compare_runs_accepts_two_case_partial_evidence_after_first_success(
     )
 
     # When: comparison reconciles summary rows only with observed raw case identities.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: it retains the aligned observed delta but explicitly refuses a performance verdict.
     assert comparison.verdict == "not_comparable"
@@ -570,7 +668,7 @@ def test_compare_runs_accepts_two_case_failed_evidence_before_any_raw_record(
     baseline, candidate, _ = _write_two_case_incomplete_candidate(tmp_path, status="failed")
 
     # When: comparison loads the empty raw and summary artifacts with their pending execution order.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: the failed status is explicit, without fabricated case statistics.
     assert comparison.verdict == "not_comparable"
@@ -593,7 +691,7 @@ def test_compare_runs_rejects_a_partial_observed_case_without_its_summary(
     with pytest.raises(
         ValueError, match=r"raw replicate case identities do not match summary\.csv"
     ):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def _write_partial_failure_package(parent: Path, *, worker_declared: bool) -> tuple[Path, Path]:
@@ -687,15 +785,22 @@ def test_compare_runs_aligns_identity_not_display_name_and_writes_deterministic_
     )
 
     # When: the candidate is compared to the baseline and materialized beside its manifest.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
     artifacts = write_comparison(comparison)
 
     # Then: equality passes and outputs are immutable-source-safe siblings of the candidate run.
     assert comparison.verdict == "pass"
     assert len(comparison.case_comparisons[0].case_identity) == 64
     assert comparison.case_comparisons[0].regressed is False
-    assert artifacts.json_path == candidate.parent.parent / "candidate-comparison-baseline.json"
-    assert artifacts.markdown_path == candidate.parent.parent / "candidate-comparison-baseline.md"
+    suffix = comparison.comparison_identity[:12]
+    assert (
+        artifacts.json_path
+        == candidate.parent.parent / f"candidate-comparison-baseline-{suffix}.json"
+    )
+    assert (
+        artifacts.markdown_path
+        == candidate.parent.parent / f"candidate-comparison-baseline-{suffix}.md"
+    )
     assert '"verdict": "pass"' in artifacts.json_path.read_text(encoding="utf-8")
     assert "| display-name-can-change |" in artifacts.markdown_path.read_text(encoding="utf-8")
 
@@ -731,7 +836,7 @@ def test_compare_runs_rejects_hash_consistent_forged_success_metrics(
 
     # When/Then: strict loading rejects the internally forged but hash-consistent package.
     with pytest.raises(InvalidComparisonInputError):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_manifest_task_count_that_differs_from_resolved_config(
@@ -767,7 +872,7 @@ def test_compare_runs_rejects_manifest_task_count_that_differs_from_resolved_con
 
     # When/Then: manifest cardinality must match the expanded config task set.
     with pytest.raises(InvalidComparisonInputError):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_identically_unavailable_cpu_evidence(tmp_path: Path) -> None:
@@ -782,7 +887,7 @@ def test_compare_runs_rejects_identically_unavailable_cpu_evidence(tmp_path: Pat
     candidate = _write_run_package(tmp_path, "candidate", environment_updates=unavailable_cpu)
 
     # When: comparison evaluates required CPU compatibility evidence.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: equality of absence still fails closed with an explicit eligibility reason.
     assert comparison.verdict == "not_comparable"
@@ -807,7 +912,7 @@ def test_compare_runs_rejects_missing_cpu_topology_from_either_run(
     candidate = _write_run_package(tmp_path, "candidate", environment_updates={field: None})
 
     # When: comparison checks the candidate environment's required CPU evidence.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: the evidence remains loadable but is not eligible for a performance verdict.
     assert comparison.verdict == "not_comparable"
@@ -845,7 +950,7 @@ def test_compare_runs_reports_performance_environment_mismatches_but_keeps_delta
     )
 
     # When: comparison checks the complete environment evidence.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: a named mismatch blocks pass/fail while retaining the observed descriptive time delta.
     assert comparison.verdict == "not_comparable"
@@ -879,7 +984,7 @@ def test_compare_runs_ignores_git_provenance_differences(tmp_path: Path) -> None
     )
 
     # When: comparison processes the validated provenance variation.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: Git identity differences remain visible only as provenance, not a performance blocker.
     assert comparison.verdict == "pass"
@@ -912,7 +1017,7 @@ def test_compare_runs_refuses_regression_verdict_for_ineligible_evidence(
     )
 
     # When: guarded comparison evaluates the synthetic evidence.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: it emits an explicit refusal reason rather than a pass/fail regression claim.
     assert comparison.verdict == "not_comparable"
@@ -945,9 +1050,14 @@ def test_compare_runs_allows_full_config_differences_excluded_from_case_identity
     )
 
     # When: comparison evaluates matching case identities and compatible actual environments.
-    comparison = compare_runs(baseline, candidate)
+    policy = replace(
+        _DEFAULT_POLICY,
+        regression_threshold_percent=6.0,
+        require_equal_replicate_count=False,
+    )
+    comparison = _compare_runs(baseline, candidate, policy)
 
-    # Then: full config hashes may differ, and the candidate threshold controls the verdict.
+    # Then: full config hashes may differ, but the independent policy controls the verdict.
     baseline_manifest = cast(
         "dict[str, JsonValue]", json.loads(baseline.read_text(encoding="utf-8"))
     )
@@ -960,6 +1070,89 @@ def test_compare_runs_allows_full_config_differences_excluded_from_case_identity
     assert comparison.regression_threshold_percent == 6.0
     assert comparison.case_comparisons[0].step_time_change_percent == pytest.approx(5.5)
     assert comparison.case_comparisons[0].regressed is False
+
+
+def test_candidate_threshold_cannot_turn_policy_regression_into_pass(tmp_path: Path) -> None:
+    # Given: a candidate declaring 100% while the authoritative policy permits only 7.5%.
+    baseline = _write_run_package(tmp_path, "baseline", threshold_percent=5.0)
+    candidate = _write_run_package(
+        tmp_path,
+        "candidate",
+        threshold_percent=100.0,
+        summary_updates={"median_step_time_ms": "110.0"},
+    )
+    policy = replace(_DEFAULT_POLICY, regression_threshold_percent=7.5)
+
+    # When: identical evidence is compared under the independent policy.
+    comparison = _compare_runs(baseline, candidate, policy)
+
+    # Then: candidate-controlled reporting metadata cannot weaken the regression verdict.
+    assert comparison.regression_threshold_percent == 7.5
+    assert comparison.verdict == "fail"
+    assert comparison.case_comparisons[0].regressed is True
+
+
+def test_candidate_minimum_replicates_cannot_bypass_policy_eligibility(tmp_path: Path) -> None:
+    # Given: both runs contain three successes and candidate declares a minimum of one.
+    baseline = _write_run_package(tmp_path, "baseline", minimum_replicates=3)
+    candidate = _write_run_package(tmp_path, "candidate", minimum_replicates=1)
+    policy = replace(_DEFAULT_POLICY, minimum_successful_replicates=5)
+
+    # When: eligibility is recomputed from raw evidence under the shared policy.
+    comparison = _compare_runs(baseline, candidate, policy)
+
+    # Then: neither run can claim enough samples from its own report-time minimum.
+    assert comparison.verdict == "not_comparable"
+    assert "baseline case has insufficient successful replicates" in comparison.reasons
+    assert "candidate case has insufficient successful replicates" in comparison.reasons
+
+
+def test_candidate_max_cv_cannot_bypass_policy_instability(tmp_path: Path) -> None:
+    # Given: both reports permit 100% CV, but candidate raw timings exceed the policy's 5%.
+    baseline = _write_run_package(tmp_path, "baseline", max_cv_percent=100.0)
+    candidate = _write_run_package(tmp_path, "candidate", max_cv_percent=100.0)
+    _set_successful_step_times(candidate, (50.0, 100.0, 150.0))
+    policy = replace(_DEFAULT_POLICY, max_cv_percent=5.0)
+
+    # When: the comparison recomputes stability from candidate raw evidence.
+    comparison = _compare_runs(baseline, candidate, policy)
+
+    # Then: candidate report-time stability cannot override policy instability.
+    assert comparison.verdict == "not_comparable"
+    assert "candidate case is unstable" in comparison.reasons
+
+
+def test_policy_hash_and_comparison_identity_are_deterministic_and_policy_bound(
+    tmp_path: Path,
+) -> None:
+    # Given: the same immutable evidence and two policy identities.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    first_policy = replace(_DEFAULT_POLICY, sha256="1" * 64)
+    second_policy = replace(_DEFAULT_POLICY, sha256="2" * 64)
+
+    # When: the same policy is used twice and then changed.
+    first = _compare_runs(baseline, candidate, first_policy)
+    repeated = _compare_runs(baseline, candidate, first_policy)
+    changed = _compare_runs(baseline, candidate, second_policy)
+
+    # Then: results are deterministic and policy bytes participate in comparison identity.
+    assert first == repeated
+    assert first.policy_sha256 == "1" * 64
+    assert first.comparison_identity == repeated.comparison_identity
+    assert changed.comparison_identity != first.comparison_identity
+    artifacts = write_comparison(first)
+    document = cast(
+        "dict[str, JsonValue]", json.loads(artifacts.json_path.read_text(encoding="utf-8"))
+    )
+    assert document["policy_sha256"] == "1" * 64
+    assert document["comparison_policy"] == {
+        "schema_version": 1,
+        "minimum_successful_replicates": 3,
+        "max_cv_percent": 10.0,
+        "regression_threshold_percent": 5.0,
+        "require_equal_replicate_count": True,
+    }
 
 
 def test_compare_step_times_uses_a_strict_regression_threshold() -> None:
@@ -994,7 +1187,7 @@ def test_compare_runs_rejects_a_complete_manifest_without_raw_replicate_evidence
 
     # When/Then: comparison refuses forged completeness before rendering a pass verdict.
     with pytest.raises(ValueError, match=r"raw replicate.*manifest|raw replicate.*summary"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_reconciles_partial_raw_failures_before_refusing_a_verdict(
@@ -1060,7 +1253,7 @@ def test_compare_runs_reconciles_partial_raw_failures_before_refusing_a_verdict(
     )
 
     # When: comparison recomputes statistics from every raw record, including the failure.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: partial evidence is described but never receives a regression pass/fail verdict.
     assert comparison.verdict == "not_comparable"
@@ -1085,7 +1278,7 @@ def test_write_comparison_rolls_back_the_first_output_if_the_second_write_fails(
 ) -> None:
     """Leave no one-sided artifact when the Markdown half of the pair cannot be published."""
     # Given: a valid comparison and a writer that fails only for its Markdown artifact.
-    comparison = compare_runs(
+    comparison = _compare_runs(
         _write_run_package(tmp_path, "baseline"), _write_run_package(tmp_path, "candidate")
     )
     writer_name = "_atomic_write_new"
@@ -1102,7 +1295,10 @@ def test_write_comparison_rolls_back_the_first_output_if_the_second_write_fails(
     # When/Then: publishing reports the failure and removes the already-written JSON sibling.
     with pytest.raises(OSError, match="markdown write failed"):
         _ = write_comparison(comparison)
-    assert not (tmp_path / "candidate-comparison-baseline.json").exists()
+    assert not (
+        tmp_path
+        / f"candidate-comparison-baseline-{comparison.comparison_identity[:12]}.json"
+    ).exists()
 
 
 def test_write_comparison_rejects_existing_sibling_artifacts(tmp_path: Path) -> None:
@@ -1110,7 +1306,7 @@ def test_write_comparison_rejects_existing_sibling_artifacts(tmp_path: Path) -> 
     # Given: an aligned comparison has already written its two immutable-run sibling artifacts.
     baseline = _write_run_package(tmp_path, "baseline")
     candidate = _write_run_package(tmp_path, "candidate")
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
     _ = write_comparison(comparison)
 
     # When/Then: the same deterministic comparison is requested again.
@@ -1118,13 +1314,41 @@ def test_write_comparison_rejects_existing_sibling_artifacts(tmp_path: Path) -> 
         _ = write_comparison(comparison)
 
 
-def test_compare_cli_writes_sibling_artifacts_and_returns_nonzero_for_invalid_input(
+@pytest.mark.parametrize(
+    ("scenario", "expected_code"),
+    [
+        ("pass", 0),
+        ("invalid", 1),
+        ("regression", 2),
+        ("environment_mismatch", 3),
+    ],
+)
+def test_compare_cli_returns_verdict_specific_exit_codes(
     tmp_path: Path,
+    scenario: str,
+    expected_code: int,
 ) -> None:
-    """Run the typed public CLI against strict fixtures and a malformed manifest path."""
-    # Given: a valid synthetic baseline/candidate pair and the root comparison entrypoint.
-    baseline = _write_run_package(tmp_path, "baseline")
-    candidate = _write_run_package(tmp_path, "candidate")
+    """Expose stable process exit codes suitable for automated regression gates."""
+    # Given: one strict policy and evidence selected for each public exit-code class.
+    scenario_directory = tmp_path / scenario
+    scenario_directory.mkdir()
+    baseline = _write_run_package(scenario_directory, "baseline")
+    candidate = _write_run_package(
+        scenario_directory,
+        "candidate",
+        environment_updates=(
+            {"cpu_name": "different-cpu"} if scenario == "environment_mismatch" else None
+        ),
+        summary_updates=(
+            {"median_step_time_ms": "110.0"} if scenario == "regression" else None
+        ),
+    )
+    if scenario == "invalid":
+        candidate = scenario_directory / "missing" / "run_manifest.json"
+    policy = _write_policy_file(
+        scenario_directory,
+        regression_threshold_percent=7.5,
+    )
     script = Path(__file__).parents[1] / "compare_benchmarks.py"
     command = [
         sys.executable,
@@ -1133,23 +1357,51 @@ def test_compare_cli_writes_sibling_artifacts_and_returns_nonzero_for_invalid_in
         str(baseline),
         "--candidate",
         str(candidate),
+        "--policy",
+        str(policy),
     ]
 
-    # When: the public CLI receives valid evidence and then a missing candidate path.
-    successful = subprocess.run(command, capture_output=True, check=False, text=True)  # noqa: S603
-    invalid = subprocess.run(  # noqa: S603
-        [*command[:-1], str(tmp_path / "missing" / "run_manifest.json")],
+    # When: the public CLI evaluates the selected evidence.
+    completed = subprocess.run(  # noqa: S603
+        command,
         capture_output=True,
         check=False,
         text=True,
     )
 
-    # Then: valid comparison emits sibling paths, while invalid data is a nonzero process result.
-    assert successful.returncode == 0
-    assert "comparison_json=" in successful.stdout
-    assert (tmp_path / "candidate-comparison-baseline.json").is_file()
-    assert invalid.returncode != 0
-    assert "comparison failed:" in invalid.stderr
+    # Then: exit status distinguishes verdicts from invalid inputs.
+    assert completed.returncode == expected_code
+    if scenario == "invalid":
+        assert "comparison failed:" in completed.stderr
+    else:
+        assert "comparison_json=" in completed.stdout
+        assert "comparison_markdown=" in completed.stdout
+
+
+def test_compare_cli_rejects_missing_policy_with_input_exit_code(tmp_path: Path) -> None:
+    # Given: otherwise valid evidence but no --policy argument.
+    baseline = _write_run_package(tmp_path, "baseline")
+    candidate = _write_run_package(tmp_path, "candidate")
+    script = Path(__file__).parents[1] / "compare_benchmarks.py"
+
+    # When: comparison is invoked without an authoritative policy.
+    completed = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            str(script),
+            "--baseline",
+            str(baseline),
+            "--candidate",
+            str(candidate),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    # Then: the missing policy is an input failure, not argparse's verdict-like exit 2.
+    assert completed.returncode == 1
+    assert "comparison failed:" in completed.stderr
 
 
 def test_fixed_fixture_packages_are_hash_valid_and_have_no_real_timing_claims() -> None:
@@ -1159,7 +1411,7 @@ def test_fixed_fixture_packages_are_hash_valid_and_have_no_real_timing_claims() 
     candidate = _FIXTURES / "candidate" / "run_manifest.json"
 
     # When: their strict package contents are compared.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: their synthetic-only report keeps an explicitly neutral comparison result.
     assert comparison.verdict == "pass"
@@ -1187,7 +1439,7 @@ def test_compare_runs_rejects_duplicate_keys_inside_a_nested_raw_worker_environm
 
     # When/Then: strict decoding refuses the duplicate instead of accepting the final value.
     with pytest.raises(ValueError, match="duplicate JSON object key"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_nonfinite_environment_json_constants(tmp_path: Path) -> None:
@@ -1207,7 +1459,7 @@ def test_compare_runs_rejects_nonfinite_environment_json_constants(tmp_path: Pat
 
     # When/Then: strict JSON constants reject non-finite evidence before delta calculation.
     with pytest.raises(ValueError, match="non-finite JSON constant"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_an_empty_bound_execution_order(tmp_path: Path) -> None:
@@ -1221,7 +1473,7 @@ def test_compare_runs_rejects_an_empty_bound_execution_order(tmp_path: Path) -> 
 
     # When/Then: comparison must reconcile the order before accepting the otherwise valid summaries.
     with pytest.raises(ValueError, match="execution_order"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_malformed_worker_peak_method_and_environment(tmp_path: Path) -> None:
@@ -1247,7 +1499,7 @@ def test_compare_runs_rejects_malformed_worker_peak_method_and_environment(tmp_p
 
     # When/Then: the full worker schema refuses either malformed methodology field.
     with pytest.raises(ValueError, match=r"peak RSS evidence|effective_cpu_affinity"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_malformed_worker_environment_affinity(tmp_path: Path) -> None:
@@ -1272,7 +1524,7 @@ def test_compare_runs_rejects_malformed_worker_environment_affinity(tmp_path: Pa
 
     # When/Then: the worker's exact actual-affinity contract is enforced.
     with pytest.raises(ValueError, match="effective_cpu_affinity"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_execution_order_status_or_pid_that_disagrees_with_raw(
@@ -1292,7 +1544,7 @@ def test_compare_runs_rejects_execution_order_status_or_pid_that_disagrees_with_
 
     # When/Then: the ordered task must remain identical to its raw task status and PID.
     with pytest.raises(ValueError, match=r"execution_order\.json disagrees"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_rejects_case_scoped_worker_control_swaps(tmp_path: Path) -> None:
@@ -1334,7 +1586,7 @@ def test_compare_runs_rejects_case_scoped_worker_control_swaps(tmp_path: Path) -
     _rehash_manifest_artifact(candidate, environment_path)
 
     # When: comparison aligns controls by durable case/replicate identity, not a global Counter.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: equal global control counts cannot hide the per-case methodology swap.
     assert second_identity in {case.case_identity for case in comparison.case_comparisons}
@@ -1374,7 +1626,7 @@ def test_compare_runs_rejects_multiple_actual_control_signatures_within_one_case
     _rehash_manifest_artifact(candidate, environment_path)
 
     # When: comparison reduces controls per aligned case instead of relying on replicate positions.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: it fails closed because the one candidate case used multiple control signatures.
     assert comparison.verdict == "not_comparable"
@@ -1450,7 +1702,7 @@ def test_compare_runs_rejects_incomplete_outer_evidence_for_worker_declared_fail
             r"raw worker lifecycle|failed raw record|failed raw worker response"
         ),
     ):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 @pytest.mark.parametrize("worker_declared", [True, False])
@@ -1462,7 +1714,7 @@ def test_compare_runs_accepts_valid_worker_declared_and_parent_only_failures(
     baseline, candidate = _write_partial_failure_package(tmp_path, worker_declared=worker_declared)
 
     # When: the strict parser validates the appropriate failure-origin contract.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: both retain evidence yet refuse a performance pass/fail verdict for partial data.
     assert comparison.verdict == "not_comparable"
@@ -1506,7 +1758,7 @@ def test_compare_runs_accepts_exact_parent_invalid_response_with_zero_return_cod
     _rehash_manifest_artifact(candidate, order_path)
 
     # When: strict comparison loads parent-only failure evidence.
-    comparison = compare_runs(baseline, candidate)
+    comparison = _compare_runs(baseline, candidate)
 
     # Then: the partial run remains valid evidence but cannot receive a performance verdict.
     assert comparison.verdict == "not_comparable"
@@ -1534,7 +1786,7 @@ def test_compare_runs_rejects_zero_return_code_when_a_worker_declared_failure_ex
 
     # When/Then: only the parent-classified null-response path may retain a zero return code.
     with pytest.raises(ValueError, match=r"worker-declared failure.*return_code"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)
 
 
 def test_compare_runs_accepts_empty_worker_declared_failure_messages(tmp_path: Path) -> None:
@@ -1557,7 +1809,7 @@ def test_compare_runs_accepts_empty_worker_declared_failure_messages(tmp_path: P
     _rehash_manifest_artifact(candidate, raw_path)
 
     # When/Then: empty but equal protocol messages remain valid partial evidence.
-    assert compare_runs(baseline, candidate).verdict == "not_comparable"
+    assert _compare_runs(baseline, candidate).verdict == "not_comparable"
 
 
 @pytest.mark.parametrize("nested", [False, True])
@@ -1584,4 +1836,4 @@ def test_compare_runs_rejects_nonstring_worker_declared_failure_messages(
 
     # When/Then: malformed message types cannot be treated as failure diagnostics.
     with pytest.raises(ValueError, match="message"):
-        _ = compare_runs(baseline, candidate)
+        _ = _compare_runs(baseline, candidate)

@@ -20,6 +20,10 @@ import yaml
 from typing_extensions import override
 
 import minigpt.benchmark_workload_methodology as methodology_module
+from minigpt.benchmark_v2_comparison_policy import (
+    ComparisonPolicy,
+    comparison_policy_document,
+)
 from minigpt.benchmark_v2_config import (
     case_identity,
     load_resolved_benchmark_v2_config,
@@ -215,6 +219,9 @@ class BenchmarkComparison:
     candidate_manifest_path: Path
     baseline_run_id: str
     candidate_run_id: str
+    comparison_identity: str
+    policy_sha256: str
+    comparison_policy: dict[str, JsonValue]
     regression_threshold_percent: float
     environment_mismatches: tuple[EnvironmentMismatch, ...]
     missing_case_identities: tuple[str, ...]
@@ -237,12 +244,12 @@ class _ComparisonInput:
     """Bind a validated manifest to its parsed environment, summaries, and threshold."""
 
     manifest_path: Path
+    manifest_sha256: str
     manifest: RunManifest
     run_environment: dict[str, JsonValue]
     worker_environment_signatures: tuple[tuple[object, ...], ...]
     case_worker_controls: tuple[tuple[str, frozenset[_WorkerControls]], ...]
     summaries: tuple[BenchmarkV2Summary, ...]
-    regression_threshold_percent: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -1236,7 +1243,23 @@ def _case_worker_control_sets(
     )
 
 
-def _load_input(manifest_path: Path) -> _ComparisonInput:
+def _summaries_under_policy(
+    summaries: tuple[BenchmarkV2Summary, ...],
+    records: tuple[_RawSummaryRecord, ...],
+    policy: ComparisonPolicy,
+) -> tuple[BenchmarkV2Summary, ...]:
+    """Recompute comparison eligibility from raw evidence under one shared policy."""
+    return tuple(
+        summarize_replicates(
+            tuple(record for record in records if record.case_identity == summary.case_identity),
+            minimum_replicates=policy.minimum_successful_replicates,
+            max_cv_percent=policy.max_cv_percent,
+        )
+        for summary in summaries
+    )
+
+
+def _load_input(manifest_path: Path, policy: ComparisonPolicy) -> _ComparisonInput:
     """Compose strict loader boundaries before any comparison calculation occurs."""
     try:
         manifest_content = manifest_path.read_bytes()
@@ -1276,12 +1299,12 @@ def _load_input(manifest_path: Path) -> _ComparisonInput:
         )
     return _ComparisonInput(
         manifest_path=manifest_path.resolve(),
+        manifest_sha256=hashlib.sha256(manifest_content).hexdigest(),
         manifest=manifest,
         run_environment=environment,
         worker_environment_signatures=reported_signatures,
         case_worker_controls=case_worker_controls,
-        summaries=summaries,
-        regression_threshold_percent=methodology.regression_threshold_percent,
+        summaries=_summaries_under_policy(summaries, records, policy),
     )
 
 
@@ -1359,6 +1382,7 @@ def _case_reasons(
     candidate: BenchmarkV2Summary,
     *,
     globally_comparable: bool,
+    require_equal_replicate_count: bool,
 ) -> tuple[str, ...]:
     """List case-local blockers in a stable, reader-oriented order."""
     reasons: list[str] = []
@@ -1372,6 +1396,8 @@ def _case_reasons(
         reasons.append("baseline case is unstable")
     if candidate.stability == "unstable":
         reasons.append("candidate case is unstable")
+    if require_equal_replicate_count and baseline.replicate_count != candidate.replicate_count:
+        reasons.append("baseline and candidate replicate counts differ")
     if baseline.median_step_time_ms is None or candidate.median_step_time_ms is None:
         reasons.append("case has no comparable median step time")
     return tuple(reasons)
@@ -1422,16 +1448,22 @@ def _run_reasons(
     return reasons
 
 
-def _compare_case(
+def _compare_case(  # noqa: PLR0913
     identity: str,
     baseline: BenchmarkV2Summary,
     candidate: BenchmarkV2Summary,
     *,
     globally_comparable: bool,
     threshold_percent: float,
+    require_equal_replicate_count: bool,
 ) -> CaseComparison:
     """Calculate descriptive and guarded verdict data for one aligned case identity."""
-    reasons = _case_reasons(baseline, candidate, globally_comparable=globally_comparable)
+    reasons = _case_reasons(
+        baseline,
+        candidate,
+        globally_comparable=globally_comparable,
+        require_equal_replicate_count=require_equal_replicate_count,
+    )
     step_change = _descriptive_change(baseline.median_step_time_ms, candidate.median_step_time_ms)
     throughput_change = _descriptive_change(
         baseline.median_tokens_per_second, candidate.median_tokens_per_second
@@ -1461,7 +1493,11 @@ def _compare_case(
 
 
 def _case_comparisons(
-    baseline: _ComparisonInput, candidate: _ComparisonInput, *, globally_comparable: bool
+    baseline: _ComparisonInput,
+    candidate: _ComparisonInput,
+    *,
+    globally_comparable: bool,
+    policy: ComparisonPolicy,
 ) -> tuple[CaseComparison, ...]:
     """Align summaries by durable case identity and compare their common entries in order."""
     baseline_by_identity = {summary.case_identity: summary for summary in baseline.summaries}
@@ -1472,7 +1508,8 @@ def _case_comparisons(
             baseline_by_identity[identity],
             candidate_by_identity[identity],
             globally_comparable=globally_comparable,
-            threshold_percent=candidate.regression_threshold_percent,
+            threshold_percent=policy.regression_threshold_percent,
+            require_equal_replicate_count=policy.require_equal_replicate_count,
         )
         for identity in sorted(baseline_by_identity.keys() & candidate_by_identity.keys())
     )
@@ -1498,24 +1535,58 @@ def _verdict(reasons: list[str], cases: tuple[CaseComparison, ...]) -> Compariso
     return "pass"
 
 
-def compare_runs(baseline: Path, candidate: Path) -> BenchmarkComparison:
+def _comparison_identity(
+    baseline_manifest_sha256: str,
+    candidate_manifest_sha256: str,
+    policy_sha256: str,
+) -> str:
+    """Bind both immutable run manifests and exact policy bytes to one stable identity."""
+    document = {
+        "schema_version": 1,
+        "baseline_manifest_sha256": baseline_manifest_sha256,
+        "candidate_manifest_sha256": candidate_manifest_sha256,
+        "policy_sha256": policy_sha256,
+    }
+    return hashlib.sha256(
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def compare_runs(
+    baseline: Path,
+    candidate: Path,
+    policy: ComparisonPolicy,
+) -> BenchmarkComparison:
     """Compare two finalized runs with conservative eligibility and immutable source evidence."""
-    baseline_input = _load_input(baseline)
-    candidate_input = _load_input(candidate)
+    baseline_input = _load_input(baseline, policy)
+    candidate_input = _load_input(candidate, policy)
     environment_mismatches = _environment_mismatches(baseline_input, candidate_input)
     baseline_identities = {summary.case_identity for summary in baseline_input.summaries}
     candidate_identities = {summary.case_identity for summary in candidate_input.summaries}
     missing = tuple(sorted(baseline_identities - candidate_identities))
     extra = tuple(sorted(candidate_identities - baseline_identities))
     reasons = _run_reasons(baseline_input, candidate_input, missing, extra, environment_mismatches)
-    cases = _case_comparisons(baseline_input, candidate_input, globally_comparable=not reasons)
+    cases = _case_comparisons(
+        baseline_input,
+        candidate_input,
+        globally_comparable=not reasons,
+        policy=policy,
+    )
     _append_case_blockers(reasons, cases)
+    policy_document = cast("dict[str, JsonValue]", comparison_policy_document(policy))
     return BenchmarkComparison(
         baseline_manifest_path=baseline_input.manifest_path,
         candidate_manifest_path=candidate_input.manifest_path,
         baseline_run_id=baseline_input.manifest.run_id,
         candidate_run_id=candidate_input.manifest.run_id,
-        regression_threshold_percent=candidate_input.regression_threshold_percent,
+        comparison_identity=_comparison_identity(
+            baseline_input.manifest_sha256,
+            candidate_input.manifest_sha256,
+            policy.sha256,
+        ),
+        policy_sha256=policy.sha256,
+        comparison_policy=policy_document,
+        regression_threshold_percent=policy.regression_threshold_percent,
         environment_mismatches=environment_mismatches,
         missing_case_identities=missing,
         extra_case_identities=extra,
@@ -1532,6 +1603,9 @@ def _comparison_document(comparison: BenchmarkComparison) -> dict[str, JsonValue
         "candidate_manifest": comparison.candidate_manifest_path.as_posix(),
         "baseline_run_id": comparison.baseline_run_id,
         "candidate_run_id": comparison.candidate_run_id,
+        "comparison_identity": comparison.comparison_identity,
+        "policy_sha256": comparison.policy_sha256,
+        "comparison_policy": comparison.comparison_policy,
         "regression_threshold_percent": comparison.regression_threshold_percent,
         "environment_mismatches": [
             asdict(mismatch) for mismatch in comparison.environment_mismatches
@@ -1598,7 +1672,14 @@ Verdict: **{comparison.verdict}**
 
 Baseline: `{comparison.baseline_run_id}`
 Candidate: `{comparison.candidate_run_id}`
+Comparison identity: `{comparison.comparison_identity}`
+Comparison policy SHA-256: `{comparison.policy_sha256}`
+
+Policy schema: `{comparison.comparison_policy["schema_version"]}`
+Minimum successful replicates: `{comparison.comparison_policy["minimum_successful_replicates"]}`
+Maximum CV: `{comparison.comparison_policy["max_cv_percent"]}%`
 Regression threshold: `{comparison.regression_threshold_percent}%` (strictly greater than)
+Equal replicate count required: `{comparison.comparison_policy["require_equal_replicate_count"]}`
 
 ## Verdict reasons
 
@@ -1646,7 +1727,10 @@ def write_comparison(comparison: BenchmarkComparison) -> ComparisonArtifacts:
     collisions rather than overwriting an earlier comparison artifact.
     """
     directory = comparison.candidate_manifest_path.parent.parent
-    stem = f"{comparison.candidate_run_id}-comparison-{comparison.baseline_run_id}"
+    stem = (
+        f"{comparison.candidate_run_id}-comparison-{comparison.baseline_run_id}-"
+        f"{comparison.comparison_identity[:12]}"
+    )
     json_path = directory / f"{stem}.json"
     markdown_path = directory / f"{stem}.md"
     if json_path.exists() or markdown_path.exists():
