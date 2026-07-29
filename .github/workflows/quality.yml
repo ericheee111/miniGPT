@@ -44,23 +44,3 @@ jobs:
         run: basedpyright
       - name: Test
         run: pytest
-      - name: Dump benchmark evidence on failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "=== raw_replicates.jsonl under tmp + workspace ==="
-          find /tmp "$GITHUB_WORKSPACE" -name "raw_replicates.jsonl" -print 2>/dev/null | while read -r f; do
-            echo "--- $f ---"
-            cat "$f"
-          done
-          echo "=== run_manifest.json under tmp + workspace ==="
-          find /tmp "$GITHUB_WORKSPACE" -name "run_manifest.json" -print 2>/dev/null | while read -r f; do
-            echo "--- $f ---"
-            cat "$f"
-          done
-          echo "=== profile artifacts under tmp + workspace ==="
-          find /tmp "$GITHUB_WORKSPACE" -path "*/profiles/*" -type f -print 2>/dev/null | while read -r f; do
-            echo "--- $f ---"
-            cat "$f" 2>/dev/null || echo "(binary or unreadable)"
-          done
-

@@ -14,6 +14,7 @@ import psutil
 import pytest
 import torch
 
+import minigpt.benchmark_v2_environment as environment_module
 import minigpt.benchmark_v2_worker as worker_module
 from minigpt.benchmark_v2_environment import (
     ProcessMemoryEvidence,
@@ -293,6 +294,42 @@ def test_read_process_memory_reports_native_peak_without_sampling() -> None:
         "linux_getrusage_ru_maxrss",
     }
     assert evidence.peak_rss_sampling_interval_ms is None
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux ru_maxrss path")
+def test_read_process_memory_clamps_rounded_linux_peak_to_final_rss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep peak RSS no smaller than final RSS despite ru_maxrss KiB rounding.
+
+    ``ru_maxrss`` is whole-KiB, so converting it to MiB can drop a fraction of a
+    mebibyte below the byte-precision current RSS. The worker response validator
+    rejects ``peak_rss_mib < final_rss_mib`` as impossible, which previously turned
+    every Linux replicate into an InvalidWorkerResponse failure. Verify the native
+    peak is clamped to ``final_rss_mib`` so the invariant holds.
+    """
+    # Given: a ru_maxrss whose KiB rounding would land just below the live RSS.
+    live_rss_bytes = psutil.Process().memory_info().rss
+    rounded_down_kib: int = live_rss_bytes // 1024 - 1
+
+    class _StubRusage:
+        ru_maxrss: int = rounded_down_kib
+
+    class _StubResource:
+        RUSAGE_SELF: int = 0
+
+        @staticmethod
+        def getrusage(_who: int) -> _StubRusage:
+            return _StubRusage()
+
+    monkeypatch.setattr(environment_module, "_resource", _StubResource)
+
+    # When: memory evidence is captured under the rounded-down peak.
+    evidence = read_process_memory()
+
+    # Then: the peak is lifted to final RSS instead of falling below it.
+    assert evidence.peak_rss_method == "linux_getrusage_ru_maxrss"
+    assert evidence.peak_rss_mib >= evidence.final_rss_mib
 
 
 @pytest.mark.parametrize(

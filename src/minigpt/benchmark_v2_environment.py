@@ -74,6 +74,18 @@ def apply_cpu_affinity(requested: tuple[int, ...] | None) -> tuple[int, ...] | N
     return tuple(process.cpu_affinity())
 
 
+def _linux_peak_rss_mib(peak_rss_kib: float, final_rss_mib: float) -> float:
+    """Convert a ``ru_maxrss`` KiB value to MiB without breaking the peak invariant.
+
+    ``ru_maxrss`` is reported in whole KiB, so the converted peak can fall a fraction
+    of a mebibyte below the byte-precision ``final_rss_mib`` even though the true
+    lifetime peak is never smaller than the current RSS. Clamp to ``final_rss_mib``
+    to remove that rounding artefact while keeping the native peak for every
+    genuinely larger value.
+    """
+    return max(peak_rss_kib / 1024, final_rss_mib)
+
+
 def read_process_memory() -> ProcessMemoryEvidence:
     """Return final RSS and a platform-native lifetime peak in mebibytes."""
     memory_info = psutil.Process().memory_info()
@@ -93,7 +105,7 @@ def read_process_memory() -> ProcessMemoryEvidence:
         peak_rss_kib = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
         return ProcessMemoryEvidence(
             final_rss_mib=final_rss_mib,
-            peak_rss_mib=peak_rss_kib / 1024,
+            peak_rss_mib=_linux_peak_rss_mib(peak_rss_kib, final_rss_mib),
             peak_rss_method="linux_getrusage_ru_maxrss",
             peak_rss_sampling_interval_ms=None,
         )

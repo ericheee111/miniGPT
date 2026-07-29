@@ -248,4 +248,3 @@ def test_profile_cli_rejects_path_separator_run_ids_on_every_platform(
     assert "Traceback" not in completed.stderr
     assert not (config.output_root / "outside").exists()
     assert not (config.output_root / "profiles" / run_id).exists()
-
