@@ -44,3 +44,18 @@ jobs:
         run: basedpyright
       - name: Test
         run: pytest
+      - name: Dump benchmark evidence on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "=== raw_replicates.jsonl files ==="
+          find . -path ./.venv -prune -o -name "raw_replicates.jsonl" -print 2>/dev/null | while read -r f; do
+            echo "--- $f ---"
+            cat "$f"
+          done
+          echo "=== profile directories ==="
+          find . -path ./.venv -prune -o -type d -name "profiles" -print 2>/dev/null
+          find . -path ./.venv -prune -o -path "*/profiles/*" -name "profile_manifest.json" -print 2>/dev/null | while read -r f; do
+            echo "--- $f ---"
+            cat "$f"
+          done
