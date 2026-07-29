@@ -213,3 +213,39 @@ def test_profile_cli_rejects_a_run_id_that_is_not_one_path_component(tmp_path: P
     assert "single path component" in completed.stderr
     assert "Traceback" not in completed.stderr
     assert not (config.output_root / "outside").exists()
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "../outside",
+        "..\\outside",
+        "a/b",
+        "a\\b",
+        "/absolute",
+    ],
+)
+def test_profile_cli_rejects_path_separator_run_ids_on_every_platform(
+    tmp_path: Path, run_id: str
+) -> None:
+    """Reject forward and backward slashes uniformly on Windows and POSIX runners.
+
+    ``Path`` parsing treats ``\\`` as a separator only on Windows, so the previous
+    string-level check let ``"..\\outside"`` through as a single component on Linux
+    and the profiler worker ran instead of being rejected. Cover both separator
+    forms so the containment rule holds regardless of the host platform.
+    """
+    # Given: an enabled profile config and a separator-bearing requested identity.
+    config_path = _profile_config_in_temporary_output(tmp_path)
+    config = load_benchmark_v2_config(config_path)
+
+    # When: the public CLI receives the multi-component run ID.
+    completed = _run_cli("--config", str(config_path), "--run-id", run_id)
+
+    # Then: it rejects the value before creating any evidence outside profiles.
+    assert completed.returncode == 5
+    assert "single path component" in completed.stderr
+    assert "Traceback" not in completed.stderr
+    assert not (config.output_root / "outside").exists()
+    assert not (config.output_root / "profiles" / run_id).exists()
+

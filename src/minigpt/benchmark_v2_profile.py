@@ -507,15 +507,23 @@ def _profile_run_id(config: BenchmarkV2Config) -> str:
 
 
 def _validate_profile_run_id(run_id: str) -> str:
-    """Reject path syntax so a caller cannot place profile evidence outside its root."""
+    """Reject path syntax so a caller cannot place profile evidence outside its root.
+
+    The check is intentionally platform-agnostic: ``Path`` parsing treats ``\\`` as a
+    separator only on Windows, so ``"..\\outside"`` would slip through as a single
+    component on POSIX. Reject any forward or backward slash, drive letter, anchor,
+    or traversal component at the string level so the rule holds on every runner.
+    """
     candidate = Path(run_id)
     if (
         not run_id
+        or "/" in run_id
+        or "\\" in run_id
         or candidate.is_absolute()
         or candidate.drive
+        or candidate.name in {".", ".."}
         or len(candidate.parts) != 1
         or candidate.name != run_id
-        or candidate.name in {".", ".."}
     ):
         raise InvalidProfileRunIdError(run_id)
     return run_id
