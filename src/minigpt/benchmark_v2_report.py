@@ -29,6 +29,7 @@ from minigpt.benchmark_v2_config import (
     resolved_config_document,
     resolved_config_sha256,
 )
+from minigpt.benchmark_v2_environment import PEAK_RSS_SCOPE, PeakRssScope
 from minigpt.benchmark_v2_statistics import BenchmarkV2Summary, summarize_replicates
 
 if TYPE_CHECKING:
@@ -45,6 +46,7 @@ _MANIFEST_KEYS = frozenset(
         "started_at_utc",
         "ended_at_utc",
         "config_sha256",
+        "peak_rss_scope",
         "git",
         "expected_task_count",
         "completed_task_count",
@@ -58,6 +60,7 @@ _ARTIFACT_ENTRY_KEYS = frozenset({"path", "size_bytes", "sha256"})
 _SHA256_HEX_LENGTH = 64
 _SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
 _ENVIRONMENT_SCHEMA_VERSION = 2
+_MANIFEST_SCHEMA_VERSION = 3
 _GIT_COMMIT_SHA_LENGTHS = frozenset({40, 64})
 _GIT_IDENTITY_KEYS = frozenset({"commit_sha", "branch", "dirty"})
 _ENVIRONMENT_DOCUMENT_KEYS = frozenset(
@@ -184,6 +187,7 @@ class RunManifest:
     started_at_utc: str
     ended_at_utc: str
     config_sha256: str
+    peak_rss_scope: PeakRssScope
     git: dict[str, JsonValue]
     expected_task_count: int
     completed_task_count: int
@@ -522,7 +526,8 @@ and thread setup, model/optimizer/batcher construction, warmup, pre-timer garbag
 post-timer memory/environment reads, JSON transport, logging/report writes, profiler
 instrumentation, checkpointing, validation, and text generation.
 
-Memory method: `final_rss_mib` is read immediately after the canonical loop. `peak_rss_mib` is an
+Memory method: `final_rss_mib` is read immediately after the canonical loop.
+The worker lifetime peak RSS is recorded as `peak_rss_scope: worker_lifetime`; `peak_rss_mib` is an
 OS-native process-lifetime high-water mark (Windows peak working set or Linux getrusage
 ru_maxrss), with no sampling thread and `peak_rss_sampling_interval_ms: null`; it includes
 imports, construction, warmup, and measurement and is not model-only memory.
@@ -584,6 +589,7 @@ def _manifest_document(manifest: RunManifest) -> dict[str, JsonValue]:
             "started_at_utc": manifest.started_at_utc,
             "ended_at_utc": manifest.ended_at_utc,
             "config_sha256": manifest.config_sha256,
+            "peak_rss_scope": manifest.peak_rss_scope,
             "git": manifest.git,
             "expected_task_count": manifest.expected_task_count,
             "completed_task_count": manifest.completed_task_count,
@@ -721,12 +727,13 @@ def _write_final_artifacts(  # noqa: PLR0913
         )
     )
     manifest = RunManifest(
-        schema_version=2,
+        schema_version=_MANIFEST_SCHEMA_VERSION,
         run_id=run_id,
         status=status,
         started_at_utc=started_at_utc,
         ended_at_utc=ended_at_utc,
         config_sha256=resolved_config_sha256(config),
+        peak_rss_scope=PEAK_RSS_SCOPE,
         git=cast("dict[str, JsonValue]", environment_snapshot["git"]),
         expected_task_count=len(tasks),
         completed_task_count=len(raw_replicates),
@@ -943,6 +950,12 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
     ):
         msg = "run manifest has an invalid integer field"
         raise ValueError(msg)
+    if document["schema_version"] != _MANIFEST_SCHEMA_VERSION:
+        msg = f"run manifest schema_version must be {_MANIFEST_SCHEMA_VERSION}"
+        raise ValueError(msg)
+    if document["peak_rss_scope"] != PEAK_RSS_SCOPE:
+        msg = "run manifest peak_rss_scope must be worker_lifetime"
+        raise ValueError(msg)
     string_fields = ("run_id", "started_at_utc", "ended_at_utc")
     if any(not isinstance(document[field], str) or not document[field] for field in string_fields):
         msg = "run manifest has an invalid string field"
@@ -1028,6 +1041,7 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
         started_at_utc=cast("str", document["started_at_utc"]),
         ended_at_utc=cast("str", document["ended_at_utc"]),
         config_sha256=config_sha256,
+        peak_rss_scope=PEAK_RSS_SCOPE,
         git=git,
         expected_task_count=cast("int", document["expected_task_count"]),
         completed_task_count=cast("int", document["completed_task_count"]),

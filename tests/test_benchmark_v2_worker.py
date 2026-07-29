@@ -125,7 +125,7 @@ def assert_success_metadata(result: WorkerResult, request: WorkerRequest) -> Non
 
 
 @pytest.mark.parametrize("warmup_steps", [0, 2])
-def test_worker_keeps_warmup_construction_and_evidence_outside_timer(
+def test_worker_keeps_warmup_construction_and_evidence_outside_timer(  # noqa: PLR0915
     monkeypatch: pytest.MonkeyPatch,
     warmup_steps: int,
 ) -> None:
@@ -224,6 +224,8 @@ def test_worker_keeps_warmup_construction_and_evidence_outside_timer(
         "windows_peak_working_set",
         "linux_getrusage_ru_maxrss",
     }
+    assert result.peak_rss_scope == "worker_lifetime"
+    assert worker_response_document(result)["peak_rss_scope"] == "worker_lifetime"
     assert result.peak_rss_sampling_interval_ms is None
 
 

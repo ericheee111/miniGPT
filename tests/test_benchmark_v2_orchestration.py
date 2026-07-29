@@ -126,6 +126,7 @@ def worker_success_document(task: BenchmarkTask, worker_pid: int) -> dict[str, J
         "final_rss_mib": 128.0,
         "peak_rss_mib": 160.0,
         "peak_rss_method": "windows_peak_working_set",
+        "peak_rss_scope": "worker_lifetime",
         "peak_rss_sampling_interval_ms": None,
         "environment": {
             "platform": "test-platform",

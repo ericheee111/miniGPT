@@ -17,7 +17,9 @@ import torch
 from typing_extensions import override
 
 from minigpt.benchmark_v2_environment import (
+    PEAK_RSS_SCOPE,
     PeakRssMethod,
+    PeakRssScope,
     WorkerEnvironment,
     apply_cpu_affinity,
     capture_worker_environment,
@@ -98,6 +100,7 @@ class WorkerResult:
     final_rss_mib: float
     peak_rss_mib: float
     peak_rss_method: PeakRssMethod
+    peak_rss_scope: PeakRssScope
     peak_rss_sampling_interval_ms: None
     environment: WorkerEnvironment
 
@@ -388,6 +391,7 @@ def worker_response_document(response: WorkerResult | WorkerFailure) -> dict[str
         "final_rss_mib": response.final_rss_mib,
         "peak_rss_mib": response.peak_rss_mib,
         "peak_rss_method": response.peak_rss_method,
+        "peak_rss_scope": response.peak_rss_scope,
         "peak_rss_sampling_interval_ms": response.peak_rss_sampling_interval_ms,
         "environment": _environment_document(response.environment),
     }
@@ -452,6 +456,7 @@ def run_worker_request(request: WorkerRequest) -> WorkerResult:
         final_rss_mib=memory.final_rss_mib,
         peak_rss_mib=memory.peak_rss_mib,
         peak_rss_method=memory.peak_rss_method,
+        peak_rss_scope=PEAK_RSS_SCOPE,
         peak_rss_sampling_interval_ms=memory.peak_rss_sampling_interval_ms,
         environment=environment,
     )

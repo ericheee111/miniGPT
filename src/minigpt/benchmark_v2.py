@@ -18,6 +18,7 @@ from typing_extensions import override
 
 import minigpt.benchmark_workload_methodology as methodology
 from minigpt.benchmark_v2_config import JsonValue, case_identity, resolved_config_sha256
+from minigpt.benchmark_v2_environment import PEAK_RSS_SCOPE
 from minigpt.benchmark_v2_report import RunStatus, capture_run_environment, write_run_artifacts
 from minigpt.benchmark_v2_worker import (
     WORKER_PROTOCOL_VERSION,
@@ -57,6 +58,7 @@ _SUCCESS_RESPONSE_KEYS = frozenset(
         "final_rss_mib",
         "peak_rss_mib",
         "peak_rss_method",
+        "peak_rss_scope",
         "peak_rss_sampling_interval_ms",
         "environment",
     }
@@ -440,7 +442,9 @@ def _validate_environment(task: BenchmarkTask, raw_environment: object) -> None:
         )
 
 
-def _validate_success_response(task: BenchmarkTask, response: dict[str, object]) -> None:
+def _validate_success_response(  # noqa: C901
+    task: BenchmarkTask, response: dict[str, object]
+) -> None:
     """Validate all success metrics, timer evidence, memory, and environment fields."""
     warmup_steps = _integer(response["warmup_steps"], "warmup_steps", non_negative=True)
     if warmup_steps != task.warmup_steps:
@@ -494,6 +498,8 @@ def _validate_success_response(task: BenchmarkTask, response: dict[str, object])
     peak_rss_method = _string(response["peak_rss_method"], "peak_rss_method")
     if peak_rss_method not in _PEAK_RSS_METHODS:
         _invalid_worker_response("peak_rss_method is unsupported")
+    if response["peak_rss_scope"] != PEAK_RSS_SCOPE:
+        _invalid_worker_response("peak_rss_scope must be worker_lifetime")
     if response["peak_rss_sampling_interval_ms"] is not None:
         _invalid_worker_response("peak_rss_sampling_interval_ms must be null")
     _validate_environment(task, response["environment"])

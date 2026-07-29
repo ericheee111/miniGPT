@@ -20,6 +20,8 @@ PeakRssMethod = Literal[
     "windows_peak_working_set",
     "linux_getrusage_ru_maxrss",
 ]
+PeakRssScope = Literal["worker_lifetime"]
+PEAK_RSS_SCOPE: PeakRssScope = "worker_lifetime"
 
 _MIB = 1024 * 1024
 

@@ -7,6 +7,8 @@ import statistics
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from minigpt.benchmark_v2_environment import PEAK_RSS_SCOPE, PeakRssScope
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -48,6 +50,7 @@ class BenchmarkV2Summary:
     coefficient_of_variation_percent: float | None
     median_tokens_per_second: float | None
     median_final_rss_mib: float | None
+    peak_rss_scope: PeakRssScope
     max_peak_rss_mib: float | None
     stability: Stability
 
@@ -128,6 +131,7 @@ def summarize_replicates(
             coefficient_of_variation_percent=None,
             median_tokens_per_second=None,
             median_final_rss_mib=None,
+            peak_rss_scope=PEAK_RSS_SCOPE,
             max_peak_rss_mib=None,
             stability=stability,
         )
@@ -155,6 +159,7 @@ def summarize_replicates(
         median_final_rss_mib=statistics.median(
             _finite_number(response, "final_rss_mib") for response in responses
         ),
+        peak_rss_scope=PEAK_RSS_SCOPE,
         max_peak_rss_mib=max(_finite_number(response, "peak_rss_mib") for response in responses),
         stability=stability,
     )

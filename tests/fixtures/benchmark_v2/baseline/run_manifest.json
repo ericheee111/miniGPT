@@ -12,13 +12,13 @@
     },
     {
       "path": "raw_replicates.jsonl",
-      "sha256": "a6e2b4ff154916ed920b968a73f4522a37b87c3ef7e03d71974819a78f1a5bb1",
-      "size_bytes": 3615
+      "sha256": "0f83fb6b325654ce90e340c42637b4a5472f90f965c7d63f3e976bb47a027c48",
+      "size_bytes": 3975
     },
     {
       "path": "summary.csv",
-      "sha256": "fd8ca5cc7210a0ce5d85d33dd1c4cbefbded936236bbf6b893e0fb4f457c830b",
-      "size_bytes": 448
+      "sha256": "b393a2a8fef79318f65b7a6d00ffb67e7c16d969f8cf60b8b3f8f098f829a3a2",
+      "size_bytes": 479
     },
     {
       "path": "summary.md",
@@ -27,13 +27,13 @@
     },
     {
       "path": "execution_order.json",
-      "sha256": "1ec9afcefe119d904cfbeb0509862b751915dd0ee9faa7d0422c35df39832db5",
+      "sha256": "5b0d8a52604035cb9b7ff16587a6ecc0965a47ad941b328c9867212357659e31",
       "size_bytes": 1035
     }
   ],
   "case_identities": [
     {
-      "case_identity": "e440f1f66cf5d03970eb2555887faef6c6942d7cbded8898be0cceb1980f1415",
+      "case_identity": "56729aa89b9306b7a4c1db2a22b246a83a3e2181a1772bb0e837ce9fed2a2bbb",
       "case_name": "display-name-can-change"
     }
   ],
@@ -47,8 +47,9 @@
     "commit_sha": "cccccccccccccccccccccccccccccccccccccccc",
     "dirty": false
   },
+  "peak_rss_scope": "worker_lifetime",
   "run_id": "baseline",
-  "schema_version": 2,
+  "schema_version": 3,
   "started_at_utc": "2026-07-28T01:02:03+00:00",
   "status": "complete",
   "successful_task_count": 3

@@ -55,10 +55,10 @@ _SUMMARY_FIELDS = (
     "coefficient_of_variation_percent",
     "median_tokens_per_second",
     "median_final_rss_mib",
+    "peak_rss_scope",
     "max_peak_rss_mib",
     "stability",
 )
-_CASE_IDENTITY = "a" * 64
 _DEFAULT_POLICY = ComparisonPolicy(
     schema_version=1,
     minimum_successful_replicates=3,
@@ -133,12 +133,12 @@ def _write_run_package(  # noqa: PLR0913
     max_cv_percent: float = 10.0,
     profile_warmup_steps: int = 1,
     profile_active_steps: int = 1,
-    case_identity: str = _CASE_IDENTITY,
+    model_n_embd: int = 8,
 ) -> Path:
     """Create a hand-checked, hash-bound synthetic package without real timing claims."""
     run_directory = parent / name
     run_directory.mkdir(exist_ok=True)
-    case_name = "display-name-can-change" if case_identity == _CASE_IDENTITY else "different-case"
+    case_name = "display-name-can-change"
     config: dict[str, JsonValue] = {
         "schema_version": 2,
         "experiment_name": experiment_name,
@@ -161,7 +161,7 @@ def _write_run_package(  # noqa: PLR0913
                 "model_name": "tiny",
                 "n_layer": 1,
                 "n_head": 1,
-                "n_embd": 8,
+                "n_embd": model_n_embd,
                 "torch_num_threads": 1,
                 "block_size": 32,
                 "batch_size": 2,
@@ -235,6 +235,7 @@ def _write_run_package(  # noqa: PLR0913
         "coefficient_of_variation_percent": "0.8",
         "median_tokens_per_second": "640.0",
         "median_final_rss_mib": "100.0",
+        "peak_rss_scope": "worker_lifetime",
         "max_peak_rss_mib": "120.0",
         "stability": "stable",
     }
@@ -292,7 +293,7 @@ def _write_run_package(  # noqa: PLR0913
                     block_size=32,
                     n_layer=1,
                     n_head=1,
-                    n_embd=8,
+                    n_embd=model_n_embd,
                     dropout=methodology_module.MODEL_DROPOUT,
                     bias=methodology_module.MODEL_BIAS,
                 )
@@ -300,6 +301,7 @@ def _write_run_package(  # noqa: PLR0913
             "final_rss_mib": 100.0,
             "peak_rss_mib": 120.0,
             "peak_rss_method": "windows_peak_working_set",
+            "peak_rss_scope": "worker_lifetime",
             "peak_rss_sampling_interval_ms": None,
             "environment": worker_environment,
         }
@@ -358,12 +360,13 @@ def _write_run_package(  # noqa: PLR0913
         "execution_order.json",
     )
     manifest: dict[str, JsonValue] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": name,
         "status": status,
         "started_at_utc": "2026-07-28T01:02:03+00:00",
         "ended_at_utc": "2026-07-28T01:02:04+00:00",
         "config_sha256": config_sha256,
+        "peak_rss_scope": "worker_lifetime",
         "git": cast("dict[str, JsonValue]", run_environment["git"]),
         "expected_task_count": replicates,
         "completed_task_count": replicates,
@@ -992,17 +995,17 @@ def test_compare_runs_ignores_git_provenance_differences(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("status", "summary_updates", "case_identity", "reason"),
+    ("status", "summary_updates", "model_n_embd", "reason"),
     [
-        ("partial", None, _CASE_IDENTITY, "candidate run status is partial"),
-        ("complete", None, "d" * 64, "case identity sets do not align"),
+        ("partial", None, 8, "candidate run status is partial"),
+        ("complete", None, 16, "case identity sets do not align"),
     ],
 )
 def test_compare_runs_refuses_regression_verdict_for_ineligible_evidence(
     tmp_path: Path,
     status: str,
     summary_updates: dict[str, str] | None,
-    case_identity: str,
+    model_n_embd: int,
     reason: str,
 ) -> None:
     """Keep aligned descriptive information but never score incomplete or unsuitable evidence."""
@@ -1013,7 +1016,7 @@ def test_compare_runs_refuses_regression_verdict_for_ineligible_evidence(
         "candidate",
         status=status,
         summary_updates=summary_updates,
-        case_identity=case_identity,
+        model_n_embd=model_n_embd,
     )
 
     # When: guarded comparison evaluates the synthetic evidence.
@@ -1022,7 +1025,7 @@ def test_compare_runs_refuses_regression_verdict_for_ineligible_evidence(
     # Then: it emits an explicit refusal reason rather than a pass/fail regression claim.
     assert comparison.verdict == "not_comparable"
     assert reason in comparison.reasons
-    if case_identity == _CASE_IDENTITY:
+    if model_n_embd == 8:
         assert comparison.case_comparisons[0].step_time_change_percent == 0.0
 
 
@@ -1476,9 +1479,20 @@ def test_compare_runs_rejects_an_empty_bound_execution_order(tmp_path: Path) -> 
         _ = _compare_runs(baseline, candidate)
 
 
-def test_compare_runs_rejects_malformed_worker_peak_method_and_environment(tmp_path: Path) -> None:
-    """Reject invalid worker methodology evidence before comparing its otherwise valid medians."""
-    # Given: a candidate rebinds unsupported peak-memory method and malformed actual affinity.
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("peak_rss_method", "unsupported"),
+        ("peak_rss_scope", "measurement_only"),
+    ],
+)
+def test_compare_runs_rejects_malformed_worker_peak_evidence(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    """Reject invalid worker peak-memory methodology before comparing medians."""
+    # Given: a candidate rebinds one unsupported peak-memory evidence field.
     baseline = _write_run_package(tmp_path, "baseline")
     candidate = _write_run_package(tmp_path, "candidate")
     raw_path = candidate.parent / "raw_replicates.jsonl"
@@ -1487,9 +1501,7 @@ def test_compare_runs_rejects_malformed_worker_peak_method_and_environment(tmp_p
         [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()],
     )
     response = cast("dict[str, JsonValue]", raw_records[0]["worker_response"])
-    environment = cast("dict[str, JsonValue]", response["environment"])
-    response["peak_rss_method"] = "unsupported"
-    environment["effective_cpu_affinity"] = []
+    response[field] = value
     _ = raw_path.write_text(
         "".join(json.dumps(record) + "\n" for record in raw_records),
         encoding="utf-8",
@@ -1497,8 +1509,8 @@ def test_compare_runs_rejects_malformed_worker_peak_method_and_environment(tmp_p
     )
     _rehash_manifest_artifact(candidate, raw_path)
 
-    # When/Then: the full worker schema refuses either malformed methodology field.
-    with pytest.raises(ValueError, match=r"peak RSS evidence|effective_cpu_affinity"):
+    # When/Then: the full worker schema refuses malformed peak-memory methodology.
+    with pytest.raises(ValueError, match="peak RSS evidence"):
         _ = _compare_runs(baseline, candidate)
 
 

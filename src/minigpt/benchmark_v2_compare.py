@@ -29,6 +29,7 @@ from minigpt.benchmark_v2_config import (
     load_resolved_benchmark_v2_config,
     resolved_config_sha256,
 )
+from minigpt.benchmark_v2_environment import PEAK_RSS_SCOPE, PeakRssScope
 from minigpt.benchmark_v2_report import load_run_manifest
 from minigpt.benchmark_v2_statistics import BenchmarkV2Summary, summarize_replicates
 from minigpt.model import expected_gpt_parameter_count
@@ -130,6 +131,7 @@ _SUCCESS_RESPONSE_KEYS = frozenset(
         "final_rss_mib",
         "peak_rss_mib",
         "peak_rss_method",
+        "peak_rss_scope",
         "peak_rss_sampling_interval_ms",
         "environment",
     }
@@ -258,6 +260,7 @@ class _WorkerControls:
 
     protocol_version: int
     peak_rss_method: str
+    peak_rss_scope: PeakRssScope
     environment_signature: tuple[object, ...]
 
 
@@ -658,6 +661,7 @@ def _successful_raw_record(  # noqa: C901
     )
     if (
         peak_method not in _PEAK_RSS_METHODS
+        or response["peak_rss_scope"] != PEAK_RSS_SCOPE
         or response["peak_rss_sampling_interval_ms"] is not None
     ):
         raise InvalidComparisonInputError(
@@ -723,6 +727,7 @@ def _successful_raw_record(  # noqa: C901
         worker_controls=_WorkerControls(
             protocol_version=1,
             peak_rss_method=peak_method,
+            peak_rss_scope=PEAK_RSS_SCOPE,
             environment_signature=_worker_environment_signature(
                 response.get("environment"), manifest_path
             ),
@@ -1098,6 +1103,10 @@ def _load_summaries(  # noqa: C901
             raise InvalidComparisonInputError(
                 manifest_path, f"summary.csv row {index} has invalid stability"
             )
+        if values["peak_rss_scope"] != PEAK_RSS_SCOPE:
+            raise InvalidComparisonInputError(
+                manifest_path, f"summary.csv row {index} has invalid peak_rss_scope"
+            )
         numeric_fields = (
             "median_step_time_ms",
             "min_step_time_ms",
@@ -1140,6 +1149,7 @@ def _load_summaries(  # noqa: C901
                 coefficient_of_variation_percent=numbers["coefficient_of_variation_percent"],
                 median_tokens_per_second=numbers["median_tokens_per_second"],
                 median_final_rss_mib=numbers["median_final_rss_mib"],
+                peak_rss_scope=PEAK_RSS_SCOPE,
                 max_peak_rss_mib=numbers["max_peak_rss_mib"],
                 stability=cast("Literal['insufficient_samples', 'unstable', 'stable']", stability),
             )

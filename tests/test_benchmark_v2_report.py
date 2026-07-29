@@ -101,6 +101,7 @@ def worker_success_document(task: BenchmarkTask, worker_pid: int) -> dict[str, J
         "final_rss_mib": 128.0,
         "peak_rss_mib": 160.0,
         "peak_rss_method": "windows_peak_working_set",
+        "peak_rss_scope": "worker_lifetime",
         "peak_rss_sampling_interval_ms": None,
         "environment": {
             "platform": "test-platform",
@@ -243,6 +244,7 @@ def test_summarize_replicates_uses_successful_aggregates_without_dropping_failur
     assert summary.population_stddev_step_time_ms == pytest.approx(0.81649658)
     assert summary.median_absolute_deviation_step_time_ms == 1.0
     assert summary.coefficient_of_variation_percent == pytest.approx(7.422696)
+    assert summary.peak_rss_scope == "worker_lifetime"
     assert summary.stability == expected_stability
 
 
@@ -284,6 +286,7 @@ def test_write_run_artifacts_binds_all_outputs_without_hashing_its_manifest(tmp_
     )
     run_environment = cast("dict[str, object]", environment["run_environment"])
     assert manifest.status == "complete"
+    assert manifest.peak_rss_scope == "worker_lifetime"
     assert {entry.path for entry in manifest.artifacts} == expected_names - {"run_manifest.json"}
     for entry in manifest.artifacts:
         artifact_path = run_directory / entry.path
@@ -311,6 +314,41 @@ def test_write_run_artifacts_binds_all_outputs_without_hashing_its_manifest(tmp_
         "power_scheme",
     } <= set(run_environment)
     assert run_environment["captured_before_first_worker"] is True
+    summary_header = artifacts.summary_csv_path.read_text(encoding="utf-8").splitlines()[0]
+    assert "peak_rss_scope" in summary_header
+    assert (
+        "worker lifetime peak RSS"
+        in artifacts.summary_markdown_path.read_text(encoding="utf-8")
+    )
+
+
+def test_load_run_manifest_rejects_non_worker_lifetime_peak_rss_scope(tmp_path: Path) -> None:
+    # Given: one valid package whose self-excluded manifest scope is then forged.
+    config = make_config(tmp_path)
+    tasks = expand_benchmark_tasks(config)
+    records = tuple(successful_record(task, 10.0) for task in tasks)
+    run_directory = tmp_path / "scope-test"
+    run_directory.mkdir()
+    artifacts = write_run_artifacts(
+        config=config,
+        run_directory=run_directory,
+        run_id=run_directory.name,
+        status="complete",
+        tasks=tasks,
+        raw_replicates=records,
+        started_at_utc=datetime(2026, 7, 28, 1, 2, 3, tzinfo=UTC).isoformat(),
+        ended_at_utc=datetime(2026, 7, 28, 1, 2, 4, tzinfo=UTC).isoformat(),
+    )
+    manifest = cast(
+        "dict[str, object]",
+        json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8")),
+    )
+    manifest["peak_rss_scope"] = "measurement_only"
+    _ = artifacts.run_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # When/Then: the strict loader refuses a scope not produced by Benchmark v2.
+    with pytest.raises(ValueError, match="peak_rss_scope must be worker_lifetime"):
+        _ = load_run_manifest(artifacts.run_manifest_path)
 
 
 def test_cpu_name_uses_platform_identity_before_linux_cpuinfo_fallback() -> None:
