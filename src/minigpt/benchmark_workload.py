@@ -5,20 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast, final
 
-import numpy as np
 import torch
 from torch.profiler import record_function
 from typing_extensions import override
 
-from minigpt.batching import TokenBatcher
+import minigpt.benchmark_workload_methodology as methodology
+from minigpt.benchmark_types import BenchmarkCase
 from minigpt.model import GPT
-from minigpt.optimization import create_adamw, seed_everything
-from minigpt.settings import GPTConfig, OptimizerSettings
+from minigpt.optimization import seed_everything
+from minigpt.settings import GPTConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from minigpt.benchmark_types import BenchmarkCase
+    from minigpt.benchmark_v2_types import BenchmarkV2Case
 
 MISSING_LOSS_REASON = "model returned no loss"
 
@@ -42,14 +42,16 @@ class TrainingStepWorkload:
     def __init__(self, case: BenchmarkCase, *, seed: int, vocab_size: int) -> None:
         """Initialize a deterministic model, optimizer, and synthetic corpus."""
         seed_everything(seed, case.thread_count)
-        corpus_size = max(4_096, case.batch_size * (case.block_size + 1) * 8)
-        tokens = np.random.default_rng(seed).integers(
-            0,
-            vocab_size,
-            size=corpus_size,
-            dtype=np.uint16,
+        corpus_size = max(
+            methodology.SYNTHETIC_CORPUS_MIN_TOKENS,
+            case.batch_size * (case.block_size + 1) * methodology.SYNTHETIC_CORPUS_BATCH_MULTIPLIER,
         )
-        self.batcher = TokenBatcher(
+        tokens = methodology.create_synthetic_tokens(
+            seed=seed,
+            vocab_size=vocab_size,
+            corpus_size=corpus_size,
+        )
+        self.batcher = methodology.create_benchmark_batcher(
             tokens,
             batch_size=case.batch_size,
             block_size=case.block_size,
@@ -62,20 +64,15 @@ class TrainingStepWorkload:
                 n_layer=case.n_layer,
                 n_head=case.n_head,
                 n_embd=case.n_embd,
-                dropout=0.0,
-                bias=False,
+                dropout=methodology.MODEL_DROPOUT,
+                bias=methodology.MODEL_BIAS,
             )
         )
-        settings = OptimizerSettings(
-            optimizer_type="adamw",
-            learning_rate=3e-4,
-            min_learning_rate=3e-5,
-            weight_decay=0.1,
-            beta1=0.9,
-            beta2=0.95,
-            grad_clip=1.0,
+        _ = self.model.to(
+            device=methodology.workload_torch_device(), dtype=methodology.workload_torch_dtype()
         )
-        self.optimizer = create_adamw(self.model, settings)
+        settings = methodology.benchmark_optimizer_settings()
+        self.optimizer = methodology.create_benchmark_optimizer(self.model)
         self.grad_clip = settings.grad_clip
         self.tokens_per_step = case.batch_size * case.block_size
 
@@ -87,7 +84,7 @@ class TrainingStepWorkload:
     def step(self) -> None:
         """Execute one uninstrumented forward/backward/optimizer training step."""
         inputs, targets = self.batcher.next_batch()
-        self.optimizer.zero_grad(set_to_none=True)
+        self.optimizer.zero_grad(set_to_none=methodology.ZERO_GRAD_SET_TO_NONE)
         _, loss = cast("tuple[torch.Tensor, torch.Tensor | None]", self.model(inputs, targets))
         if loss is None:
             raise InvalidBenchmarkStateError(MISSING_LOSS_REASON)
@@ -102,7 +99,7 @@ class TrainingStepWorkload:
         with record_function("data_preparation"):
             inputs, targets = self.batcher.next_batch()
         with record_function("forward_backward"):
-            self.optimizer.zero_grad(set_to_none=True)
+            self.optimizer.zero_grad(set_to_none=methodology.ZERO_GRAD_SET_TO_NONE)
             _, loss = cast("tuple[torch.Tensor, torch.Tensor | None]", self.model(inputs, targets))
             if loss is None:
                 raise InvalidBenchmarkStateError(MISSING_LOSS_REASON)
@@ -112,3 +109,25 @@ class TrainingStepWorkload:
         with record_function("optimizer_step"):
             optimizer_step = cast("Callable[[], object | None]", self.optimizer.step)
             _ = optimizer_step()
+
+
+def create_training_step_workload(
+    case: BenchmarkV2Case,
+    *,
+    seed: int,
+    vocab_size: int,
+) -> TrainingStepWorkload:
+    """Adapt one explicit Benchmark v2 case to the unchanged v1 workload math."""
+    return TrainingStepWorkload(
+        BenchmarkCase(
+            model_size=case.model_name,
+            n_layer=case.n_layer,
+            n_head=case.n_head,
+            n_embd=case.n_embd,
+            thread_count=case.torch_num_threads,
+            block_size=case.block_size,
+            batch_size=case.batch_size,
+        ),
+        seed=seed,
+        vocab_size=vocab_size,
+    )

@@ -32,6 +32,34 @@ STAGE_6_CONTRACTS = (
     "Linux",
 )
 REFERENCE_RESULT_LINK = "docs/results/reference-training/README.md"
+BENCHMARK_V2_CONTRACTS = (
+    "benchmark_v2.py",
+    "compare_benchmarks.py",
+    "profile_benchmark_v2.py",
+    "fresh process",
+    "final_rss_mib",
+    "peak_rss_mib",
+    "peak_rss_scope: worker_lifetime",
+    "stable",
+    "unstable",
+    "insufficient_samples",
+    "shared CI runner",
+    "intra-op",
+    "inter-op",
+    "strictly greater than",
+    "--policy configs/benchmark_v2_comparison.yaml",
+    "0 = `pass`",
+    "1 = 输入、schema、I/O 或证据损坏",
+    "2 = `fail`",
+    "3 = `not_comparable`",
+)
+BENCHMARK_V2_LINKS = (
+    "configs/benchmark_v2_comparison.yaml",
+    "configs/benchmark_v2_smoke.yaml",
+    "configs/benchmark_v2_reference.yaml",
+    "docs/superpowers/specs/2026-07-28-stage7b-cpu-benchmark-v2-design.md",
+    "docs/superpowers/plans/2026-07-28-stage7b-cpu-benchmark-v2.md",
+)
 
 
 def test_readme_documents_stable_user_contracts() -> None:
@@ -63,6 +91,24 @@ def test_readme_links_generated_reference_training_evidence() -> None:
     # When/Then: readers can reach the generated report from the project overview.
     assert f"]({REFERENCE_RESULT_LINK})" in readme
     assert (PROJECT_ROOT / REFERENCE_RESULT_LINK).is_file()
+
+
+def test_readme_documents_benchmark_v2_methodology_and_entrypoints() -> None:
+    # Given: the repository README after Benchmark v2 is published.
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    # When/Then: canonical commands and interpretation safeguards remain discoverable.
+    assert all(contract in readme for contract in BENCHMARK_V2_CONTRACTS)
+
+
+def test_readme_links_benchmark_v2_public_material() -> None:
+    # Given: the documented Benchmark v2 local resources.
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    # When/Then: each public resource is linked and present in this checkout.
+    for target in BENCHMARK_V2_LINKS:
+        assert f"]({target})" in readme
+        assert (PROJECT_ROOT / target).is_file()
 
 
 def test_readme_local_markdown_links_exist() -> None:

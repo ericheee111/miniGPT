@@ -207,3 +207,27 @@ def test_parameter_count_matches_untied_gpt_formula() -> None:
 
     # Then: embeddings, two Blocks, final LayerNorm, and untied LM head total 1,784.
     assert parameter_count == 1_784
+
+
+@pytest.mark.parametrize("bias", [False, True])
+def test_expected_parameter_count_matches_instantiated_gpt_for_both_bias_modes(
+    *, bias: bool
+) -> None:
+    """The pure expected-count helper agrees with the actual GPT parameter inventory."""
+    # Given: a small valid GPT configuration whose optional biases are explicit.
+    config = model.GPTConfig(
+        vocab_size=13,
+        block_size=5,
+        n_layer=2,
+        n_head=1,
+        n_embd=6,
+        dropout=0.0,
+        bias=bias,
+    )
+
+    # When: the pure formula and the real model count their parameters.
+    expected = model.expected_gpt_parameter_count(config)
+    observed = model.GPT(config).parameter_count()
+
+    # Then: the formula covers every trainable scalar without model allocation in callers.
+    assert expected == observed

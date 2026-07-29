@@ -1,66 +1,99 @@
 # AGENTS.md
 
-Compact guide for OpenCode sessions. Read before editing.
+Compact guide for agents working in this repository. Treat the current Git tree, tests, and
+generated evidence as the source of truth.
 
-## Status — most modules are empty stubs
+## Project status
 
-Only `src/minigpt/data.py` is implemented. These files are **0-byte placeholders**; do not try to run, import from, or extend them as if they had logic:
+miniGPT is a CPU-first, character-level GPT training and profiling lab. The project already
+implements:
 
-- `train.py`, `generate.py` (root entrypoints — not built yet)
-- `src/minigpt/model.py`, `src/minigpt/trainer.py`, `src/minigpt/metrics.py`
+- Tiny Shakespeare preparation, character tokenization, and deterministic train/validation splits;
+- a custom GPT stack with LayerNorm, causal multi-head attention, MLP, residual blocks, loss, and
+  autoregressive generation;
+- YAML-driven training, AdamW, warmup/cosine learning-rate scheduling, validation, sampling,
+  JSONL/TensorBoard metrics, and CPU memory telemetry;
+- checkpoint format v2 with atomic writes, experiment/data identity validation, complete RNG state,
+  and exact training resume;
+- configurable CPU benchmark and PyTorch Profiler entrypoints;
+- isolated Benchmark v2 infrastructure with raw evidence, strict manifests, independent comparison
+  policy, deterministic identities, and separate profiler evidence;
+- reproducible Stage 7A reference-training evidence.
 
-The real working entrypoint is `minigpt.data.prepare_tiny_shakespeare(data_dir=Path("data"))`: downloads Tiny Shakespeare, char-tokenizes, splits 90/10, writes artifacts under `data/raw/` and `data/processed/`.
+Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
+exact-resume systems. Extend their public contracts only when the active stage requires it.
 
-## Python version — 3.14 only
+## Supported environment
 
-`requires-python = ">=3.14,<3.15"`. The toolchain (`target-version = "py314"`, basedpyright `pythonVersion = "3.14"`) hard-rejects anything else. Do not assume 3.11/3.12 works.
+- Python `>=3.11,<3.15`; the toolchain targets Python 3.11 syntax.
+- PyTorch CPU is the canonical runtime. CUDA/GPU work is outside the current scope.
+- Windows is the primary development environment.
+- GitHub Actions runs the quality gates on Windows/Python 3.14 and Linux/Python 3.11.
 
-## Install
+Install from `pyproject.toml`; the empty `requirements.txt` is not an install source:
 
 ```powershell
-pip install -e ".[dev]"
+python -m pip install -e ".[dev,report]"
+python -m pip check
 ```
 
-`requirements.txt` is **empty** — all deps live in `pyproject.toml`. Do not run `pip install -r requirements.txt` expecting dependencies.
+The distribution is `minitrain-gpt`; the import package is `minigpt`.
 
-Distribution name is `minitrain-gpt`; importable package is `minigpt` (src layout under `src/minigpt/`). Tests do `import minigpt.data`, so the editable install is required for pytest to resolve the package.
+## Checkpoint and resume rules
 
-## Verify (run all, in this order)
+- v2 checkpoints are the only supported training-resume source.
+- v2 preserves model/optimizer state, completed step, resolved experiment config, Python/NumPy/
+  PyTorch RNG, train/validation batcher RNG, sample generator RNG, tokenizer/data SHA-256, and
+  format version.
+- v1 checkpoints remain loadable for configuration, weights, and generation, but training resume
+  raises `LegacyCheckpointResumeError`.
+- `training.max_steps` defines the complete experiment, `training.lr_decay_steps` defines the
+  scheduler horizon, and `--run-until-step` is only the current process boundary.
+- Do not add inexact or best-effort resume paths without a new design decision.
+
+## Reference training evidence
+
+The committed Stage 7A evidence is under
+`docs/results/reference-training/`. Its `artifact_manifest.json` binds the report to Git, resolved
+config, tokenizer/data, raw metrics, provenance, samples, and the uncommitted checkpoint by
+SHA-256. Do not hand-edit or silently regenerate these artifacts. The checkpoint, raw outputs, and
+dataset remain gitignored.
+
+## Benchmark and profiler
+
+- `python benchmark.py --config configs/benchmark_smoke.yaml` runs benchmark v1.
+- `python profile_model.py --config configs/benchmark_smoke.yaml` runs an explicitly separate
+  operator profile.
+- Profiler timings include instrumentation overhead and must never be used as benchmark throughput.
+- Benchmark v2 infrastructure is implemented. The current stage is comparison-policy hardening and
+  same-code baseline calibration.
+- The next candidate stage is to use Benchmark v2 while optimizing the batcher/mmap data path.
+  Do not begin that optimization, KV cache, BPE, GPU, LoRA, distributed training, or
+  `torch.compile` without an explicit stage decision.
+
+## Quality gates
+
+Run all gates from an editable installation:
 
 ```powershell
-ruff format src tests
+python -m pip check
+ruff format --check src tests
 ruff check src tests
 basedpyright
 pytest
 ```
 
-- Typechecker is **`basedpyright`** (not `pyright`, not `mypy`). It runs on both `src` and `tests` — there is no per-file relaxation for tests.
-- pytest: `testpaths = ["tests"]`, `--strict-config --strict-markers`. No markers are registered; adding `@pytest.mark.foo` without registering it fails collection.
-- **No CI.** Verification is local and manual. Running all four gates is the only signal of "done."
+Ruff selects `ALL` with project-specific exclusions. basedpyright uses `typeCheckingMode = "all"`
+for `src` and `tests`. Tests use Given/When/Then comments, strict pytest configuration, and no real
+network where a local `file://` source suffices.
 
-## Strict toolchain — gotchas that bite
+## Artifacts and commits
 
-- basedpyright `typeCheckingMode = "all"` with `reportMissingParameterType`, `reportMissingReturnType`, `reportPrivateUsage`, `reportUnusedVariable` all set to `error`. Every function (including tests) needs full annotations. Accessing `_private` attributes from outside the class is an error even in tests.
-- `reportUnnecessaryTypeIgnoreComment = "error"` — a stray `# type: ignore` is a hard error. Do not reach for `# type: ignore` or `# pyright: ignore` as a crutch; fix the type.
-- ruff `select = ["ALL"]`, line-length 100, double quotes, Google docstring convention. Tests relax `ARG`, `D`, `PLR2004`, `S101`, `SLF001` via `[tool.ruff.lint.per-file-ignores]` — basedpyright does **not** inherit these relaxations.
+`data/raw/`, `data/processed/`, `checkpoints/`, `outputs/`, `reports/`, `runs/`, profiler traces,
+model weights, virtual environments, and tool caches are gitignored. Do not commit machine-specific
+benchmark runs or large traces unless a separately reviewed evidence package explicitly requires
+them.
 
-## Test conventions
-
-Tests use a BDD comment style — preserve it in new tests:
-
-```python
-def test_x(tmp_path: Path) -> None:
-    # Given: ...
-    # When: ...
-    # Then: ...
-```
-
-Network-touching tests avoid real HTTP by using `file://` URLs via `Path.as_uri()` against `tmp_path` (see `test_download_text_fetches_source` and `test_prepare_tiny_shakespeare_writes_split_and_metadata`). Follow this pattern instead of mocking `urlopen`.
-
-## Data artifacts (gitignored)
-
-`data/raw/`, `data/processed/`, `checkpoints/`, `outputs/`, `runs/`, `*.pt`, `*.pth`, `*.prof`, `*.trace.json` are all gitignored. `configs/` exists but is empty. `.codegraph/` is gitignored but the local index is used for navigation.
-
-## Commit messages
-
-Git history is in Chinese (e.g. `实现 CharTokenizer 的 encode/decode 与对应单元测试`). Match this style for new commits unless the user requests otherwise.
+Commit source, configs, tests, schemas, design/implementation docs, and small fixed fixtures. Keep
+logical changes in separate commits, preserve unrelated user changes, and follow the repository's
+Chinese commit-message style unless the user requests otherwise.

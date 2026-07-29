@@ -20,6 +20,16 @@ from minigpt.trainer import run_training
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from minigpt.run_provenance import RunSegment
+
+
+def _record_failed_segment(provenance_path: Path, segment: RunSegment) -> None:
+    """Best-effort finalization that never replaces a training failure."""
+    try:
+        fail_run_segment(provenance_path, segment=segment)
+    except Exception:  # noqa: BLE001
+        return
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Create the training command-line parser."""
@@ -66,9 +76,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             resume_path=resume_path,
             run_until_step=run_until_step,
         )
-    except (OSError, RuntimeError, ValueError):
+    except KeyboardInterrupt:
         if provenance_path is not None and segment is not None:
-            fail_run_segment(provenance_path, segment=segment)
+            _record_failed_segment(provenance_path, segment)
+        raise
+    except Exception:
+        if provenance_path is not None and segment is not None:
+            _record_failed_segment(provenance_path, segment)
         raise
     if provenance_path is not None and segment is not None:
         complete_run_segment(

@@ -1,0 +1,39 @@
+# Correctness-only fixture for the public Benchmark v2 CLI; not a performance result.
+schema_version: 2
+experiment_name: benchmark_v2_smoke
+benchmark_seed: 1337
+vocab_size: 65
+output_root: reports/benchmark-v2
+worker_timeout_seconds: 60
+warmup_steps: 1
+measurement_steps: 2
+replicates: 2
+torch_num_interop_threads: 1
+cpu_affinity: null
+max_cv_percent: 10.0
+minimum_replicates: 2
+regression_threshold_percent: 5.0
+relevant_environment_variables:
+  - OMP_NUM_THREADS
+  - MKL_NUM_THREADS
+models:
+  tiny:
+    n_layer: 1
+    n_head: 1
+    n_embd: 32
+cases:
+  - name: tiny_t1_s32_b2
+    model_name: tiny
+    torch_num_threads: 1
+    block_size: 32
+    batch_size: 2
+  - name: tiny_t2_s32_b2
+    model_name: tiny
+    torch_num_threads: 2
+    block_size: 32
+    batch_size: 2
+profile:
+  enabled: true
+  case_name: tiny_t1_s32_b2
+  warmup_steps: 1
+  active_steps: 2

@@ -23,6 +23,7 @@ __all__ = (
     "TokenIdOutOfRangeError",
     "TransformerBlock",
     "UnexpectedTransformerBlockError",
+    "expected_gpt_parameter_count",
 )
 
 _INPUT_NAME: Final = "input"
@@ -35,6 +36,18 @@ _GENERATION_LENGTH_REASON: Final = "max_new_tokens must be non-negative"
 _TEMPERATURE_REASON: Final = "temperature must be positive"
 _TOP_K_REASON: Final = "top_k must be positive when provided"
 _TOKEN_TENSOR_DIMENSIONS: Final = 2
+
+
+def expected_gpt_parameter_count(config: GPTConfig) -> int:
+    """Return the exact trainable GPT parameter count without allocating a model."""
+    embedding_dim = config.n_embd
+    bias_parameters_per_block = 11 * embedding_dim if config.bias else 0
+    block_parameters = 12 * embedding_dim**2 + 2 * embedding_dim + bias_parameters_per_block
+    final_norm_parameters = embedding_dim * (2 if config.bias else 1)
+    embedding_and_head_parameters = (
+        2 * config.vocab_size * embedding_dim + config.block_size * embedding_dim
+    )
+    return embedding_and_head_parameters + config.n_layer * block_parameters + final_norm_parameters
 
 
 @dataclass(frozen=True, slots=True)

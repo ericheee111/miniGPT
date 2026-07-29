@@ -1,0 +1,56 @@
+{
+  "artifacts": [
+    {
+      "path": "environment.json",
+      "sha256": "fcce2f24228279e9940addeadb2b0086994c1aeb127509f45758888c46a0e976",
+      "size_bytes": 2212
+    },
+    {
+      "path": "resolved_config.yaml",
+      "sha256": "c6ea9cda5b2beaae7827b790f0aafb004862d153feffb6bb8ebc61f891dae4b2",
+      "size_bytes": 641
+    },
+    {
+      "path": "raw_replicates.jsonl",
+      "sha256": "0f83fb6b325654ce90e340c42637b4a5472f90f965c7d63f3e976bb47a027c48",
+      "size_bytes": 3975
+    },
+    {
+      "path": "summary.csv",
+      "sha256": "b393a2a8fef79318f65b7a6d00ffb67e7c16d969f8cf60b8b3f8f098f829a3a2",
+      "size_bytes": 479
+    },
+    {
+      "path": "summary.md",
+      "sha256": "faa5b4816800b8cbe1595e5533fe36c53f396c0c26a3a876dd3e4085232348a1",
+      "size_bytes": 10
+    },
+    {
+      "path": "execution_order.json",
+      "sha256": "5b0d8a52604035cb9b7ff16587a6ecc0965a47ad941b328c9867212357659e31",
+      "size_bytes": 1035
+    }
+  ],
+  "case_identities": [
+    {
+      "case_identity": "56729aa89b9306b7a4c1db2a22b246a83a3e2181a1772bb0e837ce9fed2a2bbb",
+      "case_name": "display-name-can-change"
+    }
+  ],
+  "completed_task_count": 3,
+  "config_sha256": "f8c4695bc59bcd813e7b8e27f68b54014625b5751c79cf3f612e7ef71b5d3657",
+  "ended_at_utc": "2026-07-28T01:02:04+00:00",
+  "expected_task_count": 3,
+  "failed_task_count": 0,
+  "git": {
+    "branch": "main",
+    "commit_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "dirty": false
+  },
+  "peak_rss_scope": "worker_lifetime",
+  "run_id": "baseline",
+  "schema_version": 3,
+  "started_at_utc": "2026-07-28T01:02:03+00:00",
+  "status": "complete",
+  "successful_task_count": 3
+}
