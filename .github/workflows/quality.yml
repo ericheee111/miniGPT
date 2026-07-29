@@ -48,14 +48,19 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          echo "=== raw_replicates.jsonl files ==="
-          find . -path ./.venv -prune -o -name "raw_replicates.jsonl" -print 2>/dev/null | while read -r f; do
+          echo "=== raw_replicates.jsonl under tmp + workspace ==="
+          find /tmp "$GITHUB_WORKSPACE" -name "raw_replicates.jsonl" -print 2>/dev/null | while read -r f; do
             echo "--- $f ---"
             cat "$f"
           done
-          echo "=== profile directories ==="
-          find . -path ./.venv -prune -o -type d -name "profiles" -print 2>/dev/null
-          find . -path ./.venv -prune -o -path "*/profiles/*" -name "profile_manifest.json" -print 2>/dev/null | while read -r f; do
+          echo "=== run_manifest.json under tmp + workspace ==="
+          find /tmp "$GITHUB_WORKSPACE" -name "run_manifest.json" -print 2>/dev/null | while read -r f; do
             echo "--- $f ---"
             cat "$f"
           done
+          echo "=== profile artifacts under tmp + workspace ==="
+          find /tmp "$GITHUB_WORKSPACE" -path "*/profiles/*" -type f -print 2>/dev/null | while read -r f; do
+            echo "--- $f ---"
+            cat "$f" 2>/dev/null || echo "(binary or unreadable)"
+          done
+
