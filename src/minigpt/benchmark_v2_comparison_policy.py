@@ -149,9 +149,7 @@ def load_comparison_policy(path: Path) -> ComparisonPolicy:
         )
     require_equal = document["require_equal_replicate_count"]
     if not isinstance(require_equal, bool):
-        raise InvalidComparisonPolicyError(
-            path, "require_equal_replicate_count must be a boolean"
-        )
+        raise InvalidComparisonPolicyError(path, "require_equal_replicate_count must be a boolean")
     return ComparisonPolicy(
         schema_version=_SCHEMA_VERSION,
         minimum_successful_replicates=_positive_integer(

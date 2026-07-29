@@ -39,6 +39,7 @@ BENCHMARK_V2_CONTRACTS = (
     "fresh process",
     "final_rss_mib",
     "peak_rss_mib",
+    "peak_rss_scope: worker_lifetime",
     "stable",
     "unstable",
     "insufficient_samples",
@@ -46,8 +47,14 @@ BENCHMARK_V2_CONTRACTS = (
     "intra-op",
     "inter-op",
     "strictly greater than",
+    "--policy configs/benchmark_v2_comparison.yaml",
+    "0 = `pass`",
+    "1 = 输入、schema、I/O 或证据损坏",
+    "2 = `fail`",
+    "3 = `not_comparable`",
 )
 BENCHMARK_V2_LINKS = (
+    "configs/benchmark_v2_comparison.yaml",
     "configs/benchmark_v2_smoke.yaml",
     "configs/benchmark_v2_reference.yaml",
     "docs/superpowers/specs/2026-07-28-stage7b-cpu-benchmark-v2-design.md",

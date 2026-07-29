@@ -330,18 +330,26 @@ The comparison CLI is:
 ```powershell
 python compare_benchmarks.py `
   --baseline reports/benchmark-v2/<baseline>/run_manifest.json `
-  --candidate reports/benchmark-v2/<candidate>/run_manifest.json
+  --candidate reports/benchmark-v2/<candidate>/run_manifest.json `
+  --policy configs/benchmark_v2_comparison.yaml
 ```
 
 Cases align only by identical case identity, never by a display label alone. The comparison always
 reports descriptive median step-time and throughput deltas for aligned cases.
 
+The policy is a separate strict schema-v1 YAML artifact with
+`minimum_successful_replicates`, `max_cv_percent`, `regression_threshold_percent`, and
+`require_equal_replicate_count`. Duplicate, omitted, extra, non-finite, or incorrectly typed values
+are rejected. The comparator recomputes both runs' eligibility from raw replicates under this one
+policy; run-config reporting thresholds never authorize the comparison verdict.
+
 It refuses a pass/fail regression verdict when:
 
 - either run is not complete;
 - case sets or identities do not align;
-- either case has fewer than the configured minimum successful replicates;
-- either case is not stable;
+- either case has fewer than the policy minimum successful replicates;
+- either case is not stable under the policy maximum CV;
+- raw replicate counts differ when required by policy;
 - required environment compatibility fields differ.
 
 Compatibility fields are OS/machine, CPU identity and core topology, Python/PyTorch/NumPy versions,
@@ -354,12 +362,14 @@ For comparable cases:
 step_time_change_percent = (candidate_median / baseline_median - 1) × 100
 ```
 
-A regression is reported only when the relative increase is strictly greater than
+A regression is reported only when the relative increase is strictly greater than the policy
 `regression_threshold_percent`; equality is not a failure. The run-level verdict fails if any
 comparable case regresses.
 
 Comparison writes JSON and Markdown beside the candidate manifest. It lists every incompatibility
-instead of hiding descriptive differences.
+instead of hiding descriptive differences. Both formats retain the policy summary, exact policy
+SHA-256, and a comparison identity derived from both manifest hashes and the policy hash. Exit codes
+are 0 for pass, 1 for invalid input/evidence, 2 for fail, and 3 for not comparable.
 
 ## 14. Profiler separation
 
@@ -394,6 +404,9 @@ replicates. Its explicit cases vary one main factor at a time:
 - batch size at fixed thread count and sequence length.
 
 It is a local execution recommendation only and is not run automatically during Stage 7B.
+`configs/benchmark_v2_comparison.yaml` contains conservative initial controls, not a statistical
+significance claim. Calibrate them with two independent same-code baseline runs on the intended
+stable machine before treating them as an operational performance gate.
 
 ## 16. Test strategy
 

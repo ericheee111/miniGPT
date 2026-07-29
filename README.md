@@ -257,11 +257,11 @@ Windows 的项目虚拟环境可以使用下列命令；在其他受支持的平
 
 ### Canonical v2 method
 
-每个 worker 在构建 workload 前设置该 case 的 **intra-op** `torch_num_threads`，并设置配置
-级别的 **inter-op** `torch_num_interop_threads`；inter-op 不是每个 case 的变量。线程设置在
-fresh process 中完成，避免 PyTorch 在已经并行运行后不能安全重设 inter-op 线程数的问题。
-可选 `cpu_affinity` 会记录 requested/effective CPU IDs，但在 hybrid CPU 上应谨慎使用：只在
-确认 logical IDs、P/E-core 拓扑和系统允许设置 affinity 后才固定它。
+每个 worker 先应用并读回可选 `cpu_affinity`，再设置该 case 的 **intra-op**
+`torch_num_threads` 和配置级别的 **inter-op** `torch_num_interop_threads`，最后才构建
+workload；inter-op 不是每个 case 的变量。线程设置在 fresh process 中完成，避免 PyTorch
+在已经并行运行后不能安全重设 inter-op 线程数的问题。在 hybrid CPU 上应谨慎使用 affinity：
+只在确认 logical IDs、P/E-core 拓扑和系统允许设置 affinity 后才固定它。
 
 先运行 `warmup_steps`，再垃圾回收并临时禁用 GC。唯一 canonical timer 是一个
 `time.perf_counter()` 区间，包含完整 measurement loop 的 batch acquisition、
@@ -271,10 +271,11 @@ model/optimizer/batcher construction、warmup、pre-timer GC、post-timer memory
 JSON transport、logging/report I/O、profiler instrumentation、checkpoint、validation 和 text
 generation。不要把 profiler 或额外 phase timers 包进该 timer。
 
-`final_rss_mib` 是 canonical loop 结束后读取的 RSS；`peak_rss_mib` 是 OS-native、整个 worker
-生命周期的高水位（Windows peak working set 或 Linux `getrusage` `ru_maxrss`）。后者包含 import、
-construction、warmup 和 measurement，因而不是 model-only memory；两者也没有 polling thread，
-`peak_rss_sampling_interval_ms` 为 `null`。
+`final_rss_mib` 是 canonical loop 结束后读取的 RSS。worker lifetime peak RSS 显式记录为
+`peak_rss_scope: worker_lifetime`；`peak_rss_mib` 是 OS-native、整个 worker 生命周期的高水位
+（Windows peak working set 或 Linux `getrusage` `ru_maxrss`）。它包含 import、construction、
+warmup 和 measurement，因而不是 measurement-only 或 model-only memory；两者也没有 polling
+thread，`peak_rss_sampling_interval_ms` 为 `null`。
 
 每个成功 replicate 贡献一个聚合 `step_time_ms`。v2 保留全部
 `raw_replicates.jsonl` 记录，包含失败记录及其 stdout/stderr；不会自动删除或过滤任何 outlier。
@@ -283,6 +284,8 @@ CV，以及 median throughput、median final RSS 与 max native peak RSS。少�
 `minimum_replicates` 个成功样本为 `insufficient_samples`；否则 CV 严格大于 `max_cv_percent`
 为 `unstable`，不大于该阈值为 `stable`。温度、电源策略、后台负载、CPU 频率和
 PyTorch/BLAS 版本均可能造成漂移，所以先看 raw replicate、CV 和环境证据，再讨论差异。
+这些 run config 字段只描述生成该 run 时的报告规则；它们不是 baseline/candidate verdict 的
+权威 policy。
 
 一个完成或 partial run 的目录包含 `run_manifest.json`、`environment.json`、
 `resolved_config.yaml`、`execution_order.json`、`raw_replicates.jsonl`、`summary.csv` 与
@@ -306,6 +309,11 @@ model、10 warmup、20 measured steps 和 7 replicates。它只声明 10 个 one
 baseline 一次、threads 1/4/8/12/20、block size 64/128/256 和 batch size 4/8/16/32；不是完整
 矩阵。若需要跨机结论，重新运行并把环境差异视为不可直接比较，而不是把旧数字移植过来。
 
+[comparison policy](configs/benchmark_v2_comparison.yaml) 的保守初值要求至少 5 个成功
+replicate、CV 不高于 5%、step-time regression 严格高于 7.5%，并要求两侧 raw replicate
+数量相同。这些值尚未声明具有统计显著性；正式采用前，应在稳定机器上对相同代码、相同配置
+独立运行两次 baseline，用观测到的自然噪声校准 CV 与 regression threshold。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
@@ -313,15 +321,31 @@ baseline 一次、threads 1/4/8/12/20、block size 64/128/256 和 batch size 4/8
 ```powershell
 .\.venv\Scripts\python.exe compare_benchmarks.py `
   --baseline reports/benchmark-v2/<baseline-run>/run_manifest.json `
-  --candidate reports/benchmark-v2/<candidate-run>/run_manifest.json
+  --candidate reports/benchmark-v2/<candidate-run>/run_manifest.json `
+  --policy configs/benchmark_v2_comparison.yaml
 ```
 
-比较按 `case_identity` 对齐，并拒绝 incomplete run、缺失/额外 case、未达到样本数、`unstable`
-summary，或 CPU/toolchain/power-scheme/relevant environment variables/worker controls/methodology
-不兼容的证据。即使 verdict 是 `not_comparable`，输出仍保留 descriptive deltas；它们不是性能
-结论。只有兼容且 `stable` 的 cases 才会得到 pass/fail。candidate step time 相对 baseline
-**strictly greater than** `regression_threshold_percent` 才是 regression；恰好等于阈值不是
-regression。比较也不会过滤 outlier，且不修改任一来源 run。
+policy 使用严格、拒绝重复 key 的 schema v1。比较器从 baseline 和 candidate 的
+`raw_replicates.jsonl` 在同一 policy 下重新计算样本 eligibility 和 stability；任一 run 自己
+声明的 `replicates`、`minimum_replicates`、`max_cv_percent` 或
+`regression_threshold_percent` 都不能放宽 verdict。比较按剔除展示名称后的
+`case_identity` 对齐，并拒绝 incomplete run、缺失/额外 case、样本不足、policy 要求下的
+replicate 数不一致或 `unstable`，以及 CPU/toolchain/power-scheme/relevant environment
+variables/worker controls/methodology 不兼容的证据。
+
+即使 verdict 是 `not_comparable`，输出仍保留 descriptive deltas；它们不是性能结论。只有
+兼容且 `stable` 的 cases 才会得到 pass/fail。candidate step time 相对 baseline
+**strictly greater than** policy 的 `regression_threshold_percent` 才是 regression；恰好等于
+阈值不是 regression。比较不会过滤 outlier，也不修改来源 run。JSON/Markdown 同时保存 policy
+摘要、policy SHA-256 和由两份 manifest hash 与 policy hash 派生的 comparison identity；修改
+policy 文件会生成不同 identity 和输出文件名。
+
+默认 CLI 退出码适合自动化回归门禁：
+
+- 0 = `pass`
+- 1 = 输入、schema、I/O 或证据损坏
+- 2 = `fail`
+- 3 = `not_comparable`
 
 ### Separate v2 profiler
 

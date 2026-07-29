@@ -87,8 +87,7 @@ def _write_policy_file(
                 f"minimum_successful_replicates: {minimum_successful_replicates}",
                 f"max_cv_percent: {max_cv_percent}",
                 f"regression_threshold_percent: {regression_threshold_percent}",
-                "require_equal_replicate_count: "
-                + str(require_equal_replicate_count).lower(),
+                "require_equal_replicate_count: " + str(require_equal_replicate_count).lower(),
                 "",
             )
         ),
@@ -1299,8 +1298,7 @@ def test_write_comparison_rolls_back_the_first_output_if_the_second_write_fails(
     with pytest.raises(OSError, match="markdown write failed"):
         _ = write_comparison(comparison)
     assert not (
-        tmp_path
-        / f"candidate-comparison-baseline-{comparison.comparison_identity[:12]}.json"
+        tmp_path / f"candidate-comparison-baseline-{comparison.comparison_identity[:12]}.json"
     ).exists()
 
 
@@ -1342,9 +1340,7 @@ def test_compare_cli_returns_verdict_specific_exit_codes(
         environment_updates=(
             {"cpu_name": "different-cpu"} if scenario == "environment_mismatch" else None
         ),
-        summary_updates=(
-            {"median_step_time_ms": "110.0"} if scenario == "regression" else None
-        ),
+        summary_updates=({"median_step_time_ms": "110.0"} if scenario == "regression" else None),
     )
     if scenario == "invalid":
         candidate = scenario_directory / "missing" / "run_manifest.json"

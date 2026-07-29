@@ -16,6 +16,8 @@ implements:
 - checkpoint format v2 with atomic writes, experiment/data identity validation, complete RNG state,
   and exact training resume;
 - configurable CPU benchmark and PyTorch Profiler entrypoints;
+- isolated Benchmark v2 infrastructure with raw evidence, strict manifests, independent comparison
+  policy, deterministic identities, and separate profiler evidence;
 - reproducible Stage 7A reference-training evidence.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
@@ -63,9 +65,11 @@ dataset remain gitignored.
 - `python profile_model.py --config configs/benchmark_smoke.yaml` runs an explicitly separate
   operator profile.
 - Profiler timings include instrumentation overhead and must never be used as benchmark throughput.
-- The active roadmap is Stage 7B: isolated and reproducible CPU Benchmark v2. Do not implement
-  performance optimizations, KV cache, BPE, GPU, LoRA, distributed training, or `torch.compile`
-  during this stage.
+- Benchmark v2 infrastructure is implemented. The current stage is comparison-policy hardening and
+  same-code baseline calibration.
+- The next candidate stage is to use Benchmark v2 while optimizing the batcher/mmap data path.
+  Do not begin that optimization, KV cache, BPE, GPU, LoRA, distributed training, or
+  `torch.compile` without an explicit stage decision.
 
 ## Quality gates
 

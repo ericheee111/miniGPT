@@ -316,10 +316,7 @@ def test_write_run_artifacts_binds_all_outputs_without_hashing_its_manifest(tmp_
     assert run_environment["captured_before_first_worker"] is True
     summary_header = artifacts.summary_csv_path.read_text(encoding="utf-8").splitlines()[0]
     assert "peak_rss_scope" in summary_header
-    assert (
-        "worker lifetime peak RSS"
-        in artifacts.summary_markdown_path.read_text(encoding="utf-8")
-    )
+    assert "worker lifetime peak RSS" in artifacts.summary_markdown_path.read_text(encoding="utf-8")
 
 
 def test_load_run_manifest_rejects_non_worker_lifetime_peak_rss_scope(tmp_path: Path) -> None:
