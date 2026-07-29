@@ -1,4 +1,4 @@
-# Calibrated Stage 8 reference methodology for the documented i7-14700 Windows host.
+# Local Stage 8 comparison methodology after same-code calibration.
 schema_version: 2
 experiment_name: benchmark_v2_reference_stage8_stable
 benchmark_seed: 1337
@@ -38,7 +38,6 @@ models:
     n_head: 4
     n_embd: 128
 cases:
-  # Shared baseline, intentionally declared once rather than expanded as a matrix.
   - name: teaching_t12_s128_b16
     model_name: teaching
     torch_num_threads: 12
@@ -90,7 +89,7 @@ cases:
     block_size: 128
     batch_size: 32
 profile:
-  enabled: false
+  enabled: true
   case_name: teaching_t12_s128_b16
   warmup_steps: 15
   active_steps: 20
