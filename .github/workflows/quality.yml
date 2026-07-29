@@ -12,17 +12,28 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.14"
+            venv-bin: Scripts
           - os: ubuntu-latest
             python-version: "3.11"
+            venv-bin: bin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
+      # Create a project-local .venv so basedpyright's `venvPath = "."` /
+      # `venv = ".venv"` (see pyproject.toml) resolves in CI the same way it
+      # does locally. setup-python's global interpreter has no .venv, which
+      # made basedpyright exit non-zero with
+      # "venv .venv subdirectory not found in venv path" even at 0 errors.
+      - name: Create virtual environment
+        run: python -m venv .venv
+      - name: Add .venv to PATH
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/.venv/${{ matrix.venv-bin }}" >> "$GITHUB_PATH"
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: .venv/${{ matrix.venv-bin }}/python -m pip install --upgrade pip && .venv/${{ matrix.venv-bin }}/python -m pip install -e ".[dev]"
       - name: Check dependencies
         run: python -m pip check
       - name: Check formatting
