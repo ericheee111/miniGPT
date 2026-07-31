@@ -295,19 +295,26 @@ environment 记录 Git、platform/CPU、Python/PyTorch/NumPy、power scheme、pr
 [artifact/report schema](src/minigpt/benchmark_v2_report.py)。报告、raw runs、trace 和机器特定
 数字都被 gitignore，不能作为源码或默认基线提交。
 
-### Calibrated Stage 8 reference methodology
+Benchmark v2 schema v3 还把可选的 training-step preconditioning 绑定进 resolved config、
+methodology identity 和最终 manifest；启用时，benchmark 命令会先执行并记录该阶段，再开始
+worker replicates。这样复现命令不会依赖未记录的手工预热。
+
+### Portable reference and calibrated Stage 8 methodology
 
 以下命令必须在同一台空闲机器、相同电源策略、相同 Python/PyTorch/NumPy 与相关环境变量下执行：
 
 ```powershell
-.\.venv\Scripts\python.exe benchmark_v2.py --config configs/benchmark_v2_reference.yaml
+.\.venv\Scripts\python.exe benchmark_v2.py `
+  --config configs/benchmark_v2_i7_14700_stage8.yaml
 ```
 
-[reference 配置](configs/benchmark_v2_reference.yaml) 是在文档所述 i7-14700 Windows 主机上
-通过两次 same-code baseline 校准后的 Stage 8 方法：4-layer/4-head/128-embedding teaching
-model、15 warmup、200 measured steps、7 replicates，并固定 logical CPUs `0..15`。它只声明
-10 个 one-factor cases：shared baseline 一次、threads 1/4/8/12/20、block size 64/128/256
-和 batch size 4/8/16/32；不是完整矩阵。其它 CPU 拓扑不能直接复用该 affinity，必须重新校准。
+[portable reference 配置](configs/benchmark_v2_reference.yaml) 保留通用 teaching matrix，
+不固定 affinity，也不启用主机专属 preconditioning。明确命名的
+[i7-14700 Stage 8 配置](configs/benchmark_v2_i7_14700_stage8.yaml) 才承载该 Windows 主机
+校准的方法：15 warmup、200 measured steps、7 replicates、logical CPUs `0..15`，以及命令内
+执行并记录的 120 秒 training-step preconditioning。它声明 10 个 one-factor cases：
+shared baseline 一次、threads 1/4/8/12/20、block size 64/128/256 和 batch size
+4/8/16/32；不是完整矩阵。其它 CPU 拓扑不能直接复用该 affinity，必须重新校准。
 
 [comparison policy](configs/benchmark_v2_comparison.yaml) 的保守初值要求至少 5 个成功
 replicate、CV 不高于 5%、step-time regression 严格高于 7.5%，并要求两侧 raw replicate
@@ -322,15 +329,17 @@ baseline，观察到每 case step-time 漂移 -3.29% 到 +6.58%，随后才运�
 
 ```powershell
 .\.venv\Scripts\python.exe benchmark_batcher.py `
-  --config configs/batcher_benchmark_reference.yaml
+  --config configs/batcher_benchmark_i7_14700_stage8.yaml
 .\.venv\Scripts\python.exe profile_benchmark_v2.py `
   --config configs/benchmark_v2_stage8_profile.yaml
 ```
 
-[Stage 8 精简证据包](docs/results/batcher-optimization/README.md) 保存两份 baseline、一份有效
-candidate、两份 comparison、batch-only manifests 与 Profiler 摘要。结果显示 batch-only
-中位 step time 改善 10.1%–48.0%，而完整训练 step 的变化落在自然噪声内；因此只声称数据
-路径本身更快，不声称端到端训练显著提速或跨机器领先。
+[portable batch-only 配置](configs/batcher_benchmark_reference.yaml) 同样不固定 affinity；
+上面的 i7-14700 配置才是当前主机复测定义。[Stage 8 精简证据包](docs/results/batcher-optimization/README.md)
+保存交错执行的 baseline A、candidate A、baseline B、candidate B 全部小型 raw JSONL，
+strict run manifests 和六份 comparison JSON。四种 case 中，两组 candidate 的描述性中位数
+都低于两组 baseline，但所有严格 comparison 都因至少一侧 CV 超过 5% 而
+`not_comparable`，所以当前不声称已经稳定证明 batch-only 提速。
 
 ### Compare compatible v2 evidence
 

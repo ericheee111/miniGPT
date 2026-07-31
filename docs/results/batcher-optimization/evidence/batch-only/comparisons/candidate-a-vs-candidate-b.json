@@ -1,0 +1,94 @@
+{
+  "baseline": {
+    "git_commit_sha": "3d6ae83e5c0b37a423d60abfb73377cf02fab51f",
+    "run_id": "20260731T094704Z-a035fea3b16b-717af65062e9",
+    "run_manifest_sha256": "ac42526b34bbbef9e0266449fa2eb5914003ce4ae6ed3daad96aeaaa585620e2"
+  },
+  "candidate": {
+    "git_commit_sha": "3d6ae83e5c0b37a423d60abfb73377cf02fab51f",
+    "run_id": "20260731T095023Z-a035fea3b16b-717af65062e9",
+    "run_manifest_sha256": "f493cde10ca1d6ce79ce8f6aa4165cfeed3c6945cf0d02f08f2baeee631fb477"
+  },
+  "cases": [
+    {
+      "baseline_cv_percent": 3.2134564637473217,
+      "baseline_median_batch_time_ms": 0.01192916,
+      "baseline_stability": "stable",
+      "batch_time_change_percent": -0.8309889380308411,
+      "candidate_cv_percent": 7.154256410091402,
+      "candidate_median_batch_time_ms": 0.01183003,
+      "candidate_stability": "unstable",
+      "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+      "case_name": "char-gpt-b32-t128",
+      "peak_rss_change_mib": -0.07421875,
+      "reasons": [
+        "candidate case is unstable"
+      ],
+      "regressed": null,
+      "throughput_change_percent": 0.8379522283544549
+    },
+    {
+      "baseline_cv_percent": 4.623603174006116,
+      "baseline_median_batch_time_ms": 0.01105458,
+      "baseline_stability": "stable",
+      "batch_time_change_percent": 1.2953002285025939,
+      "candidate_cv_percent": 2.3252938221154396,
+      "candidate_median_batch_time_ms": 0.011197770000000001,
+      "candidate_stability": "stable",
+      "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+      "case_name": "char-gpt-b16-t128",
+      "peak_rss_change_mib": 0.4140625,
+      "reasons": [],
+      "regressed": false,
+      "throughput_change_percent": -1.2787367484776158
+    },
+    {
+      "baseline_cv_percent": 7.351484685312454,
+      "baseline_median_batch_time_ms": 0.01000334,
+      "baseline_stability": "unstable",
+      "batch_time_change_percent": 2.289735228433698,
+      "candidate_cv_percent": 5.80967192914903,
+      "candidate_median_batch_time_ms": 0.01023239,
+      "candidate_stability": "unstable",
+      "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+      "case_name": "char-gpt-b4-t128",
+      "peak_rss_change_mib": 0.62890625,
+      "reasons": [
+        "baseline case is unstable",
+        "candidate case is unstable"
+      ],
+      "regressed": null,
+      "throughput_change_percent": -2.2384799641139708
+    },
+    {
+      "baseline_cv_percent": 10.503280846034453,
+      "baseline_median_batch_time_ms": 0.011923705,
+      "baseline_stability": "unstable",
+      "batch_time_change_percent": -3.831820730217672,
+      "candidate_cv_percent": 5.8944376001778345,
+      "candidate_median_batch_time_ms": 0.01146681,
+      "candidate_stability": "unstable",
+      "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+      "case_name": "char-gpt-b16-t256",
+      "peak_rss_change_mib": -0.21875,
+      "reasons": [
+        "baseline case is unstable",
+        "candidate case is unstable"
+      ],
+      "regressed": null,
+      "throughput_change_percent": 3.9844996123594933
+    }
+  ],
+  "comparison_policy": {
+    "max_cv_percent": 5.0,
+    "minimum_successful_replicates": 5,
+    "regression_threshold_percent": 7.5,
+    "require_equal_replicate_count": true,
+    "schema_version": 1
+  },
+  "environment_mismatches": [],
+  "policy_sha256": "36ddd5faa00837d921a9e46f9085cf82d557e3a614f5c1108aa8fe936e92876c",
+  "reasons": [],
+  "schema_version": 1,
+  "verdict": "not_comparable"
+}

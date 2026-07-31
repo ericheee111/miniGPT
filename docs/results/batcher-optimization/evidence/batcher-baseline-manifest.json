@@ -1,126 +1,21 @@
 {
-  "artifacts": {
-    "raw_replicates": "raw_replicates.jsonl",
-    "summary_csv": "summary.csv",
-    "summary_markdown": "summary.md"
-  },
-  "config_sha256": "9a167a404c370ee28a4e9dd7c5374c6ae5492117cf54e7d10bae265abadd191e",
-  "experiment_name": "stage8-batcher-only-reference",
-  "git_commit_sha": "91d9ba65bf67ffe95b6ea00e94e989e1e0fbe502",
-  "git_dirty": false,
-  "methodology_version": 1,
-  "raw_replicate_count": 28,
-  "resolved_config": {
-    "cases": [
-      {
-        "batch_size": 4,
-        "block_size": 128,
-        "name": "char-gpt-b4-t128"
-      },
-      {
-        "batch_size": 16,
-        "block_size": 128,
-        "name": "char-gpt-b16-t128"
-      },
-      {
-        "batch_size": 32,
-        "block_size": 128,
-        "name": "char-gpt-b32-t128"
-      },
-      {
-        "batch_size": 16,
-        "block_size": 256,
-        "name": "char-gpt-b16-t256"
-      }
-    ],
-    "corpus_tokens": 1000000,
-    "cpu_affinity": [
-      0,
-      1,
-      2,
-      3,
-      4,
-      5,
-      6,
-      7,
-      8,
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15
-    ],
-    "experiment_name": "stage8-batcher-only-reference",
-    "max_cv_percent": 5.0,
-    "measurement_batches": 20000,
-    "minimum_replicates": 5,
-    "output_root": "reports\\batcher-benchmark",
-    "replicates": 7,
-    "schema_version": 1,
-    "seed": 20260729,
-    "warmup_batches": 500,
-    "worker_timeout_seconds": 120.0
-  },
-  "schema_version": 1,
-  "status": "complete",
-  "summaries": [
+  "config_sha256": "717af65062e9822842f31b9dadbef3eafea6671a45106572836abf1460e5fa83",
+  "git_commit_sha": "91d9ba65bf67f05861138414d926b6f6792d40c2",
+  "methodology_version": 2,
+  "role": "baseline",
+  "runs": [
     {
-      "case_identity": "56885e0edb287318c659b7cdf66da92bd778176d863c4edd87b0412166335154",
-      "case_name": "char-gpt-b4-t128",
-      "coefficient_of_variation_percent": 2.3723988856036,
-      "failure_count": 0,
-      "max_worker_lifetime_peak_rss_mib": 218.703125,
-      "median_absolute_deviation_batch_time_ms": 0.00023981500000000086,
-      "median_batch_time_ms": 0.011606469999999999,
-      "median_tokens_per_second": 44113326.44637,
-      "peak_rss_scope": "worker_lifetime",
-      "replicate_count": 7,
-      "stability": "stable",
-      "success_count": 7
+      "label": "baseline-a",
+      "run_id": "20260731T094540Z-14bb5312359d-717af65062e9",
+      "run_manifest_path": "evidence/batch-only/baseline-a/20260731T094540Z-14bb5312359d-717af65062e9/run_manifest.json",
+      "run_manifest_sha256": "92ea9594471cab6aea515a710150c3d48a51509bf11118a54fb454f51a5a11ff"
     },
     {
-      "case_identity": "b64c13aae23e08c5d54136049e8e556e2842edabb1cbdf5b94929c2532d58f68",
-      "case_name": "char-gpt-b16-t128",
-      "coefficient_of_variation_percent": 1.1779018199573272,
-      "failure_count": 0,
-      "max_worker_lifetime_peak_rss_mib": 218.69921875,
-      "median_absolute_deviation_batch_time_ms": 0.0001028650000000006,
-      "median_batch_time_ms": 0.01667929,
-      "median_tokens_per_second": 122787001.12534766,
-      "peak_rss_scope": "worker_lifetime",
-      "replicate_count": 7,
-      "stability": "stable",
-      "success_count": 7
-    },
-    {
-      "case_identity": "a97abcf558055a3994a762e4b198e182df777bfb1496a9e6d262374390c2421b",
-      "case_name": "char-gpt-b32-t128",
-      "coefficient_of_variation_percent": 1.8066073613069187,
-      "failure_count": 0,
-      "max_worker_lifetime_peak_rss_mib": 218.9375,
-      "median_absolute_deviation_batch_time_ms": 0.0003465899999999973,
-      "median_batch_time_ms": 0.023134365,
-      "median_tokens_per_second": 177052622.79729745,
-      "peak_rss_scope": "worker_lifetime",
-      "replicate_count": 7,
-      "stability": "stable",
-      "success_count": 7
-    },
-    {
-      "case_identity": "b9cd53be0ea6638a6573b948a32676ebae0941971b0cc94e3b26af3d8ebd80a6",
-      "case_name": "char-gpt-b16-t256",
-      "coefficient_of_variation_percent": 0.6073842091008886,
-      "failure_count": 0,
-      "max_worker_lifetime_peak_rss_mib": 218.921875,
-      "median_absolute_deviation_batch_time_ms": 6.234999999999921e-05,
-      "median_batch_time_ms": 0.017164775,
-      "median_tokens_per_second": 238628237.18924367,
-      "peak_rss_scope": "worker_lifetime",
-      "replicate_count": 7,
-      "stability": "stable",
-      "success_count": 7
+      "label": "baseline-b",
+      "run_id": "20260731T094901Z-14bb5312359d-717af65062e9",
+      "run_manifest_path": "evidence/batch-only/baseline-b/20260731T094901Z-14bb5312359d-717af65062e9/run_manifest.json",
+      "run_manifest_sha256": "ee3861cddec4d56534e1b040d85b7a6879b2e7706058aa9958b2a933e804d60d"
     }
-  ]
+  ],
+  "schema_version": 2
 }

@@ -105,6 +105,15 @@ def test_benchmark_v2_cli_runs_canonical_smoke_in_fresh_workers(tmp_path: Path) 
         for line in raw_path.read_text(encoding="utf-8").splitlines()
     ]
     assert manifest["status"] == "complete"
+    assert manifest["schema_version"] == 4
+    assert manifest["preconditioning"] == {
+        "schema_version": 1,
+        "status": "skipped",
+        "enabled": False,
+        "case_name": "tiny_t1_s32_b2",
+        "case_identity": raw_records[0]["case_identity"],
+        "requested_duration_seconds": 0.0,
+    }
     assert len(raw_records) == 4
     assert len({record["worker_pid"] for record in raw_records}) == 4
     assert len(summary_path.read_text(encoding="utf-8").splitlines()) == 3
@@ -132,4 +141,5 @@ def test_reference_and_host_config_separate_portable_and_calibrated_controls() -
     assert host_specific.warmup_steps == 15
     assert host_specific.measurement_steps == 200
     assert host_specific.cpu_affinity == tuple(range(16))
+    assert host_specific.preconditioning.enabled is True
     assert host_specific.preconditioning.duration_seconds == 120.0

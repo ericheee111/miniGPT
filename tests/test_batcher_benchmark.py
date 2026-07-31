@@ -24,6 +24,7 @@ from minigpt.batcher_benchmark_evidence import (
     write_batcher_comparison,
 )
 from minigpt.benchmark_v2_comparison_policy import load_comparison_policy
+from minigpt.stage8_evidence import generate_stage8_evidence
 
 if TYPE_CHECKING:
     from minigpt.benchmark_v2_config import JsonValue
@@ -189,6 +190,15 @@ regression_threshold_percent: 100.0
     # Then: both inputs are evaluated under the exact same policy identity.
     assert document["policy_sha256"] == policy.sha256
     assert document["verdict"] == "pass"
+    baseline_identity = cast("dict[str, JsonValue]", document["baseline"])
+    candidate_identity = cast("dict[str, JsonValue]", document["candidate"])
+    assert baseline_identity["run_id"] == baseline.run_directory.name
+    assert candidate_identity["run_id"] == candidate.run_directory.name
+    assert re.fullmatch(
+        r"[0-9a-f]{64}",
+        cast("str", baseline_identity["run_manifest_sha256"]),
+    )
+    assert str(tmp_path) not in output_path.read_text(encoding="utf-8")
     case = cast("list[dict[str, JsonValue]]", document["cases"])[0]
     assert case["baseline_stability"] == "stable"
     assert case["candidate_stability"] == "stable"
@@ -283,3 +293,53 @@ def test_committed_stage8_evidence_manifest_verifies_all_artifacts() -> None:
         if path.is_file() and path.name != "artifact_manifest.json"
     }
     assert verified_paths == expected_paths
+
+
+def test_stage8_report_regenerates_from_committed_raw_comparisons(tmp_path: Path) -> None:
+    # Given: an isolated copy of the committed four-run package and shared comparison policy.
+    repository = Path(__file__).parents[1]
+    source = repository / "docs" / "results" / "batcher-optimization"
+    result_directory = tmp_path / "batcher-optimization"
+    _ = shutil.copytree(source, result_directory)
+
+    # When: the complete package is regenerated from its bound raw replicates.
+    generate_stage8_evidence(
+        result_directory,
+        repository / "configs" / "benchmark_v2_comparison.yaml",
+        generated_by_git_sha="a035fea3b16b3fc220a5f1b7132b55a5284ce5aa",
+    )
+    summary = cast(
+        "dict[str, JsonValue]",
+        json.loads((result_directory / "summary.json").read_text(encoding="utf-8")),
+    )
+    report = (result_directory / "README.md").read_text(encoding="utf-8")
+    batch = cast("dict[str, JsonValue]", summary["batch_only"])
+    comparisons = cast("dict[str, dict[str, JsonValue]]", batch["comparisons"])
+
+    # Then: raw-derived runs, portable comparison artifacts, and report values form one chain.
+    assert batch["execution_order"] == [
+        "baseline-a",
+        "candidate-a",
+        "baseline-b",
+        "candidate-b",
+    ]
+    assert batch["all_candidate_medians_lower_than_all_baseline_medians"] is True
+    assert batch["strict_improvement_detected"] is False
+    assert all(document["verdict"] == "not_comparable" for document in comparisons.values())
+    comparison_path = (
+        result_directory
+        / "evidence"
+        / "batch-only"
+        / "comparisons"
+        / "baseline-a-vs-candidate-a.json"
+    )
+    comparison = cast(
+        "dict[str, JsonValue]",
+        json.loads(comparison_path.read_text(encoding="utf-8")),
+    )
+    assert comparison["environment_mismatches"] == []
+    assert str(result_directory) not in comparison_path.read_text(encoding="utf-8")
+    cases = cast("list[dict[str, JsonValue]]", comparison["cases"])
+    b4 = next(case for case in cases if case["case_name"] == "char-gpt-b4-t128")
+    assert f"{cast('float', b4['baseline_median_batch_time_ms']):.6f}" in report
+    assert f"{cast('float', b4['candidate_cv_percent']):.2f}" in report
