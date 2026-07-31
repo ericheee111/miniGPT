@@ -7,6 +7,8 @@ import csv
 import hashlib
 import json
 import math
+import os
+import platform
 import random
 import shutil
 import statistics
@@ -20,6 +22,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast
 
 import numpy as np
 import numpy.typing as npt
+import psutil
 import torch
 import yaml
 from typing_extensions import override
@@ -27,7 +30,9 @@ from typing_extensions import override
 from minigpt.batching import TokenBatcher
 from minigpt.benchmark_v2_environment import (
     PEAK_RSS_SCOPE,
+    WorkerEnvironment,
     apply_cpu_affinity,
+    capture_worker_environment,
     read_process_memory,
 )
 
@@ -37,8 +42,9 @@ if TYPE_CHECKING:
     from minigpt.benchmark_config import ConfigMapping, ConfigValue
     from minigpt.benchmark_v2_config import JsonValue
 
-_SCHEMA_VERSION: Final = 1
-_METHODOLOGY_VERSION: Final = 1
+_SCHEMA_VERSION: Final = 2
+_METHODOLOGY_VERSION: Final = 2
+_GIT_SHA_LENGTH: Final = 40
 _TOP_LEVEL_KEYS: Final = frozenset(
     {
         "schema_version",
@@ -53,6 +59,7 @@ _TOP_LEVEL_KEYS: Final = frozenset(
         "corpus_tokens",
         "seed",
         "cpu_affinity",
+        "relevant_environment_variables",
         "cases",
     }
 )
@@ -67,6 +74,7 @@ _WORKER_REQUEST_KEYS: Final = frozenset(
         "measurement_batches",
         "seed",
         "cpu_affinity",
+        "relevant_environment_variables",
         "replicate_index",
     }
 )
@@ -74,6 +82,7 @@ _WORKER_RESULT_KEYS: Final = frozenset(
     {
         "schema_version",
         "status",
+        "worker_pid",
         "case_name",
         "case_identity",
         "replicate_index",
@@ -87,6 +96,7 @@ _WORKER_RESULT_KEYS: Final = frozenset(
         "python_version",
         "numpy_version",
         "torch_version",
+        "environment",
     }
 )
 
@@ -128,6 +138,7 @@ class BatcherBenchmarkConfig:
     corpus_tokens: int
     seed: int
     cpu_affinity: tuple[int, ...] | None
+    relevant_environment_variables: tuple[str, ...]
     cases: tuple[BatcherBenchmarkCase, ...]
 
 
@@ -270,6 +281,19 @@ def _affinity(document: ConfigMapping, source: Path) -> tuple[int, ...] | None:
     return cast("tuple[int, ...]", tuple(value))
 
 
+def _string_tuple(document: ConfigMapping, key: str, source: Path) -> tuple[str, ...]:
+    """Read a list of unique, non-empty environment variable names."""
+    value = document[key]
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise InvalidBatcherBenchmarkConfigError(
+            source,
+            f"{key} must be a list of non-empty strings",
+        )
+    if len(value) != len(set(value)):
+        raise InvalidBatcherBenchmarkConfigError(source, f"{key} must not contain duplicates")
+    return cast("tuple[str, ...]", tuple(value))
+
+
 def _cases(document: ConfigMapping, source: Path) -> tuple[BatcherBenchmarkCase, ...]:
     """Read non-empty unique cases."""
     value = document["cases"]
@@ -294,51 +318,76 @@ def _cases(document: ConfigMapping, source: Path) -> tuple[BatcherBenchmarkCase,
     return tuple(cases)
 
 
-def load_batcher_benchmark_config(path: Path) -> BatcherBenchmarkConfig:
-    """Load one exact-schema YAML benchmark configuration."""
+def _load_batcher_benchmark_config_bytes(
+    content: bytes,
+    source: Path,
+) -> BatcherBenchmarkConfig:
+    """Load one exact-schema YAML benchmark configuration from owned bytes."""
     try:
         document_value = cast(
             "ConfigValue",
             yaml.load(
-                path.read_text(encoding="utf-8"),
+                content.decode("utf-8"),
                 Loader=_DuplicateKeySafeLoader,  # noqa: S506
             ),
         )
-    except (OSError, UnicodeError, yaml.YAMLError) as error:
-        raise InvalidBatcherBenchmarkConfigError(path, str(error)) from error
-    document = _mapping(document_value, "top-level YAML value", path)
-    _exact_keys(document, _TOP_LEVEL_KEYS, "top-level config", path)
-    if _integer(document, "schema_version", path, positive=True) != _SCHEMA_VERSION:
+    except (UnicodeError, yaml.YAMLError) as error:
+        raise InvalidBatcherBenchmarkConfigError(source, str(error)) from error
+    document = _mapping(document_value, "top-level YAML value", source)
+    _exact_keys(document, _TOP_LEVEL_KEYS, "top-level config", source)
+    if _integer(document, "schema_version", source, positive=True) != _SCHEMA_VERSION:
         raise InvalidBatcherBenchmarkConfigError(
-            path,
+            source,
             f"schema_version must equal {_SCHEMA_VERSION}",
         )
     config = BatcherBenchmarkConfig(
-        experiment_name=_string(document, "experiment_name", path),
-        output_root=Path(_string(document, "output_root", path)),
-        worker_timeout_seconds=_number(document, "worker_timeout_seconds", path),
-        warmup_batches=_integer(document, "warmup_batches", path, non_negative=True),
-        measurement_batches=_integer(document, "measurement_batches", path, positive=True),
-        replicates=_integer(document, "replicates", path, positive=True),
-        minimum_replicates=_integer(document, "minimum_replicates", path, positive=True),
-        max_cv_percent=_number(document, "max_cv_percent", path),
-        corpus_tokens=_integer(document, "corpus_tokens", path, positive=True),
-        seed=_integer(document, "seed", path, non_negative=True),
-        cpu_affinity=_affinity(document, path),
-        cases=_cases(document, path),
+        experiment_name=_string(document, "experiment_name", source),
+        output_root=Path(_string(document, "output_root", source)),
+        worker_timeout_seconds=_number(document, "worker_timeout_seconds", source),
+        warmup_batches=_integer(document, "warmup_batches", source, non_negative=True),
+        measurement_batches=_integer(document, "measurement_batches", source, positive=True),
+        replicates=_integer(document, "replicates", source, positive=True),
+        minimum_replicates=_integer(document, "minimum_replicates", source, positive=True),
+        max_cv_percent=_number(document, "max_cv_percent", source),
+        corpus_tokens=_integer(document, "corpus_tokens", source, positive=True),
+        seed=_integer(document, "seed", source, non_negative=True),
+        cpu_affinity=_affinity(document, source),
+        relevant_environment_variables=_string_tuple(
+            document,
+            "relevant_environment_variables",
+            source,
+        ),
+        cases=_cases(document, source),
     )
     if config.minimum_replicates > config.replicates:
         raise InvalidBatcherBenchmarkConfigError(
-            path,
+            source,
             "minimum_replicates must not exceed replicates",
         )
     largest_block = max(case.block_size for case in config.cases)
     if config.corpus_tokens <= largest_block:
         raise InvalidBatcherBenchmarkConfigError(
-            path,
+            source,
             "corpus_tokens must exceed every case block_size",
         )
     return config
+
+
+def load_batcher_benchmark_config(path: Path) -> BatcherBenchmarkConfig:
+    """Load one exact-schema YAML benchmark configuration."""
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise InvalidBatcherBenchmarkConfigError(path, str(error)) from error
+    return _load_batcher_benchmark_config_bytes(content, path)
+
+
+def load_resolved_batcher_benchmark_config(
+    content: bytes,
+    source: Path,
+) -> BatcherBenchmarkConfig:
+    """Load the exact snapshotted batch-only config from manifest-bound bytes."""
+    return _load_batcher_benchmark_config_bytes(content, source)
 
 
 def batcher_case_identity(
@@ -364,12 +413,12 @@ def batcher_case_identity(
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _config_document(config: BatcherBenchmarkConfig) -> dict[str, JsonValue]:
+def batcher_config_document(config: BatcherBenchmarkConfig) -> dict[str, JsonValue]:
     """Serialize resolved config deterministically."""
     return {
         "schema_version": _SCHEMA_VERSION,
         "experiment_name": config.experiment_name,
-        "output_root": str(config.output_root),
+        "output_root": config.output_root.as_posix(),
         "worker_timeout_seconds": config.worker_timeout_seconds,
         "warmup_batches": config.warmup_batches,
         "measurement_batches": config.measurement_batches,
@@ -379,14 +428,15 @@ def _config_document(config: BatcherBenchmarkConfig) -> dict[str, JsonValue]:
         "corpus_tokens": config.corpus_tokens,
         "seed": config.seed,
         "cpu_affinity": list(config.cpu_affinity) if config.cpu_affinity is not None else None,
+        "relevant_environment_variables": list(config.relevant_environment_variables),
         "cases": [cast("dict[str, JsonValue]", asdict(case)) for case in config.cases],
     }
 
 
-def _config_sha256(config: BatcherBenchmarkConfig) -> str:
+def batcher_config_sha256(config: BatcherBenchmarkConfig) -> str:
     """Hash a canonical resolved config."""
     canonical = json.dumps(
-        _config_document(config),
+        batcher_config_document(config),
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
@@ -408,6 +458,7 @@ def _worker_request(
         "measurement_batches": config.measurement_batches,
         "seed": config.seed,
         "cpu_affinity": list(config.cpu_affinity) if config.cpu_affinity is not None else None,
+        "relevant_environment_variables": list(config.relevant_environment_variables),
         "replicate_index": task.replicate_index,
     }
 
@@ -433,6 +484,28 @@ def _request_affinity(value: object) -> tuple[int, ...] | None:
         msg = "invalid worker request field cpu_affinity"
         raise ValueError(msg)
     return tuple(cast("list[int]", items))
+
+
+def _request_environment_variable_names(value: object) -> tuple[str, ...]:
+    """Read exact relevant environment-variable names from a worker request."""
+    if not isinstance(value, list):
+        msg = "invalid worker request field relevant_environment_variables"
+        raise TypeError(msg)
+    items = cast("list[object]", value)
+    if any(not isinstance(item, str) or not item for item in items):
+        msg = "invalid worker request field relevant_environment_variables"
+        raise ValueError(msg)
+    names = cast("tuple[str, ...]", tuple(items))
+    if len(names) != len(set(names)):
+        msg = "invalid worker request field relevant_environment_variables"
+        raise ValueError(msg)
+    return names
+
+
+def _worker_environment_document(environment: WorkerEnvironment) -> dict[str, JsonValue]:
+    """Serialize the shared worker-environment dataclass without losing nulls."""
+    document = asdict(environment)
+    return cast("dict[str, JsonValue]", document)
 
 
 def _execute_worker(request: Mapping[str, object]) -> dict[str, JsonValue]:
@@ -466,6 +539,9 @@ def _execute_worker(request: Mapping[str, object]) -> dict[str, JsonValue]:
     seed = _request_integer(request, "seed")
     replicate_index = _request_integer(request, "replicate_index")
     requested_affinity = _request_affinity(request["cpu_affinity"])
+    relevant_environment_variables = _request_environment_variable_names(
+        request["relevant_environment_variables"]
+    )
     effective_affinity = apply_cpu_affinity(requested_affinity)
     tokens = cast(
         "npt.NDArray[np.uint16]",
@@ -490,9 +566,15 @@ def _execute_worker(request: Mapping[str, object]) -> dict[str, JsonValue]:
         raise RuntimeError(msg)
     batch_time_ms = elapsed_ns / measurement_batches / 1_000_000
     memory = read_process_memory()
+    environment = capture_worker_environment(
+        requested_cpu_affinity=requested_affinity,
+        effective_cpu_affinity=effective_affinity,
+        relevant_environment_variables=relevant_environment_variables,
+    )
     return {
         "schema_version": _SCHEMA_VERSION,
         "status": "ok",
+        "worker_pid": os.getpid(),
         "case_name": case.name,
         "case_identity": case_identity,
         "replicate_index": replicate_index,
@@ -508,6 +590,7 @@ def _execute_worker(request: Mapping[str, object]) -> dict[str, JsonValue]:
         "python_version": sys.version,
         "numpy_version": np.__version__,
         "torch_version": torch.__version__,
+        "environment": _worker_environment_document(environment),
     }
 
 
@@ -562,6 +645,13 @@ def _validate_response(
     if document["replicate_index"] != task.replicate_index:
         msg = "worker response replicate index mismatch"
         raise ValueError(msg)
+    worker_pid = document["worker_pid"]
+    if isinstance(worker_pid, bool) or not isinstance(worker_pid, int) or worker_pid <= 0:
+        msg = "worker response field worker_pid must be a positive integer"
+        raise ValueError(msg)
+    if not isinstance(document["environment"], dict):
+        msg = "worker response field environment must be an object"
+        raise TypeError(msg)
     for field in (
         "batch_time_ms",
         "tokens_per_second",
@@ -599,6 +689,7 @@ def _raw_record(task: _Task, response: dict[str, JsonValue]) -> dict[str, JsonVa
         "case_name": task.case.name,
         "case_identity": task.case_identity,
         "replicate_index": task.replicate_index,
+        "worker_pid": response["worker_pid"],
         "worker_response": response,
     }
 
@@ -614,6 +705,7 @@ def _failure_record(
         "case_name": task.case.name,
         "case_identity": task.case_identity,
         "replicate_index": task.replicate_index,
+        "worker_pid": None,
         "return_code": completed.returncode,
         "stderr": completed.stderr,
         "stdout": completed.stdout,
@@ -762,7 +854,7 @@ def _run_id(config: BatcherBenchmarkConfig) -> str:
     """Build a sortable, commit-bound local run identifier."""
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     commit = _git_value(["rev-parse", "--short=12", "HEAD"])
-    return f"{timestamp}-{commit}-{_config_sha256(config)[:12]}"
+    return f"{timestamp}-{commit}-{batcher_config_sha256(config)[:12]}"
 
 
 def _write_json(path: Path, document: Mapping[str, JsonValue]) -> None:
@@ -773,14 +865,86 @@ def _write_json(path: Path, document: Mapping[str, JsonValue]) -> None:
     )
 
 
-def run_batcher_benchmark(config: BatcherBenchmarkConfig) -> BatcherBenchmarkArtifacts:
+def _write_yaml(path: Path, document: Mapping[str, JsonValue]) -> None:
+    """Write a stable, portable resolved YAML config."""
+    _ = path.write_text(
+        yaml.safe_dump(dict(document), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _artifact_entry(run_directory: Path, path: Path) -> dict[str, JsonValue]:
+    """Bind one finalized run artifact by path, byte size, and SHA-256."""
+    content = path.read_bytes()
+    return {
+        "path": path.relative_to(run_directory).as_posix(),
+        "size_bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _parent_environment(config: BatcherBenchmarkConfig) -> dict[str, JsonValue]:
+    """Capture performance-relevant parent controls before the first worker."""
+    cpu_name = platform.processor().strip() or os.environ.get("PROCESSOR_IDENTIFIER")
+    return {
+        "captured_before_first_worker": True,
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "cpu_name": cpu_name,
+        "physical_cpu_count": psutil.cpu_count(logical=False),
+        "logical_cpu_count": psutil.cpu_count(logical=True),
+        "python_version": platform.python_version(),
+        "numpy_version": np.__version__,
+        "torch_version": torch.__version__,
+        "configured_cpu_affinity": (
+            list(config.cpu_affinity) if config.cpu_affinity is not None else None
+        ),
+        "relevant_environment_variables": {
+            name: os.environ.get(name) for name in config.relevant_environment_variables
+        },
+    }
+
+
+def _execution_order_document(
+    tasks: list[_Task],
+    records: list[dict[str, JsonValue]],
+) -> list[JsonValue]:
+    """Bind deterministic task order to eventual worker PID and status."""
+    by_task = {
+        (cast("str", record["case_identity"]), cast("int", record["replicate_index"])): record
+        for record in records
+    }
+    return [
+        {
+            "execution_index": index,
+            "task_id": f"{task.case_identity}:{task.replicate_index}",
+            "case_name": task.case.name,
+            "case_identity": task.case_identity,
+            "replicate_index": task.replicate_index,
+            "worker_pid": by_task[(task.case_identity, task.replicate_index)]["worker_pid"],
+            "status": by_task[(task.case_identity, task.replicate_index)]["status"],
+        }
+        for index, task in enumerate(tasks)
+    ]
+
+
+def run_batcher_benchmark(
+    config: BatcherBenchmarkConfig,
+    *,
+    implementation_git_commit_sha: str | None = None,
+) -> BatcherBenchmarkArtifacts:
     """Run randomized fresh-process replicates and write their complete evidence."""
+    started_at_utc = datetime.now(UTC).isoformat()
+    environment_snapshot = _parent_environment(config)
     run_directory = config.output_root / _run_id(config)
     run_directory.mkdir(parents=True, exist_ok=False)
     corpus_path = run_directory / "corpus.npy"
     raw_path = run_directory / "raw_replicates.jsonl"
     summary_csv_path = run_directory / "summary.csv"
     summary_markdown_path = run_directory / "summary.md"
+    resolved_config_path = run_directory / "resolved_config.yaml"
+    environment_path = run_directory / "environment.json"
+    execution_order_path = run_directory / "execution_order.json"
     manifest_path = run_directory / "run_manifest.json"
     _save_corpus(corpus_path, config.corpus_tokens)
     tasks = [
@@ -828,22 +992,78 @@ def run_batcher_benchmark(config: BatcherBenchmarkConfig) -> BatcherBenchmarkArt
         summary["stability"] == "stable" for summary in summaries
     )
     status: Literal["complete", "partial"] = "complete" if complete else "partial"
+    corpus_path.unlink()
+    _write_yaml(resolved_config_path, batcher_config_document(config))
+    worker_environments = [
+        cast(
+            "dict[str, JsonValue]",
+            cast("dict[str, JsonValue]", record["worker_response"])["environment"],
+        )
+        for record in records
+        if record["status"] == "ok"
+    ]
+    _write_json(
+        environment_path,
+        {
+            "schema_version": 1,
+            "run_id": run_directory.name,
+            "run_status": status,
+            "config_sha256": batcher_config_sha256(config),
+            "run_environment": environment_snapshot,
+            "worker_environments": cast("list[JsonValue]", worker_environments),
+        },
+    )
+    _ = execution_order_path.write_text(
+        json.dumps(_execution_order_document(tasks, records), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    artifact_paths = (
+        environment_path,
+        execution_order_path,
+        raw_path,
+        resolved_config_path,
+        summary_csv_path,
+        summary_markdown_path,
+    )
+    evidence_generator_git_commit_sha = _git_value(["rev-parse", "HEAD"])
+    implementation_sha = implementation_git_commit_sha or evidence_generator_git_commit_sha
+    if len(implementation_sha) != _GIT_SHA_LENGTH or any(
+        character not in "0123456789abcdef" for character in implementation_sha
+    ):
+        msg = "implementation_git_commit_sha must be 40 lowercase hexadecimal characters"
+        raise ValueError(msg)
     manifest: dict[str, JsonValue] = {
         "schema_version": _SCHEMA_VERSION,
         "methodology_version": _METHODOLOGY_VERSION,
+        "run_id": run_directory.name,
         "status": status,
+        "started_at_utc": started_at_utc,
+        "ended_at_utc": datetime.now(UTC).isoformat(),
         "experiment_name": config.experiment_name,
-        "git_commit_sha": _git_value(["rev-parse", "HEAD"]),
+        "git_commit_sha": implementation_sha,
+        "evidence_generator_git_commit_sha": evidence_generator_git_commit_sha,
         "git_dirty": bool(_git_value(["status", "--porcelain"])),
-        "config_sha256": _config_sha256(config),
-        "resolved_config": _config_document(config),
+        "config_sha256": batcher_config_sha256(config),
+        "expected_task_count": len(tasks),
         "raw_replicate_count": len(records),
+        "successful_task_count": sum(record["status"] == "ok" for record in records),
+        "failed_task_count": sum(record["status"] == "error" for record in records),
+        "case_identities": [
+            {
+                "case_name": case.name,
+                "case_identity": batcher_case_identity(
+                    case,
+                    corpus_tokens=config.corpus_tokens,
+                    seed=config.seed,
+                ),
+            }
+            for case in config.cases
+        ],
         "summaries": cast("list[JsonValue]", summaries),
-        "artifacts": {
-            "raw_replicates": raw_path.name,
-            "summary_csv": summary_csv_path.name,
-            "summary_markdown": summary_markdown_path.name,
-        },
+        "artifacts": cast(
+            "list[JsonValue]",
+            [_artifact_entry(run_directory, path) for path in artifact_paths],
+        ),
     }
     _write_json(manifest_path, manifest)
     return BatcherBenchmarkArtifacts(
@@ -861,6 +1081,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     _ = parser.add_argument("--config", type=Path)
+    _ = parser.add_argument("--implementation-git-commit-sha")
     return parser
 
 
@@ -875,7 +1096,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         config = load_batcher_benchmark_config(config_path)
-        artifacts = run_batcher_benchmark(config)
+        artifacts = run_batcher_benchmark(
+            config,
+            implementation_git_commit_sha=cast(
+                "str | None",
+                arguments.implementation_git_commit_sha,
+            ),
+        )
     except (InvalidBatcherBenchmarkConfigError, OSError, subprocess.SubprocessError) as error:
         _ = sys.stderr.write(f"batcher benchmark failed: {error}\n")
         return 1

@@ -86,7 +86,11 @@ class TokenBatcher:
         self._token_windows = _SLIDING_WINDOW_VIEW(token_array, block_size + 1)
 
     def next_batch(self) -> tuple[Tensor, Tensor]:
-        """Return input tokens and their one-position-right training targets."""
+        """Return overlapping read-only-contract ``x``/``y`` views.
+
+        The two tensors share one batch owner and overlap by one token position.
+        Callers must not modify either view in place.
+        """
         start_limit = self._tokens.size - self._block_size
         starts: npt.NDArray[np.int64] = self._rng.integers(
             0,

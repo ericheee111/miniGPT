@@ -1,15 +1,31 @@
-# Recommended local CPU methodology. This file contains no measured machine result.
+# Host-specific Stage 8 methodology for the documented i7-14700 Windows machine.
 schema_version: 3
-experiment_name: benchmark_v2_reference
+experiment_name: benchmark_v2_i7_14700_stage8
 benchmark_seed: 1337
 vocab_size: 65
 output_root: reports/benchmark-v2
 worker_timeout_seconds: 300
-warmup_steps: 10
-measurement_steps: 20
+warmup_steps: 15
+measurement_steps: 200
 replicates: 7
 torch_num_interop_threads: 1
-cpu_affinity: null
+cpu_affinity:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
 max_cv_percent: 5.0
 minimum_replicates: 5
 regression_threshold_percent: 7.5
@@ -17,16 +33,15 @@ relevant_environment_variables:
   - OMP_NUM_THREADS
   - MKL_NUM_THREADS
 preconditioning:
-  enabled: false
+  enabled: true
   case_name: teaching_t12_s128_b16
-  duration_seconds: 0.0
+  duration_seconds: 120.0
 models:
   teaching:
     n_layer: 4
     n_head: 4
     n_embd: 128
 cases:
-  # Shared baseline, intentionally declared once rather than expanded as a matrix.
   - name: teaching_t12_s128_b16
     model_name: teaching
     torch_num_threads: 12
@@ -80,5 +95,5 @@ cases:
 profile:
   enabled: false
   case_name: teaching_t12_s128_b16
-  warmup_steps: 10
+  warmup_steps: 15
   active_steps: 20

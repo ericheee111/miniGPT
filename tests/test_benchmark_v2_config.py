@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 def write_v2_config(tmp_path: Path, replacement: str = "") -> Path:
     """Write a valid v2 config, optionally replacing one literal fragment."""
     document = """\
-schema_version: 2
+schema_version: 3
 experiment_name: cpu_benchmark_v2
 benchmark_seed: 1337
 vocab_size: 65
@@ -40,6 +40,10 @@ max_cv_percent: 5.0
 minimum_replicates: 2
 regression_threshold_percent: 3.0
 relevant_environment_variables: [OMP_NUM_THREADS, MKL_NUM_THREADS]
+preconditioning:
+  enabled: true
+  case_name: tiny_t1_s32_b2
+  duration_seconds: 1.0
 models:
   tiny:
     n_layer: 2
@@ -129,8 +133,11 @@ def test_v2_config_rejects_duplicate_yaml_keys_before_schema_validation(tmp_path
             "relevant_environment_variables: [OMP_NUM_THREADS, MKL_NUM_THREADS]",
             "relevant_environment_variables: [OPENBLAS_NUM_THREADS]",
         ),
-        ("  enabled: true", "  enabled: false"),
-        ("  case_name: tiny_t1_s32_b2", "  case_name: tiny_t2_s32_b2"),
+        ("profile:\n  enabled: true", "profile:\n  enabled: false"),
+        (
+            "profile:\n  enabled: true\n  case_name: tiny_t1_s32_b2",
+            "profile:\n  enabled: true\n  case_name: tiny_t2_s32_b2",
+        ),
         ("  warmup_steps: 2\n  active_steps: 3", "  warmup_steps: 4\n  active_steps: 3"),
         ("  active_steps: 3", "  active_steps: 4"),
     ],
@@ -163,6 +170,11 @@ def test_case_identity_excludes_execution_and_reporting_settings(
             "warmup_steps: 3\nmeasurement_steps: 5",
         ),
         ("measurement_steps: 5", "measurement_steps: 6"),
+        ("duration_seconds: 1.0", "duration_seconds: 2.0"),
+        (
+            "preconditioning:\n  enabled: true\n  case_name: tiny_t1_s32_b2",
+            "preconditioning:\n  enabled: true\n  case_name: tiny_t2_s32_b2",
+        ),
         ("torch_num_interop_threads: 1", "torch_num_interop_threads: 2"),
         ("cpu_affinity: [0, 1]", "cpu_affinity: [1, 2]"),
         ("benchmark_seed: 1337", "benchmark_seed: 1338"),
@@ -185,6 +197,28 @@ def test_case_identity_changes_for_workload_and_methodology_settings(
 
     # Then: the case identity changes.
     assert case_identity(first, first.cases[0]) != case_identity(second, second.cases[0])
+
+
+def test_preconditioning_is_resolved_and_bound_to_methodology_identity(tmp_path: Path) -> None:
+    """Record the pre-measurement workload instead of relying on an external manual step."""
+    # Given: a schema-v3 config with an explicit one-second preconditioning method.
+    path = write_v2_config(tmp_path)
+
+    # When: the strict config and identities are resolved.
+    config = load_benchmark_v2_config(path)
+    document = resolved_config_document(config)
+
+    # Then: the method is preserved in the resolved config and case identity.
+    assert document["preconditioning"] == {
+        "enabled": True,
+        "case_name": "tiny_t1_s32_b2",
+        "duration_seconds": 1.0,
+    }
+    updated = replace(
+        config,
+        preconditioning=replace(config.preconditioning, duration_seconds=2.0),
+    )
+    assert case_identity(config, config.cases[0]) != case_identity(updated, updated.cases[0])
 
 
 def changed_case(case: BenchmarkV2Case, field: str) -> BenchmarkV2Case:
@@ -283,7 +317,7 @@ def test_case_identity_binds_each_explicit_workload_methodology_value(
 @pytest.mark.parametrize(
     ("replacement", "reason"),
     [
-        ("schema_version: 2 => schema_version: 1", "schema_version"),
+        ("schema_version: 3 => schema_version: 1", "schema_version"),
         ("benchmark_seed: 1337 => benchmark_seed: 1337\nunexpected: true", "unexpected key"),
         ("name: tiny_t2_s32_b2 => name: tiny_t1_s32_b2", "duplicate case name"),
         ("model_name: tiny => model_name: unknown", "unknown model"),

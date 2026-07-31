@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Never, Protocol, cast
 
@@ -123,6 +123,84 @@ def _subprocess_launcher(
         timeout=timeout,
         check=False,
     )
+
+
+def run_preconditioning(config: BenchmarkV2Config) -> dict[str, JsonValue]:
+    """Run and validate the explicit unmeasured preconditioning subprocess."""
+    settings = config.preconditioning
+    selected_name = settings.case_name or config.cases[0].name
+    selected_case = next(case for case in config.cases if case.name == selected_name)
+    selected_identity = case_identity(config, selected_case)
+    if not settings.enabled:
+        return {
+            "schema_version": 1,
+            "status": "skipped",
+            "enabled": False,
+            "case_name": selected_case.name,
+            "case_identity": selected_identity,
+            "requested_duration_seconds": 0.0,
+        }
+    request = {
+        "schema_version": 1,
+        "case": asdict(selected_case),
+        "case_identity": selected_identity,
+        "benchmark_seed": config.benchmark_seed,
+        "vocab_size": config.vocab_size,
+        "duration_seconds": settings.duration_seconds,
+        "torch_num_interop_threads": config.torch_num_interop_threads,
+        "cpu_affinity": list(config.cpu_affinity) if config.cpu_affinity is not None else None,
+        "relevant_environment_variables": list(config.relevant_environment_variables),
+    }
+    command = [sys.executable, "-m", "minigpt.benchmark_v2_precondition"]
+    completed = subprocess.run(  # noqa: S603 - fixed current interpreter/module.
+        command,
+        input=json.dumps(request, allow_nan=False),
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=max(config.worker_timeout_seconds, settings.duration_seconds * 2),
+    )
+    if completed.returncode != 0:
+        return {
+            "schema_version": 1,
+            "status": "failed",
+            "enabled": True,
+            "case_name": selected_case.name,
+            "case_identity": selected_identity,
+            "requested_duration_seconds": settings.duration_seconds,
+            "return_code": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+        }
+    try:
+        value = cast("object", json.loads(completed.stdout))
+    except json.JSONDecodeError as error:
+        return {
+            "schema_version": 1,
+            "status": "failed",
+            "enabled": True,
+            "case_name": selected_case.name,
+            "case_identity": selected_identity,
+            "requested_duration_seconds": settings.duration_seconds,
+            "return_code": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": f"invalid JSON response: {error}",
+        }
+    if not isinstance(value, dict):
+        msg = "preconditioning response must be an object"
+        raise TypeError(msg)
+    document = cast("dict[str, JsonValue]", value)
+    if (
+        document.get("schema_version") != 1
+        or document.get("status") != "complete"
+        or document.get("enabled") is not True
+        or document.get("case_name") != selected_case.name
+        or document.get("case_identity") != selected_identity
+        or document.get("requested_duration_seconds") != settings.duration_seconds
+    ):
+        msg = "preconditioning response disagrees with resolved config"
+        raise ValueError(msg)
+    return document
 
 
 @dataclass(frozen=True, slots=True)
@@ -858,15 +936,33 @@ def run_benchmark_v2(
     )
     records: list[RawReplicate] = []
     raw_stream = raw_replicates_path.open("x", encoding="utf-8", newline="\n")
+    preconditioning: dict[str, JsonValue] = {
+        "schema_version": 1,
+        "status": "failed",
+        "enabled": config.preconditioning.enabled,
+        "case_name": config.preconditioning.case_name or config.cases[0].name,
+        "case_identity": case_identity(
+            config,
+            next(
+                case
+                for case in config.cases
+                if case.name == (config.preconditioning.case_name or config.cases[0].name)
+            ),
+        ),
+        "requested_duration_seconds": config.preconditioning.duration_seconds,
+        "reason": "preconditioning did not complete",
+    }
     try:
-        for task in tasks:
-            record = execute_worker(
-                task,
-                timeout_seconds=config.worker_timeout_seconds,
-                launcher=launcher,
-            )
-            _append_durable_raw_record(raw_stream, record)
-            records.append(record)
+        preconditioning = run_preconditioning(config)
+        if preconditioning["status"] in {"skipped", "complete"}:
+            for task in tasks:
+                record = execute_worker(
+                    task,
+                    timeout_seconds=config.worker_timeout_seconds,
+                    launcher=launcher,
+                )
+                _append_durable_raw_record(raw_stream, record)
+                records.append(record)
     except (KeyboardInterrupt, Exception):
         status = _final_status(tasks, records)
         final_state = _run_state_document(
@@ -893,6 +989,7 @@ def run_benchmark_v2(
                 started_at_utc=started_at.isoformat(),
                 ended_at_utc=datetime.now(UTC).isoformat(),
                 environment_snapshot=environment_snapshot,
+                preconditioning=preconditioning,
             )
         except BaseException:  # noqa: BLE001 - preserve the original orchestration exception.
             report_finalized = False
@@ -928,6 +1025,7 @@ def run_benchmark_v2(
         started_at_utc=started_at.isoformat(),
         ended_at_utc=datetime.now(UTC).isoformat(),
         environment_snapshot=environment_snapshot,
+        preconditioning=preconditioning,
     )
     run_state_path.unlink()
     return BenchmarkV2Artifacts(

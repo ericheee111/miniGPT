@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from minigpt.benchmark_v2_types import BenchmarkV2Config
 
 RunStatus = Literal["complete", "partial", "failed"]
-_MANIFEST_KEYS = frozenset(
+_MANIFEST_KEYS_V3 = frozenset(
     {
         "schema_version",
         "run_id",
@@ -56,11 +56,13 @@ _MANIFEST_KEYS = frozenset(
         "artifacts",
     }
 )
+_MANIFEST_KEYS = _MANIFEST_KEYS_V3 | frozenset({"preconditioning"})
 _ARTIFACT_ENTRY_KEYS = frozenset({"path", "size_bytes", "sha256"})
 _SHA256_HEX_LENGTH = 64
 _SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
 _ENVIRONMENT_SCHEMA_VERSION = 2
-_MANIFEST_SCHEMA_VERSION = 3
+_MANIFEST_SCHEMA_VERSION = 4
+_LEGACY_MANIFEST_SCHEMA_VERSION = 3
 _GIT_COMMIT_SHA_LENGTHS = frozenset({40, 64})
 _GIT_IDENTITY_KEYS = frozenset({"commit_sha", "branch", "dirty"})
 _ENVIRONMENT_DOCUMENT_KEYS = frozenset(
@@ -195,6 +197,7 @@ class RunManifest:
     failed_task_count: int
     case_identities: tuple[dict[str, str], ...]
     artifacts: tuple[ArtifactManifestEntry, ...]
+    preconditioning: dict[str, JsonValue] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -597,6 +600,7 @@ def _manifest_document(manifest: RunManifest) -> dict[str, JsonValue]:
             "failed_task_count": manifest.failed_task_count,
             "case_identities": list(manifest.case_identities),
             "artifacts": [asdict(entry) for entry in manifest.artifacts],
+            "preconditioning": manifest.preconditioning,
         },
     )
 
@@ -633,6 +637,7 @@ def write_run_artifacts(  # noqa: PLR0913
     started_at_utc: str,
     ended_at_utc: str,
     environment_snapshot: dict[str, JsonValue] | None = None,
+    preconditioning: dict[str, JsonValue] | None = None,
 ) -> RunArtifactPaths:
     """Atomically finalize a unique run directory from all preserved raw evidence."""
     if not run_directory.is_dir():
@@ -663,6 +668,22 @@ def write_run_artifacts(  # noqa: PLR0913
         ended_at_utc=ended_at_utc,
         summaries=summaries,
         environment_snapshot=environment_snapshot or capture_run_environment(config),
+        preconditioning=preconditioning
+        or {
+            "schema_version": 1,
+            "status": "skipped",
+            "enabled": False,
+            "case_name": config.preconditioning.case_name or config.cases[0].name,
+            "case_identity": case_identity(
+                config,
+                next(
+                    case
+                    for case in config.cases
+                    if case.name == (config.preconditioning.case_name or config.cases[0].name)
+                ),
+            ),
+            "requested_duration_seconds": 0.0,
+        },
     )
 
 
@@ -678,6 +699,7 @@ def _write_final_artifacts(  # noqa: PLR0913
     ended_at_utc: str,
     summaries: tuple[BenchmarkV2Summary, ...],
     environment_snapshot: dict[str, JsonValue],
+    preconditioning: dict[str, JsonValue] | None,
 ) -> RunArtifactPaths:
     """Write bound non-manifest artifacts first, then write the self-excluded manifest."""
     environment_path = run_directory / "environment.json"
@@ -741,6 +763,7 @@ def _write_final_artifacts(  # noqa: PLR0913
         failed_task_count=sum(record.status == "error" for record in raw_replicates),
         case_identities=_case_identity_documents(tasks),
         artifacts=entries,
+        preconditioning=preconditioning,
     )
     _atomic_write_bytes(run_manifest_path, _json_bytes(_manifest_document(manifest)))
     return RunArtifactPaths(
@@ -868,7 +891,11 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
         "object", json.loads(snapshots["run_manifest.json"].content.decode("utf-8"))
     )
     document = _require_mapping(raw_document, "run manifest")
-    if frozenset(document) != _MANIFEST_KEYS:
+    schema_version = document.get("schema_version")
+    expected_manifest_keys = (
+        _MANIFEST_KEYS if schema_version == _MANIFEST_SCHEMA_VERSION else _MANIFEST_KEYS_V3
+    )
+    if frozenset(document) != expected_manifest_keys:
         msg = "run manifest has an invalid field set"
         raise ValueError(msg)
     status = document["status"]
@@ -950,8 +977,14 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
     ):
         msg = "run manifest has an invalid integer field"
         raise ValueError(msg)
-    if document["schema_version"] != _MANIFEST_SCHEMA_VERSION:
-        msg = f"run manifest schema_version must be {_MANIFEST_SCHEMA_VERSION}"
+    if document["schema_version"] not in {
+        _LEGACY_MANIFEST_SCHEMA_VERSION,
+        _MANIFEST_SCHEMA_VERSION,
+    }:
+        msg = (
+            "run manifest schema_version must be "
+            f"{_LEGACY_MANIFEST_SCHEMA_VERSION} or {_MANIFEST_SCHEMA_VERSION}"
+        )
         raise ValueError(msg)
     if document["peak_rss_scope"] != PEAK_RSS_SCOPE:
         msg = "run manifest peak_rss_scope must be worker_lifetime"
@@ -989,6 +1022,19 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
         msg = "run manifest run_id does not match its run directory"
         raise ValueError(msg)
     git = _require_git_identity(document["git"], "run manifest git")
+    preconditioning: dict[str, JsonValue] | None = None
+    if document["schema_version"] == _MANIFEST_SCHEMA_VERSION:
+        raw_preconditioning = document["preconditioning"]
+        preconditioning_document = _require_mapping(
+            raw_preconditioning,
+            "run manifest preconditioning",
+        )
+        if preconditioning_document.get("schema_version") != 1 or preconditioning_document.get(
+            "status"
+        ) not in {"skipped", "complete", "failed"}:
+            msg = "run manifest preconditioning evidence is invalid"
+            raise ValueError(msg)
+        preconditioning = cast("dict[str, JsonValue]", preconditioning_document)
     raw_environment = cast(
         "object",
         json.loads(snapshots["environment.json"].content.decode("utf-8")),
@@ -1049,4 +1095,5 @@ def load_run_manifest(path: Path) -> RunManifest:  # noqa: C901, PLR0912, PLR091
         failed_task_count=cast("int", document["failed_task_count"]),
         case_identities=tuple(case_identities),
         artifacts=tuple(artifacts),
+        preconditioning=preconditioning,
     )

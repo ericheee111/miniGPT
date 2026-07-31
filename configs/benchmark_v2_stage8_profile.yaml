@@ -1,5 +1,5 @@
 # Local Stage 8 comparison methodology after same-code calibration.
-schema_version: 2
+schema_version: 3
 experiment_name: benchmark_v2_reference_stage8_stable
 benchmark_seed: 1337
 vocab_size: 65
@@ -32,6 +32,10 @@ regression_threshold_percent: 7.5
 relevant_environment_variables:
   - OMP_NUM_THREADS
   - MKL_NUM_THREADS
+preconditioning:
+  enabled: false
+  case_name: teaching_t12_s128_b16
+  duration_seconds: 0.0
 models:
   teaching:
     n_layer: 4

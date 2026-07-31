@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 import yaml
 from typing_extensions import override
 
-from minigpt.benchmark_v2_types import BenchmarkV2Case, BenchmarkV2Config, ProfileV2Settings
+from minigpt.benchmark_v2_types import (
+    BenchmarkV2Case,
+    BenchmarkV2Config,
+    PreconditioningV2Settings,
+    ProfileV2Settings,
+)
 from minigpt.benchmark_workload_methodology import workload_methodology_document
 from minigpt.settings import GPTConfig, InvalidModelConfigError
 
@@ -23,8 +28,9 @@ if TYPE_CHECKING:
 
 JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
 
-_SCHEMA_VERSION = 2
-_TOP_LEVEL_KEYS = frozenset(
+_SCHEMA_VERSION = 3
+_LEGACY_SCHEMA_VERSION = 2
+_TOP_LEVEL_KEYS_V2 = frozenset(
     {
         "schema_version",
         "experiment_name",
@@ -46,11 +52,14 @@ _TOP_LEVEL_KEYS = frozenset(
         "profile",
     }
 )
+_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS_V2 | frozenset({"preconditioning"})
 _MODEL_KEYS = frozenset({"n_layer", "n_head", "n_embd"})
 _CASE_KEYS = frozenset({"name", "model_name", "torch_num_threads", "block_size", "batch_size"})
+_RESOLVED_TOP_LEVEL_KEYS_V2 = _TOP_LEVEL_KEYS_V2 - frozenset({"models"})
 _RESOLVED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - frozenset({"models"})
 _RESOLVED_CASE_KEYS = _CASE_KEYS | _MODEL_KEYS
 _PROFILE_KEYS = frozenset({"enabled", "case_name", "warmup_steps", "active_steps"})
+_PRECONDITIONING_KEYS = frozenset({"enabled", "case_name", "duration_seconds"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +300,52 @@ def _parse_profile(
     )
 
 
+def _parse_preconditioning(
+    document: ConfigMapping,
+    cases: tuple[BenchmarkV2Case, ...],
+    source: Path,
+    *,
+    schema_version: int,
+) -> PreconditioningV2Settings:
+    """Parse an explicit pre-measurement phase or preserve schema-v2 legacy absence."""
+    if schema_version == _LEGACY_SCHEMA_VERSION:
+        return PreconditioningV2Settings(
+            enabled=False,
+            case_name=cases[0].name,
+            duration_seconds=0.0,
+        )
+    preconditioning = _mapping(document["preconditioning"], "preconditioning", source)
+    _require_exact_keys(
+        preconditioning,
+        _PRECONDITIONING_KEYS,
+        "preconditioning",
+        source,
+    )
+    enabled = _boolean(preconditioning, "enabled", source)
+    case_name = _string(preconditioning, "case_name", source)
+    if case_name not in {case.name for case in cases}:
+        raise InvalidBenchmarkV2ConfigError(
+            source,
+            "preconditioning.case_name is an unknown case",
+        )
+    duration_seconds = _number(preconditioning, "duration_seconds", source)
+    if enabled and duration_seconds <= 0.0:
+        raise InvalidBenchmarkV2ConfigError(
+            source,
+            "enabled preconditioning.duration_seconds must be positive",
+        )
+    if not enabled and duration_seconds != 0.0:
+        raise InvalidBenchmarkV2ConfigError(
+            source,
+            "disabled preconditioning.duration_seconds must be zero",
+        )
+    return PreconditioningV2Settings(
+        enabled=enabled,
+        case_name=case_name,
+        duration_seconds=duration_seconds,
+    )
+
+
 def _parse_resolved_cases(
     document: ConfigMapping, vocab_size: int, source: Path
 ) -> tuple[BenchmarkV2Case, ...]:
@@ -344,8 +399,11 @@ def _build_config(
 ) -> BenchmarkV2Config:
     """Validate shared top-level fields and construct one complete immutable config."""
     schema_version = _integer(document, "schema_version", source)
-    if schema_version != _SCHEMA_VERSION:
-        raise InvalidBenchmarkV2ConfigError(source, f"schema_version must be {_SCHEMA_VERSION}")
+    if schema_version not in {_LEGACY_SCHEMA_VERSION, _SCHEMA_VERSION}:
+        raise InvalidBenchmarkV2ConfigError(
+            source,
+            f"schema_version must be {_LEGACY_SCHEMA_VERSION} or {_SCHEMA_VERSION}",
+        )
     replicates = _integer(document, "replicates", source, positive=True)
     minimum_replicates = _integer(document, "minimum_replicates", source, positive=True)
     if minimum_replicates > replicates:
@@ -374,6 +432,12 @@ def _build_config(
         relevant_environment_variables=_string_tuple(
             document, "relevant_environment_variables", source
         ),
+        preconditioning=_parse_preconditioning(
+            document,
+            cases,
+            source,
+            schema_version=schema_version,
+        ),
         cases=cases,
         profile=_parse_profile(document, cases, source),
     )
@@ -386,7 +450,14 @@ def load_benchmark_v2_config(path: Path) -> BenchmarkV2Config:
     except OSError as error:
         raise InvalidBenchmarkV2ConfigError(path, str(error)) from error
     document = _load_yaml_document(content, path)
-    _require_exact_keys(document, _TOP_LEVEL_KEYS, "top-level YAML value", path)
+    raw_schema_version = document.get("schema_version")
+    if raw_schema_version not in {_LEGACY_SCHEMA_VERSION, _SCHEMA_VERSION}:
+        raise InvalidBenchmarkV2ConfigError(
+            path,
+            f"schema_version must be {_LEGACY_SCHEMA_VERSION} or {_SCHEMA_VERSION}",
+        )
+    expected_keys = _TOP_LEVEL_KEYS if raw_schema_version == _SCHEMA_VERSION else _TOP_LEVEL_KEYS_V2
+    _require_exact_keys(document, expected_keys, "top-level YAML value", path)
     vocab_size = _integer(document, "vocab_size", path, positive=True)
     models = _parse_models(document, path)
     cases = _parse_cases(document, models, vocab_size, path)
@@ -396,7 +467,18 @@ def load_benchmark_v2_config(path: Path) -> BenchmarkV2Config:
 def load_resolved_benchmark_v2_config(content: bytes, source: Path) -> BenchmarkV2Config:
     """Parse a snapshotted fully resolved YAML config without reading any path again."""
     document = _load_yaml_document(content, source)
-    _require_exact_keys(document, _RESOLVED_TOP_LEVEL_KEYS, "top-level YAML value", source)
+    raw_schema_version = document.get("schema_version")
+    if raw_schema_version not in {_LEGACY_SCHEMA_VERSION, _SCHEMA_VERSION}:
+        raise InvalidBenchmarkV2ConfigError(
+            source,
+            f"schema_version must be {_LEGACY_SCHEMA_VERSION} or {_SCHEMA_VERSION}",
+        )
+    expected_keys = (
+        _RESOLVED_TOP_LEVEL_KEYS
+        if raw_schema_version == _SCHEMA_VERSION
+        else _RESOLVED_TOP_LEVEL_KEYS_V2
+    )
+    _require_exact_keys(document, expected_keys, "top-level YAML value", source)
     vocab_size = _integer(document, "vocab_size", source, positive=True)
     cases = _parse_resolved_cases(document, vocab_size, source)
     return _build_config(document, cases, source)
@@ -404,7 +486,7 @@ def load_resolved_benchmark_v2_config(content: bytes, source: Path) -> Benchmark
 
 def resolved_config_document(config: BenchmarkV2Config) -> dict[str, JsonValue]:
     """Return the resolved config as JSON-safe values in a stable structure."""
-    return {
+    document: dict[str, JsonValue] = {
         "schema_version": config.schema_version,
         "experiment_name": config.experiment_name,
         "benchmark_seed": config.benchmark_seed,
@@ -440,6 +522,13 @@ def resolved_config_document(config: BenchmarkV2Config) -> dict[str, JsonValue]:
             "active_steps": config.profile.active_steps,
         },
     }
+    if config.schema_version >= _SCHEMA_VERSION:
+        document["preconditioning"] = {
+            "enabled": config.preconditioning.enabled,
+            "case_name": config.preconditioning.case_name,
+            "duration_seconds": config.preconditioning.duration_seconds,
+        }
+    return document
 
 
 def _canonical_json(document: Mapping[str, JsonValue]) -> bytes:
@@ -456,8 +545,8 @@ def resolved_config_sha256(config: BenchmarkV2Config) -> str:
 
 def _workload_document(config: BenchmarkV2Config, case: BenchmarkV2Case) -> dict[str, JsonValue]:
     """Select only settings that define the work performed by one case."""
-    return {
-        "case_identity_schema_version": 3,
+    document: dict[str, JsonValue] = {
+        "case_identity_schema_version": 4 if config.schema_version >= _SCHEMA_VERSION else 3,
         "benchmark_seed": config.benchmark_seed,
         "vocab_size": config.vocab_size,
         "warmup_steps": config.warmup_steps,
@@ -474,6 +563,13 @@ def _workload_document(config: BenchmarkV2Config, case: BenchmarkV2Case) -> dict
         },
         "workload_methodology": cast("dict[str, JsonValue]", workload_methodology_document()),
     }
+    if config.schema_version >= _SCHEMA_VERSION:
+        document["preconditioning"] = {
+            "enabled": config.preconditioning.enabled,
+            "case_name": config.preconditioning.case_name,
+            "duration_seconds": config.preconditioning.duration_seconds,
+        }
+    return document
 
 
 def case_identity(config: BenchmarkV2Config, case: BenchmarkV2Case) -> str:
