@@ -221,6 +221,7 @@ class LoadedBatcherBenchmarkRun:
     """Bind one strict run manifest to its raw-derived evidence."""
 
     manifest_path: Path
+    manifest_sha256: str
     run_id: str
     git_commit_sha: str
     evidence_generator_git_commit_sha: str
@@ -254,10 +255,10 @@ class BatcherCaseComparison:
 class BatcherBenchmarkComparison:
     """Represent a machine-readable comparison under one shared policy."""
 
-    baseline_manifest_path: Path
-    candidate_manifest_path: Path
     baseline_run_id: str
     candidate_run_id: str
+    baseline_manifest_sha256: str
+    candidate_manifest_sha256: str
     baseline_git_commit_sha: str
     candidate_git_commit_sha: str
     policy_sha256: str
@@ -825,6 +826,7 @@ def load_batcher_benchmark_run(  # noqa: C901, PLR0912, PLR0915
     )
     return LoadedBatcherBenchmarkRun(
         manifest_path.resolve(),
+        hashlib.sha256(manifest_content).hexdigest(),
         run_id,
         _git_sha(document["git_commit_sha"], manifest_path),
         _git_sha(document["evidence_generator_git_commit_sha"], manifest_path),
@@ -874,6 +876,36 @@ def compare_batcher_benchmarks(  # noqa: C901
         for field in _COMPARISON_ENVIRONMENT_FIELDS
         if baseline.run_environment[field] != candidate.run_environment[field]
     )
+    baseline_worker_environments = {
+        summary.case_identity: {
+            json.dumps(
+                record.worker_response["environment"],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for record in baseline.records
+            if record.status == "ok"
+            and record.worker_response is not None
+            and record.case_identity == summary.case_identity
+        }
+        for summary in baseline.summaries
+    }
+    candidate_worker_environments = {
+        summary.case_identity: {
+            json.dumps(
+                record.worker_response["environment"],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for record in candidate.records
+            if record.status == "ok"
+            and record.worker_response is not None
+            and record.case_identity == summary.case_identity
+        }
+        for summary in candidate.summaries
+    }
+    if baseline_worker_environments != candidate_worker_environments:
+        environment_mismatches = (*environment_mismatches, "worker_environments")
     reasons: list[str] = []
     if set(baseline_summaries) != set(candidate_summaries):
         reasons.append("baseline and candidate case identity sets differ")
@@ -944,10 +976,10 @@ def compare_batcher_benchmarks(  # noqa: C901
     else:
         verdict = "pass"
     return BatcherBenchmarkComparison(
-        baseline_manifest_path.resolve(),
-        candidate_manifest_path.resolve(),
         baseline.run_id,
         candidate.run_id,
+        baseline.manifest_sha256,
+        candidate.manifest_sha256,
         baseline.git_commit_sha,
         candidate.git_commit_sha,
         policy.sha256,
@@ -966,12 +998,16 @@ def write_batcher_comparison(
     """Write one deterministic machine-readable batch-only comparison."""
     document: dict[str, JsonValue] = {
         "schema_version": 1,
-        "baseline_manifest_path": str(comparison.baseline_manifest_path),
-        "candidate_manifest_path": str(comparison.candidate_manifest_path),
-        "baseline_run_id": comparison.baseline_run_id,
-        "candidate_run_id": comparison.candidate_run_id,
-        "baseline_git_commit_sha": comparison.baseline_git_commit_sha,
-        "candidate_git_commit_sha": comparison.candidate_git_commit_sha,
+        "baseline": {
+            "run_id": comparison.baseline_run_id,
+            "run_manifest_sha256": comparison.baseline_manifest_sha256,
+            "git_commit_sha": comparison.baseline_git_commit_sha,
+        },
+        "candidate": {
+            "run_id": comparison.candidate_run_id,
+            "run_manifest_sha256": comparison.candidate_manifest_sha256,
+            "git_commit_sha": comparison.candidate_git_commit_sha,
+        },
         "policy_sha256": comparison.policy_sha256,
         "comparison_policy": comparison.comparison_policy,
         "environment_mismatches": list(comparison.environment_mismatches),
