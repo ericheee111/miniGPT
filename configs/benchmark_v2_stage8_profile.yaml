@@ -1,15 +1,31 @@
-# Recommended local CPU methodology. This file contains no measured machine result.
+# Local Stage 8 comparison methodology after same-code calibration.
 schema_version: 3
-experiment_name: benchmark_v2_reference
+experiment_name: benchmark_v2_reference_stage8_stable
 benchmark_seed: 1337
 vocab_size: 65
 output_root: reports/benchmark-v2
 worker_timeout_seconds: 300
-warmup_steps: 10
-measurement_steps: 20
+warmup_steps: 15
+measurement_steps: 200
 replicates: 7
 torch_num_interop_threads: 1
-cpu_affinity: null
+cpu_affinity:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
 max_cv_percent: 5.0
 minimum_replicates: 5
 regression_threshold_percent: 7.5
@@ -26,7 +42,6 @@ models:
     n_head: 4
     n_embd: 128
 cases:
-  # Shared baseline, intentionally declared once rather than expanded as a matrix.
   - name: teaching_t12_s128_b16
     model_name: teaching
     torch_num_threads: 12
@@ -78,7 +93,7 @@ cases:
     block_size: 128
     batch_size: 32
 profile:
-  enabled: false
+  enabled: true
   case_name: teaching_t12_s128_b16
-  warmup_steps: 10
+  warmup_steps: 15
   active_steps: 20

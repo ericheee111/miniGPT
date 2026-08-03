@@ -15,6 +15,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _CLI_PATH = _REPOSITORY_ROOT / "benchmark_v2.py"
 _SMOKE_CONFIG_PATH = _REPOSITORY_ROOT / "configs" / "benchmark_v2_smoke.yaml"
 _REFERENCE_CONFIG_PATH = _REPOSITORY_ROOT / "configs" / "benchmark_v2_reference.yaml"
+_I7_14700_CONFIG_PATH = _REPOSITORY_ROOT / "configs" / "benchmark_v2_i7_14700_stage8.yaml"
 
 
 def _run_cli(*arguments: str, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
@@ -104,6 +105,15 @@ def test_benchmark_v2_cli_runs_canonical_smoke_in_fresh_workers(tmp_path: Path) 
         for line in raw_path.read_text(encoding="utf-8").splitlines()
     ]
     assert manifest["status"] == "complete"
+    assert manifest["schema_version"] == 4
+    assert manifest["preconditioning"] == {
+        "schema_version": 1,
+        "status": "skipped",
+        "enabled": False,
+        "case_name": "tiny_t1_s32_b2",
+        "case_identity": raw_records[0]["case_identity"],
+        "requested_duration_seconds": 0.0,
+    }
     assert len(raw_records) == 4
     assert len({record["worker_pid"] for record in raw_records}) == 4
     assert len(summary_path.read_text(encoding="utf-8").splitlines()) == 3
@@ -111,17 +121,25 @@ def test_benchmark_v2_cli_runs_canonical_smoke_in_fresh_workers(tmp_path: Path) 
     assert "performance threshold" not in completed.stdout.lower()
 
 
-def test_reference_config_is_explicit_recommended_methodology() -> None:
-    """Keep the reference matrix small, explicit, and free of machine-result claims."""
-    # Given: the committed reference configuration.
+def test_reference_and_host_config_separate_portable_and_calibrated_controls() -> None:
+    """Keep portable defaults free of one host's affinity and preconditioning."""
+    # Given: the portable reference and explicitly named i7-14700 methodology.
     reference = load_benchmark_v2_config(_REFERENCE_CONFIG_PATH)
+    host_specific = load_benchmark_v2_config(_I7_14700_CONFIG_PATH)
 
     # When: its declared one-factor cases are resolved.
     case_names = [case.name for case in reference.cases]
 
-    # Then: the baseline is present once in the planned ten-case methodology.
+    # Then: both retain the matrix while only the host config pins calibrated controls.
     assert len(case_names) == 10
     assert len(case_names) == len(set(case_names))
     assert reference.replicates == 7
     assert reference.warmup_steps == 10
     assert reference.measurement_steps == 20
+    assert reference.cpu_affinity is None
+    assert reference.preconditioning.enabled is False
+    assert host_specific.warmup_steps == 15
+    assert host_specific.measurement_steps == 200
+    assert host_specific.cpu_affinity == tuple(range(16))
+    assert host_specific.preconditioning.enabled is True
+    assert host_specific.preconditioning.duration_seconds == 120.0

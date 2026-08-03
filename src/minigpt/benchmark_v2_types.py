@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,6 +34,15 @@ class ProfileV2Settings:
 
 
 @dataclass(frozen=True, slots=True)
+class PreconditioningV2Settings:
+    """Define one explicit unmeasured training-step preconditioning phase."""
+
+    enabled: bool
+    case_name: str
+    duration_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class BenchmarkV2Config:
     """Define strict, reproducible CPU Benchmark v2 settings."""
 
@@ -54,3 +63,10 @@ class BenchmarkV2Config:
     relevant_environment_variables: tuple[str, ...]
     cases: tuple[BenchmarkV2Case, ...]
     profile: ProfileV2Settings
+    preconditioning: PreconditioningV2Settings = field(
+        default_factory=lambda: PreconditioningV2Settings(
+            enabled=False,
+            case_name="",
+            duration_seconds=0.0,
+        )
+    )

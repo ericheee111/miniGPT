@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import json
+import weakref
 from typing import TYPE_CHECKING, TypeAlias, cast
 
 import numpy as np
@@ -14,6 +16,56 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 MetadataValue: TypeAlias = str | int | float
+TokenTestSource: TypeAlias = npt.NDArray[np.uint16] | list[int]
+
+
+def _reference_batches(
+    tokens: npt.NDArray[np.uint16],
+    *,
+    batch_size: int,
+    block_size: int,
+    seed: int,
+    count: int,
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Reproduce the pre-Stage-8 row-wise batching algorithm independently."""
+    rng = np.random.default_rng(seed)
+    reference: list[tuple[torch.Tensor, torch.Tensor]] = []
+    for _ in range(count):
+        starts = rng.integers(
+            0,
+            tokens.size - block_size,
+            size=batch_size,
+            dtype=np.int64,
+        )
+        windows = np.empty((batch_size, block_size + 1), dtype=np.int64)
+        for index in range(batch_size):
+            start_index = int(cast("np.int64", starts[index]))
+            windows[index] = tokens[start_index : start_index + block_size + 1]
+        reference.append(
+            (
+                torch.tensor(windows[:, :-1], dtype=torch.long),
+                torch.tensor(windows[:, 1:], dtype=torch.long),
+            ),
+        )
+    return reference
+
+
+def _token_test_source(source_kind: str, tmp_path: Path) -> TokenTestSource:
+    """Build equivalent ndarray, sequence, or read-only mmap test input."""
+    tokens = np.arange(257, dtype=np.uint16)
+    if source_kind == "ndarray":
+        return tokens
+    if source_kind == "sequence":
+        return tokens.tolist()
+    token_path = tmp_path / "tokens.bin"
+    writable = np.memmap(token_path, dtype=np.uint16, mode="w+", shape=tokens.shape)
+    writable[:] = tokens
+    writable.flush()
+    del writable
+    return cast(
+        "npt.NDArray[np.uint16]",
+        np.memmap(token_path, dtype=np.uint16, mode="r", shape=tokens.shape),
+    )
 
 
 def test_tokenizer_round_trip() -> None:
@@ -143,3 +195,125 @@ def test_token_batcher_is_reproducible_for_fixed_seed() -> None:
     # Then: both x and y are identical.
     assert torch.equal(first_batch[0], second_batch[0])
     assert torch.equal(first_batch[1], second_batch[1])
+
+
+@pytest.mark.parametrize("source_kind", ["mmap", "ndarray", "sequence"])
+def test_token_batcher_matches_pre_optimization_batches(
+    source_kind: str,
+    tmp_path: Path,
+) -> None:
+    # Given: each supported source form and an independent implementation of the old algorithm.
+    source = _token_test_source(source_kind, tmp_path)
+    reference_tokens = np.arange(257, dtype=np.uint16)
+    expected = _reference_batches(
+        reference_tokens,
+        batch_size=7,
+        block_size=19,
+        seed=314,
+        count=4,
+    )
+    batcher = data.TokenBatcher(source, batch_size=7, block_size=19, seed=314)
+
+    # When: several batches are sampled from the same RNG trajectory.
+    actual = [batcher.next_batch() for _ in range(4)]
+
+    # Then: every token remains exactly equal to the pre-optimization path.
+    for actual_batch, expected_batch in zip(actual, expected, strict=True):
+        assert torch.equal(actual_batch[0], expected_batch[0])
+        assert torch.equal(actual_batch[1], expected_batch[1])
+
+
+def test_token_batcher_restores_next_batch_rng_state() -> None:
+    # Given: a batcher whose RNG state is captured before sampling.
+    tokens = np.arange(257, dtype=np.uint16)
+    batcher = data.TokenBatcher(tokens, batch_size=5, block_size=17, seed=91)
+    state = batcher.capture_random_state()
+    expected = batcher.next_batch()
+
+    # When: another batch advances the RNG before the captured state is restored.
+    _ = batcher.next_batch()
+    batcher.restore_random_state(state)
+    actual = batcher.next_batch()
+
+    # Then: the restored next batch is token-for-token identical.
+    assert torch.equal(actual[0], expected[0])
+    assert torch.equal(actual[1], expected[1])
+
+
+def test_token_batcher_preserves_read_only_source() -> None:
+    # Given: an immutable token array.
+    tokens = np.arange(257, dtype=np.uint16)
+    tokens.setflags(write=False)
+    original = tokens.copy()
+    batcher = data.TokenBatcher(tokens, batch_size=5, block_size=17, seed=12)
+
+    # When: multiple batches are sampled.
+    _ = batcher.next_batch()
+    _ = batcher.next_batch()
+
+    # Then: the source remains read-only and byte-for-byte unchanged.
+    assert not tokens.flags.writeable
+    assert tokens.tolist() == original.tolist()
+
+
+def test_token_batcher_retains_mmap_source_without_full_dtype_copy(tmp_path: Path) -> None:
+    # Given: a read-only uint16 mmap retained only by the batcher after construction.
+    token_path = tmp_path / "tokens.bin"
+    tokens = np.arange(257, dtype=np.uint16)
+    writable = np.memmap(token_path, dtype=np.uint16, mode="w+", shape=tokens.shape)
+    writable[:] = tokens
+    writable.flush()
+    del writable
+    source = cast(
+        "npt.NDArray[np.uint16]",
+        np.memmap(token_path, dtype=np.uint16, mode="r", shape=tokens.shape),
+    )
+    source_reference = weakref.ref(source)
+    batcher = data.TokenBatcher(source, batch_size=5, block_size=17, seed=12)
+
+    # When: the caller releases its source reference.
+    del source
+    _ = gc.collect()
+
+    # Then: the batcher still retains the original mmap-backed source and remains usable.
+    assert source_reference() is not None
+    _ = batcher.next_batch()
+
+
+def test_token_batcher_returns_shifted_views_of_one_batch_owner() -> None:
+    # Given: a CPU batcher.
+    batcher = data.TokenBatcher(
+        np.arange(257, dtype=np.uint16),
+        batch_size=5,
+        block_size=17,
+        seed=12,
+    )
+
+    # When: a batch is sampled.
+    x, y = batcher.next_batch()
+
+    # Then: shifted non-contiguous views share the one call-owned tensor allocation.
+    assert x.untyped_storage().data_ptr() == y.untyped_storage().data_ptr()
+    assert not x.is_contiguous()
+    assert not y.is_contiguous()
+    assert torch.equal(y[:, :-1], x[:, 1:])
+
+
+def test_token_batcher_next_call_does_not_modify_prior_results() -> None:
+    # Given: a sampled batch and immutable snapshots of both returned tensors.
+    batcher = data.TokenBatcher(
+        np.arange(257, dtype=np.uint16),
+        batch_size=5,
+        block_size=17,
+        seed=12,
+    )
+    first_x, first_y = batcher.next_batch()
+    expected_x = first_x.clone()
+    expected_y = first_y.clone()
+
+    # When: the batcher samples its next batch.
+    _ = batcher.next_batch()
+
+    # Then: the earlier call still owns unchanged results.
+    assert torch.equal(first_x, expected_x)
+    assert torch.equal(first_y, expected_y)

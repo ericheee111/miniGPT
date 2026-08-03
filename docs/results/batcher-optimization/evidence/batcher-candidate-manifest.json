@@ -1,0 +1,21 @@
+{
+  "config_sha256": "717af65062e9822842f31b9dadbef3eafea6671a45106572836abf1460e5fa83",
+  "git_commit_sha": "3d6ae83e5c0b37a423d60abfb73377cf02fab51f",
+  "methodology_version": 2,
+  "role": "candidate",
+  "runs": [
+    {
+      "label": "candidate-a",
+      "run_id": "20260731T094704Z-a035fea3b16b-717af65062e9",
+      "run_manifest_path": "evidence/batch-only/candidate-a/20260731T094704Z-a035fea3b16b-717af65062e9/run_manifest.json",
+      "run_manifest_sha256": "ac42526b34bbbef9e0266449fa2eb5914003ce4ae6ed3daad96aeaaa585620e2"
+    },
+    {
+      "label": "candidate-b",
+      "run_id": "20260731T095023Z-a035fea3b16b-717af65062e9",
+      "run_manifest_path": "evidence/batch-only/candidate-b/20260731T095023Z-a035fea3b16b-717af65062e9/run_manifest.json",
+      "run_manifest_sha256": "f493cde10ca1d6ce79ce8f6aa4165cfeed3c6945cf0d02f08f2baeee631fb477"
+    }
+  ],
+  "schema_version": 2
+}

@@ -1,0 +1,125 @@
+{
+  "artifacts": [
+    {
+      "path": "environment.json",
+      "sha256": "8904c75bdf76976ab398b3dcc064dd95b745e1895e09f59102dce7618b8b49ed",
+      "size_bytes": 24536
+    },
+    {
+      "path": "execution_order.json",
+      "sha256": "1bd57af4321430325f254a2529914c9c8a910bf24d0049f2455813d177e7155c",
+      "size_bytes": 9139
+    },
+    {
+      "path": "raw_replicates.jsonl",
+      "sha256": "faa6b9bcb2694773b3df8f3d7945593a4b0687bdbfe3cc3c0c25a7e9b769dc32",
+      "size_bytes": 35626
+    },
+    {
+      "path": "resolved_config.yaml",
+      "sha256": "510940ade0787429dac2d180f8ec4b5c2616001c3782ef5bfe897c3bdc7af834",
+      "size_bytes": 719
+    },
+    {
+      "path": "summary.csv",
+      "sha256": "27ab850008d020be6e2fe20e9ee81abd0466a6a9715de70a1247613c5ed46495",
+      "size_bytes": 1039
+    },
+    {
+      "path": "summary.md",
+      "sha256": "c7babbb2dd25e78d20ae9cc419e8f243610d6bbaf1b0150f22d746f8cad1b98b",
+      "size_bytes": 793
+    }
+  ],
+  "case_identities": [
+    {
+      "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+      "case_name": "char-gpt-b4-t128"
+    },
+    {
+      "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+      "case_name": "char-gpt-b16-t128"
+    },
+    {
+      "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+      "case_name": "char-gpt-b32-t128"
+    },
+    {
+      "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+      "case_name": "char-gpt-b16-t256"
+    }
+  ],
+  "config_sha256": "717af65062e9822842f31b9dadbef3eafea6671a45106572836abf1460e5fa83",
+  "ended_at_utc": "2026-07-31T09:51:11.552820+00:00",
+  "evidence_generator_git_commit_sha": "a035fea3b16bb59ea6719a36204ab8e790ef36dc",
+  "expected_task_count": 28,
+  "experiment_name": "stage8-batcher-only-i7-14700",
+  "failed_task_count": 0,
+  "git_commit_sha": "3d6ae83e5c0b37a423d60abfb73377cf02fab51f",
+  "git_dirty": false,
+  "methodology_version": 2,
+  "raw_replicate_count": 28,
+  "run_id": "20260731T095023Z-a035fea3b16b-717af65062e9",
+  "schema_version": 2,
+  "started_at_utc": "2026-07-31T09:50:23.633458+00:00",
+  "status": "partial",
+  "successful_task_count": 28,
+  "summaries": [
+    {
+      "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+      "case_name": "char-gpt-b4-t128",
+      "coefficient_of_variation_percent": 5.80967192914903,
+      "failure_count": 0,
+      "max_worker_lifetime_peak_rss_mib": 213.97265625,
+      "median_absolute_deviation_batch_time_ms": 0.0003168699999999986,
+      "median_batch_time_ms": 0.01023239,
+      "median_tokens_per_second": 50037185.83830366,
+      "peak_rss_scope": "worker_lifetime",
+      "replicate_count": 7,
+      "stability": "unstable",
+      "success_count": 7
+    },
+    {
+      "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+      "case_name": "char-gpt-b16-t128",
+      "coefficient_of_variation_percent": 2.3252938221154396,
+      "failure_count": 0,
+      "max_worker_lifetime_peak_rss_mib": 214.12109375,
+      "median_absolute_deviation_batch_time_ms": 8.95049999999984e-05,
+      "median_batch_time_ms": 0.011197770000000001,
+      "median_tokens_per_second": 182893558.27097714,
+      "peak_rss_scope": "worker_lifetime",
+      "replicate_count": 7,
+      "stability": "stable",
+      "success_count": 7
+    },
+    {
+      "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+      "case_name": "char-gpt-b32-t128",
+      "coefficient_of_variation_percent": 7.154256410091402,
+      "failure_count": 0,
+      "max_worker_lifetime_peak_rss_mib": 213.86328125,
+      "median_absolute_deviation_batch_time_ms": 0.0003466400000000005,
+      "median_batch_time_ms": 0.01183003,
+      "median_tokens_per_second": 346237498.975066,
+      "peak_rss_scope": "worker_lifetime",
+      "replicate_count": 7,
+      "stability": "unstable",
+      "success_count": 7
+    },
+    {
+      "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+      "case_name": "char-gpt-b16-t256",
+      "coefficient_of_variation_percent": 5.8944376001778345,
+      "failure_count": 0,
+      "max_worker_lifetime_peak_rss_mib": 214.03125,
+      "median_absolute_deviation_batch_time_ms": 0.00023643499999999838,
+      "median_batch_time_ms": 0.01146681,
+      "median_tokens_per_second": 357204837.2651156,
+      "peak_rss_scope": "worker_lifetime",
+      "replicate_count": 7,
+      "stability": "unstable",
+      "success_count": 7
+    }
+  ]
+}

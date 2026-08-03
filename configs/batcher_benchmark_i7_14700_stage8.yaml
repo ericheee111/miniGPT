@@ -1,0 +1,44 @@
+schema_version: 2
+experiment_name: stage8-batcher-only-i7-14700
+output_root: reports/batcher-benchmark
+worker_timeout_seconds: 120
+warmup_batches: 500
+measurement_batches: 20000
+replicates: 7
+minimum_replicates: 5
+max_cv_percent: 5.0
+corpus_tokens: 1000000
+seed: 20260729
+cpu_affinity:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+relevant_environment_variables:
+  - OMP_NUM_THREADS
+  - MKL_NUM_THREADS
+cases:
+  - name: char-gpt-b4-t128
+    batch_size: 4
+    block_size: 128
+  - name: char-gpt-b16-t128
+    batch_size: 16
+    block_size: 128
+  - name: char-gpt-b32-t128
+    batch_size: 32
+    block_size: 128
+  - name: char-gpt-b16-t256
+    batch_size: 16
+    block_size: 256

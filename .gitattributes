@@ -5,3 +5,14 @@ docs/results/reference-training/*.txt text eol=crlf
 docs/results/reference-training/*.yaml text eol=crlf
 docs/results/reference-training/*.png binary
 tests/fixtures/benchmark_v2/** text eol=lf
+
+# Stage 8 generated package hashes bind checkout bytes, so make line endings explicit.
+docs/results/batcher-optimization/README.md text eol=crlf
+docs/results/batcher-optimization/summary.json text eol=crlf
+docs/results/batcher-optimization/artifact_manifest.json text eol=crlf
+docs/results/batcher-optimization/evidence/batcher-*-manifest.json text eol=crlf
+docs/results/batcher-optimization/evidence/batch-only/** text eol=crlf
+docs/results/batcher-optimization/evidence/batch-only/**/raw_replicates.jsonl text eol=lf
+docs/results/batcher-optimization/evidence/reference-*.json text eol=lf
+docs/results/batcher-optimization/evidence/profiler-*.json text eol=lf
+docs/results/batcher-optimization/evidence/profiler-*.csv text eol=lf

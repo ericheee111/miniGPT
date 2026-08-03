@@ -1,0 +1,254 @@
+[
+  {
+    "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+    "case_name": "char-gpt-b16-t256",
+    "execution_index": 0,
+    "replicate_index": 4,
+    "status": "ok",
+    "task_id": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e:4",
+    "worker_pid": 48592
+  },
+  {
+    "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+    "case_name": "char-gpt-b4-t128",
+    "execution_index": 1,
+    "replicate_index": 3,
+    "status": "ok",
+    "task_id": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476:3",
+    "worker_pid": 33288
+  },
+  {
+    "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+    "case_name": "char-gpt-b4-t128",
+    "execution_index": 2,
+    "replicate_index": 4,
+    "status": "ok",
+    "task_id": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476:4",
+    "worker_pid": 35296
+  },
+  {
+    "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+    "case_name": "char-gpt-b4-t128",
+    "execution_index": 3,
+    "replicate_index": 0,
+    "status": "ok",
+    "task_id": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476:0",
+    "worker_pid": 35852
+  },
+  {
+    "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+    "case_name": "char-gpt-b32-t128",
+    "execution_index": 4,
+    "replicate_index": 0,
+    "status": "ok",
+    "task_id": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965:0",
+    "worker_pid": 10680
+  },
+  {
+    "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+    "case_name": "char-gpt-b16-t128",
+    "execution_index": 5,
+    "replicate_index": 4,
+    "status": "ok",
+    "task_id": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c:4",
+    "worker_pid": 41704
+  },
+  {
+    "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+    "case_name": "char-gpt-b4-t128",
+    "execution_index": 6,
+    "replicate_index": 1,
+    "status": "ok",
+    "task_id": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476:1",
+    "worker_pid": 43336
+  },
+  {
+    "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+    "case_name": "char-gpt-b16-t256",
+    "execution_index": 7,
+    "replicate_index": 6,
+    "status": "ok",
+    "task_id": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e:6",
+    "worker_pid": 53104
+  },
+  {
+    "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+    "case_name": "char-gpt-b16-t128",
+    "execution_index": 8,
+    "replicate_index": 3,
+    "status": "ok",
+    "task_id": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c:3",
+    "worker_pid": 17860
+  },
+  {
+    "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+    "case_name": "char-gpt-b32-t128",
+    "execution_index": 9,
+    "replicate_index": 6,
+    "status": "ok",
+    "task_id": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965:6",
+    "worker_pid": 44116
+  },
+  {
+    "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+    "case_name": "char-gpt-b32-t128",
+    "execution_index": 10,
+    "replicate_index": 3,
+    "status": "ok",
+    "task_id": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965:3",
+    "worker_pid": 47400
+  },
+  {
+    "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+    "case_name": "char-gpt-b32-t128",
+    "execution_index": 11,
+    "replicate_index": 2,
+    "status": "ok",
+    "task_id": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965:2",
+    "worker_pid": 19232
+  },
+  {
+    "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+    "case_name": "char-gpt-b4-t128",
+    "execution_index": 12,
+    "replicate_index": 2,
+    "status": "ok",
+    "task_id": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476:2",
+    "worker_pid": 15148
+  },
+  {
+    "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+    "case_name": "char-gpt-b16-t256",
+    "execution_index": 13,
+    "replicate_index": 3,
+    "status": "ok",
+    "task_id": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e:3",
+    "worker_pid": 37464
+  },
+  {
+    "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+    "case_name": "char-gpt-b16-t256",
+    "execution_index": 14,
+    "replicate_index": 2,
+    "status": "ok",
+    "task_id": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e:2",
+    "worker_pid": 43088
+  },
+  {
+    "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+    "case_name": "char-gpt-b16-t128",
+    "execution_index": 15,
+    "replicate_index": 1,
+    "status": "ok",
+    "task_id": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c:1",
+    "worker_pid": 38408
+  },
+  {
+    "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+    "case_name": "char-gpt-b32-t128",
+    "execution_index": 16,
+    "replicate_index": 5,
+    "status": "ok",
+    "task_id": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965:5",
+    "worker_pid": 1784
+  },
+  {
+    "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+    "case_name": "char-gpt-b32-t128",
+    "execution_index": 17,
+    "replicate_index": 4,
+    "status": "ok",
+    "task_id": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965:4",
+    "worker_pid": 53072
+  },
+  {
+    "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+    "case_name": "char-gpt-b4-t128",
+    "execution_index": 18,
+    "replicate_index": 5,
+    "status": "ok",
+    "task_id": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476:5",
+    "worker_pid": 48184
+  },
+  {
+    "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+    "case_name": "char-gpt-b16-t128",
+    "execution_index": 19,
+    "replicate_index": 0,
+    "status": "ok",
+    "task_id": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c:0",
+    "worker_pid": 24112
+  },
+  {
+    "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+    "case_name": "char-gpt-b16-t128",
+    "execution_index": 20,
+    "replicate_index": 2,
+    "status": "ok",
+    "task_id": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c:2",
+    "worker_pid": 29904
+  },
+  {
+    "case_identity": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476",
+    "case_name": "char-gpt-b4-t128",
+    "execution_index": 21,
+    "replicate_index": 6,
+    "status": "ok",
+    "task_id": "a3983e29f10f083090a2b85e7f7718ee3314029f0ebdc639ff9d92d7fceda476:6",
+    "worker_pid": 25660
+  },
+  {
+    "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+    "case_name": "char-gpt-b16-t256",
+    "execution_index": 22,
+    "replicate_index": 1,
+    "status": "ok",
+    "task_id": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e:1",
+    "worker_pid": 42960
+  },
+  {
+    "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+    "case_name": "char-gpt-b16-t128",
+    "execution_index": 23,
+    "replicate_index": 5,
+    "status": "ok",
+    "task_id": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c:5",
+    "worker_pid": 20504
+  },
+  {
+    "case_identity": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965",
+    "case_name": "char-gpt-b32-t128",
+    "execution_index": 24,
+    "replicate_index": 1,
+    "status": "ok",
+    "task_id": "2500fd6af0ffe802773324cce435290755bc05c41c949070e58f19f29cfe3965:1",
+    "worker_pid": 19160
+  },
+  {
+    "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+    "case_name": "char-gpt-b16-t256",
+    "execution_index": 25,
+    "replicate_index": 0,
+    "status": "ok",
+    "task_id": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e:0",
+    "worker_pid": 29708
+  },
+  {
+    "case_identity": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c",
+    "case_name": "char-gpt-b16-t128",
+    "execution_index": 26,
+    "replicate_index": 6,
+    "status": "ok",
+    "task_id": "783f374257bcca60045b769e81df776716afebd10149afb98ea952df5293ba8c:6",
+    "worker_pid": 17172
+  },
+  {
+    "case_identity": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e",
+    "case_name": "char-gpt-b16-t256",
+    "execution_index": 27,
+    "replicate_index": 5,
+    "status": "ok",
+    "task_id": "e5c2524dc7711d9bb236100d2f613cadb5494c09c126f1e0f10b1dd1e6d50c6e:5",
+    "worker_pid": 38736
+  }
+]
