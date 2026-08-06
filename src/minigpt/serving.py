@@ -629,15 +629,15 @@ class ServingEngine:
             _ = self._waiting.popleft()
             state.admission_time = tick_time
             state.reserved_cache_tokens = required
-            self._emit(
-                event_type=EngineEventType.ADMITTED,
-                state=state,
-                timestamp=tick_time,
-            )
             if state.request.max_new_tokens == 0:
                 state.status = RequestStatus.FINISHED
                 state.finish_time = tick_time
                 state.reserved_cache_tokens = 0
+                self._emit(
+                    event_type=EngineEventType.ADMITTED,
+                    state=state,
+                    timestamp=tick_time,
+                )
                 self._emit(
                     event_type=EngineEventType.FINISHED,
                     state=state,
@@ -646,7 +646,11 @@ class ServingEngine:
                 continue
             state.status = RequestStatus.PREFILLING
             self._active.append(state.request.request_id)
-            self._update_peaks()
+            self._emit(
+                event_type=EngineEventType.ADMITTED,
+                state=state,
+                timestamp=tick_time,
+            )
 
     def _execute(self, request_ids: tuple[str, ...], *, tick_time: float, prefill: bool) -> None:
         expected_status = RequestStatus.PREFILLING if prefill else RequestStatus.DECODING

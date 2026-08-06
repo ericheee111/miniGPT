@@ -105,10 +105,11 @@ def test_fifo_admission_does_not_bypass_the_queue_head() -> None:
         engine.tick(now=float(tick_time))
 
     # Then: admission events preserve strict FIFO order.
-    admitted = [
-        event.request_id for event in engine.events if event.event_type is EngineEventType.ADMITTED
-    ]
-    assert admitted == ["first", "second", "third"]
+    admitted = [event for event in engine.events if event.event_type is EngineEventType.ADMITTED]
+    assert [event.request_id for event in admitted] == ["first", "second", "third"]
+    assert all(event.status is RequestStatus.PREFILLING for event in admitted)
+    assert all(event.active_requests == 1 for event in admitted)
+    assert all(event.reserved_cache_tokens == 2 for event in admitted)
 
 
 def test_active_and_reserved_cache_limits_apply_at_admission() -> None:
