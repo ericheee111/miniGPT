@@ -16,3 +16,6 @@ docs/results/batcher-optimization/evidence/batch-only/**/raw_replicates.jsonl te
 docs/results/batcher-optimization/evidence/reference-*.json text eol=lf
 docs/results/batcher-optimization/evidence/profiler-*.json text eol=lf
 docs/results/batcher-optimization/evidence/profiler-*.csv text eol=lf
+
+# Stage 9 generated package hashes bind exact UTF-8/LF bytes across platforms.
+docs/results/kv-cache-generation/** text eol=lf
