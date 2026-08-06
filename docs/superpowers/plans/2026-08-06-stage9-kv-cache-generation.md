@@ -47,4 +47,3 @@ workloads need not improve.
 5. Run pip check, Ruff format/check, basedpyright, full pytest, and `git diff --check main...HEAD`.
 6. Confirm Stage 8/reference evidence are unchanged and record local commits; do not push or open a
    PR.
-
