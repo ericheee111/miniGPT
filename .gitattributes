@@ -19,3 +19,6 @@ docs/results/batcher-optimization/evidence/profiler-*.csv text eol=lf
 
 # Stage 9 generated package hashes bind exact UTF-8/LF bytes across platforms.
 docs/results/kv-cache-generation/** text eol=lf
+
+# Stage 10 simulator artifacts are byte-reproducible UTF-8/LF evidence.
+docs/results/serving-control-plane/** text eol=lf

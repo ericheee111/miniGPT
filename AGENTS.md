@@ -21,7 +21,10 @@ implements:
 - reproducible Stage 7A reference-training evidence;
 - a vectorized, mmap-preserving `TokenBatcher` path with Stage 8 batch-only and end-to-end evidence;
 - explicit per-layer KV caches, prompt prefill, incremental decode, cached generation with
-  learned-position overflow re-prefill, and Stage 9 isolated inference evidence.
+  learned-position overflow re-prefill, and Stage 9 isolated inference evidence;
+- a deterministic FIFO serving control plane with per-request RNG/cache state, admission and cache
+  reservations, cancellation/backpressure, metrics, a per-request reference executor, and Stage 10
+  offline workload evidence.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -73,8 +76,12 @@ dataset remain gitignored.
 - `python benchmark_inference.py --config configs/inference_benchmark_stage9.yaml` runs the separate
   fresh-process cached/uncached inference matrix. `python profile_inference.py ...` remains
   descriptive only, and `docs/results/kv-cache-generation/` contains the hash-bound Stage 9 package.
-- The next stage is undecided. Do not begin BPE, GPU, LoRA, distributed training, `torch.compile`,
-  or another optimization without an explicit stage decision.
+- `python simulate_serving.py --config configs/serving_single_request.yaml` runs the Stage 10 offline
+  control-plane simulator. It advances requests at iteration level while the reference executor
+  still calls the model per request; it is not tensor-level continuous batching.
+- Stage 11 may implement true continuous batching only after an explicit design decision. Do not
+  begin BPE, GPU, LoRA, distributed training, `torch.compile`, HTTP serving, or another optimization
+  without an explicit stage decision.
 
 ## Quality gates
 

@@ -367,6 +367,27 @@ config、环境、执行顺序、summary 和独立 profiler。12 个 case 的 ca
 都较低，但 5 个 case 的 CV 超过 5%，因此总体 strict verdict 是 `not_comparable`；报告不将
 描述性差异升级为整体性能提升结论。
 
+### Stage 10 MiniServe serving control plane
+
+Stage 10 在现有 `GPT.prefill()`、`GPT.decode()` 与 KV cache 之上增加多请求控制面：严格
+FIFO waiting queue、请求状态机、active/cache admission、最坏情况 cache token reservation、
+取消与背压、失败隔离、独立 sampling RNG，以及 TTFT、TPOT、queue time、E2E 和吞吐记账。
+每个 tick 依次处理 cancellation、admission、prefill 和 decode；每个 active request 每轮最多
+产生一个 token，终态立即释放 cache reservation。
+
+```powershell
+python simulate_serving.py --config configs/serving_single_request.yaml
+python simulate_serving.py --config configs/serving_burst_arrivals.yaml
+python simulate_serving.py --config configs/serving_cache_pressure.yaml
+python generate_stage10_evidence.py --verify
+```
+
+当前 `ReferenceExecutor` 仍逐请求调用模型。多个请求在同一 iteration 被推进只表示控制面
+co-scheduling，不是张量级 continuous batching，也不构成吞吐提升声明。三个固定场景及
+`events.jsonl`、`requests.csv`、`summary.json`、`timeline.md` 见
+[Stage 10 证据包](docs/results/serving-control-plane/README.md)。Stage 11 才考虑真正的 batch
+assembly/scatter 与 batched KV-cache executor，并须对照 reference executor 做语义等价测试。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
@@ -462,7 +483,9 @@ miniGPT/
 ├── benchmark.py
 ├── benchmark_inference.py
 ├── profile_inference.py
-└── generate_stage9_evidence.py
+├── generate_stage9_evidence.py
+├── simulate_serving.py
+└── generate_stage10_evidence.py
 ```
 
 阶段 5 的设计与实施依据见
@@ -491,6 +514,8 @@ python profile_model.py --help
 python benchmark_inference.py --help
 python profile_inference.py --help
 python generate_stage9_evidence.py --help
+python simulate_serving.py --help
+python generate_stage10_evidence.py --help
 ```
 
 测试遵循 Given/When/Then 结构；网络相关测试用 `file://` 本地语料，不依赖真实 HTTP。
@@ -499,7 +524,9 @@ python generate_stage9_evidence.py --help
 ## Roadmap
 
 - Stage 9 已完成 KV cache、cached generation、overflow re-prefill 和隔离推理证据。
-- 下一阶段尚未决定；开始新的模型或性能特性前先明确 stage 设计。
+- Stage 10 已完成多请求 serving 控制面、逐请求 reference executor、确定性 simulator 和证据。
+- Stage 11 可设计真正 tensor-level continuous batching；必须保留 Stage 10 scheduler/event/
+  metrics 契约，并以 reference executor 做逐请求 token 与状态等价基线。
 - 增加 BPE tokenizer，并保持 checkpoint/tokenizer 版本兼容。
 - 增加 mixed precision 与 CUDA benchmark，同时保留 CPU baseline。
 - 增加梯度累积、数据加载 worker 和更长训练实验。

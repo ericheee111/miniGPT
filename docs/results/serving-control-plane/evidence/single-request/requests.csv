@@ -1,0 +1,2 @@
+request_id,status,prompt_tokens,generated_tokens,arrival_time,admission_time,prefill_start_time,first_token_time,finish_time,queue_time_seconds,prefill_latency_seconds,time_to_first_token_seconds,decode_latencies_seconds,time_per_output_token_seconds,end_to_end_latency_seconds,failure_reason
+baseline-001,finished,"[13,14,15,16]","[0,1,9,4]",0.0,0.0,1.0,1.001,4.001,0.0,0.001,1.001,"[0.001,0.001,0.001]",0.001,4.001,

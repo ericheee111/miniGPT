@@ -1,0 +1,46 @@
+schema_version: 1
+scenario_name: cache-pressure-cancellation
+model_seed: 1003
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.001
+max_ticks: 64
+output_dir: reports/serving-control-plane/cache-pressure-cancellation
+vocab_size: 17
+model:
+  block_size: 8
+  n_layer: 1
+  n_head: 1
+  n_embd: 8
+  dropout: 0.0
+  bias: false
+scheduler:
+  max_active_requests: 2
+  max_cached_tokens: 8
+requests:
+  - request_id: pressure-001
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 4
+    max_new_tokens: 4
+    temperature: 1.0
+    top_k: null
+    seed: 1301
+    cancellation_time: 2.0
+  - request_id: pressure-002
+    arrival_time: 0.0
+    prompt_tokens: [1, 3, 5, 7]
+    prompt_length: null
+    max_new_tokens: 3
+    temperature: 0.9
+    top_k: 6
+    seed: 1302
+    cancellation_time: null
+  - request_id: pressure-003
+    arrival_time: 1.0
+    prompt_tokens: null
+    prompt_length: 3
+    max_new_tokens: 3
+    temperature: 1.0
+    top_k: null
+    seed: 1303
+    cancellation_time: null
