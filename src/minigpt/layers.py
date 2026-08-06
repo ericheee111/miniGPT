@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, cast, final
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, TypeAlias, cast, final
 
 import torch
 from torch import Tensor, nn
@@ -12,6 +13,34 @@ from typing_extensions import override
 
 if TYPE_CHECKING:
     from minigpt.settings import GPTConfig
+
+
+@dataclass(frozen=True, slots=True)
+class LayerKVCache:
+    """Hold detached key/value states for one Transformer layer."""
+
+    key: Tensor
+    value: Tensor
+
+    @property
+    def length(self) -> int:
+        """Return the number of cached token positions."""
+        return self.key.shape[2]
+
+    @property
+    def nbytes(self) -> int:
+        """Return the storage bytes represented by both cache tensors."""
+        return (self.key.numel() * self.key.element_size()) + (
+            self.value.numel() * self.value.element_size()
+        )
+
+
+KVCache: TypeAlias = tuple[LayerKVCache, ...]
+
+
+def kv_cache_nbytes(cache: KVCache) -> int:
+    """Return the total bytes represented by every layer cache."""
+    return sum(layer_cache.nbytes for layer_cache in cache)
 
 
 @final
@@ -76,6 +105,22 @@ class CausalSelfAttention(nn.Module):
     @override
     def forward(self, hidden_states: Tensor) -> Tensor:
         """Transform [B,T,C] states through scaled dot-product attention."""
+        output, _ = self._forward_with_cache(hidden_states, None)
+        return output
+
+    def forward_cached(
+        self,
+        hidden_states: Tensor,
+        cache: LayerKVCache | None,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Attend new states over optional historical keys and values."""
+        return self._forward_with_cache(hidden_states, cache)
+
+    def _forward_with_cache(
+        self,
+        hidden_states: Tensor,
+        cache: LayerKVCache | None,
+    ) -> tuple[Tensor, LayerKVCache]:
         batch_size, time_steps, channels = hidden_states.shape
         projected_qkv = cast("Tensor", self.qkv_projection(hidden_states))
         query = projected_qkv[..., : self.n_embd]
@@ -85,9 +130,18 @@ class CausalSelfAttention(nn.Module):
         key = key.view(batch_size, time_steps, self.n_head, self.head_size).transpose(1, 2)
         value = value.view(batch_size, time_steps, self.n_head, self.head_size).transpose(1, 2)
 
+        past_length = 0
+        if cache is not None:
+            past_length = cache.length
+            key = torch.cat((cache.key, key), dim=2)
+            value = torch.cat((cache.value, value), dim=2)
+        key_length = past_length + time_steps
+
         attention_scores = query @ key.transpose(-2, -1)
         attention_scores = attention_scores / math.sqrt(self.head_size)
-        allowed_positions = self.causal_mask[:, :, :time_steps, :time_steps]
+        allowed_positions = self.causal_mask[
+            :, :, past_length : past_length + time_steps, :key_length
+        ]
         attention_scores = attention_scores.masked_fill(
             ~allowed_positions,
             torch.finfo(attention_scores.dtype).min,
@@ -98,7 +152,9 @@ class CausalSelfAttention(nn.Module):
         context = attention_weights @ value
         context = context.transpose(1, 2).contiguous().view(batch_size, time_steps, channels)
         projected = cast("Tensor", self.output_projection(context))
-        return cast("Tensor", self.residual_dropout(projected))
+        output = cast("Tensor", self.residual_dropout(projected))
+        next_cache = LayerKVCache(key=key.detach(), value=value.detach())
+        return output, next_cache
 
 
 @final
@@ -150,3 +206,16 @@ class TransformerBlock(nn.Module):
         hidden_states = hidden_states + cast("Tensor", self.attention(attention_input))
         mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
         return hidden_states + cast("Tensor", self.mlp(mlp_input))
+
+    def forward_cached(
+        self,
+        hidden_states: Tensor,
+        cache: LayerKVCache | None,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Apply the block to new states and return an extended layer cache."""
+        attention_input = cast("Tensor", self.attention_norm(hidden_states))
+        attention_output, next_cache = self.attention.forward_cached(attention_input, cache)
+        hidden_states = hidden_states + attention_output
+        mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
+        output = hidden_states + cast("Tensor", self.mlp(mlp_input))
+        return output, next_cache

@@ -1,14 +1,22 @@
 """Define the miniGPT language model and its validation errors."""
 
 from dataclasses import dataclass
-from typing import Final, cast, final
+from typing import Final, Never, cast, final
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional
 from typing_extensions import override
 
-from minigpt.layers import MLP, CausalSelfAttention, LayerNorm, TransformerBlock
+from minigpt.layers import (
+    MLP,
+    CausalSelfAttention,
+    KVCache,
+    LayerKVCache,
+    LayerNorm,
+    TransformerBlock,
+    kv_cache_nbytes,
+)
 from minigpt.settings import GPTConfig, InvalidModelConfigError
 
 __all__ = (
@@ -17,13 +25,17 @@ __all__ = (
     "CausalSelfAttention",
     "GPTConfig",
     "InvalidGenerationConfigError",
+    "InvalidKVCacheError",
     "InvalidModelConfigError",
     "InvalidTokenTensorError",
+    "KVCache",
+    "LayerKVCache",
     "LayerNorm",
     "TokenIdOutOfRangeError",
     "TransformerBlock",
     "UnexpectedTransformerBlockError",
     "expected_gpt_parameter_count",
+    "kv_cache_nbytes",
 )
 
 _INPUT_NAME: Final = "input"
@@ -36,6 +48,7 @@ _GENERATION_LENGTH_REASON: Final = "max_new_tokens must be non-negative"
 _TEMPERATURE_REASON: Final = "temperature must be positive"
 _TOP_K_REASON: Final = "top_k must be positive when provided"
 _TOKEN_TENSOR_DIMENSIONS: Final = 2
+_CACHE_TENSOR_DIMENSIONS: Final = 4
 
 
 def expected_gpt_parameter_count(config: GPTConfig) -> int:
@@ -91,6 +104,50 @@ class InvalidGenerationConfigError(ValueError):
     def __str__(self) -> str:
         """Render the failed generation constraint."""
         return f"invalid generation configuration: {self.reason}"
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidKVCacheError(ValueError):
+    """Report a caller-owned KV cache that cannot be used for decode."""
+
+    reason: str
+
+    @override
+    def __str__(self) -> str:
+        """Render the failed cache invariant."""
+        return f"invalid KV cache: {self.reason}"
+
+
+def _invalid_cache(reason: str) -> Never:
+    raise InvalidKVCacheError(reason)
+
+
+def _validate_cache_tensor(  # noqa: PLR0913
+    tensor: Tensor,
+    *,
+    prefix: str,
+    batch_size: int,
+    n_head: int,
+    head_size: int,
+    dtype: torch.dtype,
+    model_device: torch.device,
+    input_device: torch.device,
+) -> None:
+    if tensor.ndim != _CACHE_TENSOR_DIMENSIONS:
+        _invalid_cache(f"{prefix} must have rank {_CACHE_TENSOR_DIMENSIONS}")
+    if tensor.shape[0] != batch_size:
+        _invalid_cache(f"{prefix} batch {tensor.shape[0]} must equal input batch {batch_size}")
+    if tensor.shape[1] != n_head:
+        _invalid_cache(f"{prefix} head count {tensor.shape[1]} must equal n_head {n_head}")
+    if tensor.shape[3] != head_size:
+        _invalid_cache(f"{prefix} head size {tensor.shape[3]} must equal {head_size}")
+    if tensor.dtype != dtype:
+        _invalid_cache(f"{prefix} dtype {tensor.dtype} must equal model dtype {dtype}")
+    if tensor.device != model_device or tensor.device != input_device:
+        reason = f"{prefix} device {tensor.device} must equal model/input device {model_device}"
+        _invalid_cache(reason)
+    if tensor.requires_grad:
+        _invalid_cache(f"{prefix} requires grad but cache must be detached")
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +248,112 @@ class GPT(nn.Module):
     def parameter_count(self) -> int:
         """Return the number of trainable scalar parameters."""
         return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)
+
+    def _validate_cache(self, token_ids: Tensor, cache: object) -> int:  # noqa: C901
+        if not isinstance(cache, tuple):
+            _invalid_cache("cache must be a tuple of LayerKVCache entries")
+        raw_cache = cast("tuple[object, ...]", cache)
+        if len(raw_cache) != self.config.n_layer:
+            reason = (
+                f"layer count {len(raw_cache)} must equal configured n_layer {self.config.n_layer}"
+            )
+            _invalid_cache(reason)
+
+        batch_size = token_ids.shape[0]
+        expected_dtype = self.token_embedding.weight.dtype
+        expected_device = self.token_embedding.weight.device
+        expected_length: int | None = None
+        head_size = self.config.n_embd // self.config.n_head
+        for layer_index, layer_cache in enumerate(raw_cache):
+            if not isinstance(layer_cache, LayerKVCache):
+                reason = f"layer {layer_index} must be a LayerKVCache"
+                _invalid_cache(reason)
+            for tensor_name, tensor in (("key", layer_cache.key), ("value", layer_cache.value)):
+                prefix = f"layer {layer_index} {tensor_name}"
+                _validate_cache_tensor(
+                    tensor,
+                    prefix=prefix,
+                    batch_size=batch_size,
+                    n_head=self.config.n_head,
+                    head_size=head_size,
+                    dtype=expected_dtype,
+                    model_device=expected_device,
+                    input_device=token_ids.device,
+                )
+            if layer_cache.key.shape != layer_cache.value.shape:
+                reason = f"layer {layer_index} key/value shapes must match"
+                _invalid_cache(reason)
+            length = layer_cache.length
+            if length <= 0 or length > self.config.block_size:
+                reason = (
+                    f"layer {layer_index} length {length} must be in [1, {self.config.block_size}]"
+                )
+                _invalid_cache(reason)
+            if expected_length is None:
+                expected_length = length
+            elif length != expected_length:
+                reason = (
+                    f"layer {layer_index} length {length} must equal cache length {expected_length}"
+                )
+                _invalid_cache(reason)
+        if expected_length is None:
+            _invalid_cache("cache must contain at least one layer")
+        return expected_length
+
+    def _cached_forward(
+        self,
+        token_ids: Tensor,
+        cache: KVCache | None,
+        *,
+        past_length: int,
+    ) -> tuple[Tensor, KVCache]:
+        time_steps = token_ids.shape[1]
+        positions = torch.arange(
+            past_length,
+            past_length + time_steps,
+            device=token_ids.device,
+        )
+        token_embeddings = cast("Tensor", self.token_embedding(token_ids))
+        position_embeddings = cast("Tensor", self.position_embedding(positions))
+        hidden_states = cast(
+            "Tensor",
+            self.embedding_dropout(token_embeddings + position_embeddings),
+        )
+        next_cache: list[LayerKVCache] = []
+        for index, module in enumerate(self.blocks):
+            if not isinstance(module, TransformerBlock):
+                raise UnexpectedTransformerBlockError(index, type(module).__name__)
+            layer_cache = None if cache is None else cache[index]
+            hidden_states, next_layer_cache = module.forward_cached(hidden_states, layer_cache)
+            next_cache.append(next_layer_cache)
+        normalized = cast("Tensor", self.final_norm(hidden_states))
+        logits = cast("Tensor", self.lm_head(normalized))
+        return logits, tuple(next_cache)
+
+    @torch.no_grad()
+    def prefill(self, token_ids: Tensor) -> tuple[Tensor, KVCache]:
+        """Evaluate a complete prompt and return final logits plus detached K/V."""
+        self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
+        time_steps = token_ids.shape[1]
+        if time_steps > self.config.block_size:
+            reason = f"time dimension {time_steps} exceeds block_size {self.config.block_size}"
+            raise InvalidTokenTensorError(_PROMPT_NAME, reason)
+        logits, cache = self._cached_forward(token_ids, None, past_length=0)
+        return logits[:, -1:, :], cache
+
+    @torch.no_grad()
+    def decode(self, token_ids: Tensor, cache: KVCache) -> tuple[Tensor, KVCache]:
+        """Evaluate only new tokens against validated historical K/V states."""
+        self._validate_token_tensor(token_ids, name=_INPUT_NAME)
+        past_length = self._validate_cache(token_ids, cache)
+        new_length = token_ids.shape[1]
+        if past_length + new_length > self.config.block_size:
+            reason = (
+                f"cached length {past_length} plus new length {new_length} exceeds "
+                f"block_size {self.config.block_size}"
+            )
+            _invalid_cache(reason)
+        return self._cached_forward(token_ids, cache, past_length=past_length)
 
     @torch.no_grad()
     def generate(

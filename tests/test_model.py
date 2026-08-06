@@ -258,7 +258,7 @@ def test_prefill_matches_forward_and_returns_layer_caches() -> None:
         assert layer_cache.length == 3
         assert not layer_cache.key.requires_grad
         assert not layer_cache.value.requires_grad
-    assert model.kv_cache_nbytes(cache) == 2 * 2 * 2 * 3 * 4 * 4
+    assert model.kv_cache_nbytes(cache) == 2 * 2 * 2 * 2 * 3 * 4 * 4
 
 
 def test_single_token_decode_matches_full_forward_for_batch() -> None:
