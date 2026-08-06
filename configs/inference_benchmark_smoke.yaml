@@ -1,0 +1,27 @@
+schema_version: 1
+experiment_name: stage9-inference-smoke
+benchmark_seed: 20260806
+vocab_size: 65
+output_root: reports/inference-benchmark-smoke
+worker_timeout_seconds: 30.0
+warmup_iterations: 1
+measurement_iterations: 2
+replicates: 2
+minimum_replicates: 2
+max_cv_percent: 20.0
+torch_num_threads: 1
+torch_num_interop_threads: 1
+cpu_affinity: null
+relevant_environment_variables:
+  - OMP_NUM_THREADS
+  - MKL_NUM_THREADS
+model:
+  block_size: 32
+  n_layer: 1
+  n_head: 2
+  n_embd: 16
+  dropout: 0.0
+  bias: false
+batch_size: 1
+prompt_lengths: [4, 8]
+generated_lengths: [3, 4]
