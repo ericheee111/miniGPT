@@ -1,0 +1,516 @@
+"""Load and execute deterministic offline serving-control-plane workloads."""
+
+from __future__ import annotations
+
+import csv
+import json
+import math
+from collections import deque
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Never, TypeAlias, cast
+
+import torch
+import yaml
+from typing_extensions import override
+
+from minigpt.model import GPT
+from minigpt.serving import (
+    EngineConfig,
+    EngineEvent,
+    EngineMetrics,
+    GenerationRequest,
+    ReferenceExecutor,
+    SchedulerConfig,
+    ServingEngine,
+)
+from minigpt.settings import GPTConfig, InvalidModelConfigError
+
+JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
+ConfigValue: TypeAlias = (
+    str | int | float | bool | list["ConfigValue"] | dict[str, "ConfigValue"] | None
+)
+ConfigMapping: TypeAlias = dict[str, ConfigValue]
+
+_TOP_LEVEL_KEYS = frozenset(
+    {
+        "schema_version",
+        "scenario_name",
+        "model_seed",
+        "tick_seconds",
+        "executor_clock_step_seconds",
+        "max_ticks",
+        "output_dir",
+        "vocab_size",
+        "model",
+        "scheduler",
+        "requests",
+    }
+)
+_MODEL_KEYS = frozenset({"block_size", "n_layer", "n_head", "n_embd", "dropout", "bias"})
+_SCHEDULER_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
+_REQUEST_KEYS = frozenset(
+    {
+        "request_id",
+        "arrival_time",
+        "prompt_tokens",
+        "prompt_length",
+        "max_new_tokens",
+        "temperature",
+        "top_k",
+        "seed",
+        "cancellation_time",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidSimulatorConfigError(ValueError):
+    """Report malformed simulator input with its source path."""
+
+    source: Path
+    reason: str
+
+    @override
+    def __str__(self) -> str:
+        """Render the source and failed constraint."""
+        return f"invalid serving simulator config {self.source}: {self.reason}"
+
+
+def _invalid(source: Path, reason: str) -> Never:
+    raise InvalidSimulatorConfigError(source, reason)
+
+
+@dataclass(frozen=True, slots=True)
+class SimulatorConfig:
+    """Define one deterministic model, scheduler, clock, and arrival workload."""
+
+    schema_version: int
+    scenario_name: str
+    model_seed: int
+    tick_seconds: float
+    executor_clock_step_seconds: float
+    max_ticks: int
+    output_dir: Path
+    model: GPTConfig
+    scheduler: SchedulerConfig
+    requests: tuple[GenerationRequest, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SimulationResult:
+    """Return stable artifacts and terminal metrics for one workload."""
+
+    output_dir: Path
+    output_paths: tuple[Path, ...]
+    metrics: EngineMetrics
+    generated_tokens: dict[str, tuple[int, ...]]
+
+
+@dataclass(slots=True)
+class StepClock:
+    """Advance by a fixed amount on every clock observation."""
+
+    step_seconds: float
+    current_seconds: float = 0.0
+
+    def __call__(self) -> float:
+        """Return current logical time and advance one deterministic step."""
+        value = self.current_seconds
+        self.current_seconds += self.step_seconds
+        return value
+
+
+def _mapping(value: object, source: Path, context: str) -> ConfigMapping:
+    if not isinstance(value, dict):
+        _invalid(source, f"{context} must be a mapping")
+    raw = cast("dict[object, object]", value)
+    if any(not isinstance(key, str) for key in raw):
+        _invalid(source, f"{context} keys must be strings")
+    return cast("ConfigMapping", raw)
+
+
+def _exact_keys(
+    document: ConfigMapping,
+    expected: frozenset[str],
+    source: Path,
+    context: str,
+) -> None:
+    missing = expected - set(document)
+    unexpected = set(document) - expected
+    if missing:
+        _invalid(source, f"{context} missing key {min(missing)!r}")
+    if unexpected:
+        _invalid(source, f"{context} has unexpected key {min(unexpected)!r}")
+
+
+def _integer(
+    document: ConfigMapping,
+    key: str,
+    source: Path,
+    *,
+    positive: bool = False,
+    non_negative: bool = False,
+) -> int:
+    value = document[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        _invalid(source, f"{key} must be an integer")
+    if positive and value <= 0:
+        _invalid(source, f"{key} must be positive")
+    if non_negative and value < 0:
+        _invalid(source, f"{key} must be non-negative")
+    return value
+
+
+def _number(
+    document: ConfigMapping,
+    key: str,
+    source: Path,
+    *,
+    positive: bool = False,
+    non_negative: bool = False,
+) -> float:
+    value = document[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        _invalid(source, f"{key} must be a number")
+    number = float(value)
+    if not math.isfinite(number):
+        _invalid(source, f"{key} must be finite")
+    if positive and number <= 0.0:
+        _invalid(source, f"{key} must be positive")
+    if non_negative and number < 0.0:
+        _invalid(source, f"{key} must be non-negative")
+    return number
+
+
+def _string(document: ConfigMapping, key: str, source: Path) -> str:
+    value = document[key]
+    if not isinstance(value, str) or not value:
+        _invalid(source, f"{key} must be a non-empty string")
+    return value
+
+
+def _model(document: ConfigMapping, source: Path, *, vocab_size: int) -> GPTConfig:
+    raw = _mapping(document["model"], source, "model")
+    _exact_keys(raw, _MODEL_KEYS, source, "model")
+    bias = raw["bias"]
+    if not isinstance(bias, bool):
+        _invalid(source, "model.bias must be a boolean")
+    try:
+        return GPTConfig(
+            vocab_size=vocab_size,
+            block_size=_integer(raw, "block_size", source, positive=True),
+            n_layer=_integer(raw, "n_layer", source, positive=True),
+            n_head=_integer(raw, "n_head", source, positive=True),
+            n_embd=_integer(raw, "n_embd", source, positive=True),
+            dropout=_number(raw, "dropout", source, non_negative=True),
+            bias=bias,
+        )
+    except InvalidModelConfigError as error:
+        _invalid(source, str(error))
+
+
+def _scheduler(document: ConfigMapping, source: Path) -> SchedulerConfig:
+    raw = _mapping(document["scheduler"], source, "scheduler")
+    _exact_keys(raw, _SCHEDULER_KEYS, source, "scheduler")
+    return SchedulerConfig(
+        max_active_requests=_integer(raw, "max_active_requests", source, positive=True),
+        max_cached_tokens=_integer(raw, "max_cached_tokens", source, positive=True),
+    )
+
+
+def _optional_integer(document: ConfigMapping, key: str, source: Path) -> int | None:
+    value = document[key]
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        _invalid(source, f"{key} must be null or a positive integer")
+    return value
+
+
+def _optional_number(document: ConfigMapping, key: str, source: Path) -> float | None:
+    value = document[key]
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        _invalid(source, f"{key} must be null or a number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0.0:
+        _invalid(source, f"{key} must be null or finite and non-negative")
+    return number
+
+
+def _prompt_tokens(
+    document: ConfigMapping,
+    source: Path,
+    *,
+    seed: int,
+    vocab_size: int,
+) -> tuple[int, ...]:
+    raw_tokens = document["prompt_tokens"]
+    raw_length = document["prompt_length"]
+    if (raw_tokens is None) == (raw_length is None):
+        _invalid(source, "each request must specify exactly one of prompt_tokens or prompt_length")
+    if raw_tokens is not None:
+        if not isinstance(raw_tokens, list) or not raw_tokens:
+            _invalid(source, "prompt_tokens must be null or a non-empty list")
+        values = cast("list[object]", raw_tokens)
+        if any(type(token) is not int or token < 0 or token >= vocab_size for token in values):
+            _invalid(source, "prompt_tokens must contain in-vocabulary integers")
+        return cast("tuple[int, ...]", tuple(values))
+    if isinstance(raw_length, bool) or not isinstance(raw_length, int) or raw_length <= 0:
+        _invalid(source, "prompt_length must be null or a positive integer")
+    return tuple((seed + index) % vocab_size for index in range(raw_length))
+
+
+def _requests(
+    document: ConfigMapping,
+    source: Path,
+    *,
+    vocab_size: int,
+) -> tuple[GenerationRequest, ...]:
+    raw_requests = document["requests"]
+    if not isinstance(raw_requests, list) or not raw_requests:
+        _invalid(source, "requests must be a non-empty list")
+    requests: list[GenerationRequest] = []
+    for index, item in enumerate(cast("list[object]", raw_requests)):
+        context = f"requests[{index}]"
+        raw = _mapping(item, source, context)
+        _exact_keys(raw, _REQUEST_KEYS, source, context)
+        seed = _integer(raw, "seed", source, non_negative=True)
+        request = GenerationRequest(
+            request_id=_string(raw, "request_id", source),
+            prompt_tokens=_prompt_tokens(raw, source, seed=seed, vocab_size=vocab_size),
+            max_new_tokens=_integer(raw, "max_new_tokens", source, non_negative=True),
+            temperature=_number(raw, "temperature", source, positive=True),
+            top_k=_optional_integer(raw, "top_k", source),
+            seed=seed,
+            arrival_time=_number(raw, "arrival_time", source, non_negative=True),
+            cancellation_time=_optional_number(raw, "cancellation_time", source),
+        )
+        requests.append(request)
+    request_ids = [request.request_id for request in requests]
+    if len(request_ids) != len(set(request_ids)):
+        _invalid(source, "request IDs must be unique")
+    return tuple(requests)
+
+
+def load_simulator_config(source: Path) -> SimulatorConfig:
+    """Load one strict JSON/YAML workload with resolved prompt tokens."""
+    try:
+        document = _mapping(yaml.safe_load(source.read_text(encoding="utf-8")), source, "document")
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        _invalid(source, str(error))
+    _exact_keys(document, _TOP_LEVEL_KEYS, source, "document")
+    schema_version = _integer(document, "schema_version", source, positive=True)
+    if schema_version != 1:
+        _invalid(source, "schema_version must equal 1")
+    vocab_size = _integer(document, "vocab_size", source, positive=True)
+    return SimulatorConfig(
+        schema_version=schema_version,
+        scenario_name=_string(document, "scenario_name", source),
+        model_seed=_integer(document, "model_seed", source, non_negative=True),
+        tick_seconds=_number(document, "tick_seconds", source, positive=True),
+        executor_clock_step_seconds=_number(
+            document,
+            "executor_clock_step_seconds",
+            source,
+            positive=True,
+        ),
+        max_ticks=_integer(document, "max_ticks", source, positive=True),
+        output_dir=Path(_string(document, "output_dir", source)),
+        model=_model(document, source, vocab_size=vocab_size),
+        scheduler=_scheduler(document, source),
+        requests=_requests(document, source, vocab_size=vocab_size),
+    )
+
+
+def _build_model(config: SimulatorConfig) -> GPT:
+    original_state = torch.get_rng_state()
+    try:
+        _ = torch.default_generator.manual_seed(config.model_seed)
+        model = GPT(config.model)
+    finally:
+        torch.set_rng_state(original_state)
+    _ = model.eval()
+    return model
+
+
+def _event_document(event: EngineEvent) -> dict[str, JsonValue]:
+    return {
+        "sequence": event.sequence,
+        "timestamp": event.timestamp,
+        "event_type": event.event_type.value,
+        "request_id": event.request_id,
+        "status": event.status.value,
+        "token_id": event.token_id,
+        "detail": event.detail,
+        "used_fallback": event.used_fallback,
+        "active_requests": event.active_requests,
+        "waiting_requests": event.waiting_requests,
+        "cached_tokens": event.cached_tokens,
+        "reserved_cache_tokens": event.reserved_cache_tokens,
+    }
+
+
+def _request_document(engine: ServingEngine, request_id: str) -> dict[str, JsonValue]:
+    state = engine.request_state(request_id)
+    metrics = engine.request_metrics(request_id)
+    return cast(
+        "dict[str, JsonValue]",
+        {
+            "request_id": request_id,
+            "status": state.status.value,
+            "prompt_tokens": list(state.request.prompt_tokens),
+            "generated_tokens": state.generated_tokens,
+            "arrival_time": state.request.arrival_time,
+            "admission_time": state.admission_time,
+            "prefill_start_time": state.prefill_start_time,
+            "first_token_time": state.first_token_time,
+            "finish_time": state.finish_time,
+            "queue_time_seconds": metrics.queue_time_seconds,
+            "prefill_latency_seconds": metrics.prefill_latency_seconds,
+            "time_to_first_token_seconds": metrics.time_to_first_token_seconds,
+            "decode_latencies_seconds": list(metrics.decode_latencies_seconds),
+            "time_per_output_token_seconds": metrics.time_per_output_token_seconds,
+            "end_to_end_latency_seconds": metrics.end_to_end_latency_seconds,
+            "failure_reason": metrics.failure_reason,
+        },
+    )
+
+
+def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[str, JsonValue]:
+    document = cast("dict[str, JsonValue]", asdict(metrics))
+    document.update(
+        {
+            "schema_version": 1,
+            "scenario_name": config.scenario_name,
+            "claim": "control-plane correctness only; no throughput improvement claim",
+            "executor": "per-request reference executor",
+            "scheduling_level": "iteration-level; not tensor-level continuous batching",
+            "max_active_requests": config.scheduler.max_active_requests,
+            "max_cached_tokens": config.scheduler.max_cached_tokens,
+        }
+    )
+    return document
+
+
+def _write_json(path: Path, document: dict[str, JsonValue]) -> None:
+    _ = path.write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _write_events(path: Path, events: tuple[EngineEvent, ...]) -> None:
+    lines = [json.dumps(_event_document(event), sort_keys=True) for event in events]
+    _ = path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def _write_requests(
+    path: Path,
+    engine: ServingEngine,
+    requests: tuple[GenerationRequest, ...],
+) -> None:
+    fieldnames: list[str] = [
+        "request_id",
+        "status",
+        "prompt_tokens",
+        "generated_tokens",
+        "arrival_time",
+        "admission_time",
+        "prefill_start_time",
+        "first_token_time",
+        "finish_time",
+        "queue_time_seconds",
+        "prefill_latency_seconds",
+        "time_to_first_token_seconds",
+        "decode_latencies_seconds",
+        "time_per_output_token_seconds",
+        "end_to_end_latency_seconds",
+        "failure_reason",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")
+        _ = cast("object", writer.writeheader())
+        for request in requests:
+            row = _request_document(engine, request.request_id)
+            for key in ("prompt_tokens", "generated_tokens", "decode_latencies_seconds"):
+                row[key] = json.dumps(row[key], separators=(",", ":"))
+            _ = cast("object", writer.writerow(row))
+
+
+def _write_timeline(path: Path, events: tuple[EngineEvent, ...], scenario_name: str) -> None:
+    lines = [
+        f"# {scenario_name} timeline",
+        "",
+        "This is deterministic control-plane evidence from a per-request reference executor; it is",
+        "not a tensor-level continuous-batching throughput result.",
+        "",
+        "| Seq | Time | Event | Request | Status | Token | Active | Waiting | Cache | Reserved |",
+        "|---:|---:|---|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for event in events:
+        token = "" if event.token_id is None else str(event.token_id)
+        lines.append(
+            "".join(
+                (
+                    f"| {event.sequence} | {event.timestamp:.6f} | {event.event_type.value} | ",
+                    f"{event.request_id} | {event.status.value} | {token} | ",
+                    f"{event.active_requests} | {event.waiting_requests} | ",
+                    f"{event.cached_tokens} | {event.reserved_cache_tokens} |",
+                )
+            )
+        )
+    _ = path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -> SimulationResult:
+    """Run arrivals on logical time and write four deterministic artifacts."""
+    destination = config.output_dir if output_dir is None else output_dir
+    destination.mkdir(parents=True, exist_ok=True)
+    model = _build_model(config)
+    executor = ReferenceExecutor(
+        model,
+        clock=StepClock(config.executor_clock_step_seconds),
+    )
+    engine = ServingEngine(
+        config=EngineConfig(scheduler=config.scheduler, block_size=config.model.block_size),
+        executor=executor,
+        clock=lambda: 0.0,
+    )
+    pending = deque(
+        sorted(enumerate(config.requests), key=lambda pair: (pair[1].arrival_time, pair[0]))
+    )
+    for tick_index in range(config.max_ticks):
+        now = tick_index * config.tick_seconds
+        while pending and pending[0][1].arrival_time <= now:
+            _, request = pending.popleft()
+            engine.submit(request)
+        if not engine.is_idle:
+            engine.tick(now=now)
+        if not pending and engine.is_idle:
+            break
+    else:
+        _invalid(Path("<runtime>"), f"simulation exceeded max_ticks={config.max_ticks}")
+
+    events_path = destination / "events.jsonl"
+    requests_path = destination / "requests.csv"
+    summary_path = destination / "summary.json"
+    timeline_path = destination / "timeline.md"
+    _write_events(events_path, engine.events)
+    _write_requests(requests_path, engine, config.requests)
+    metrics = engine.metrics()
+    _write_json(summary_path, _summary_document(config, metrics))
+    _write_timeline(timeline_path, engine.events, config.scenario_name)
+    generated = {
+        request.request_id: tuple(engine.request_state(request.request_id).generated_tokens)
+        for request in config.requests
+    }
+    return SimulationResult(
+        output_dir=destination,
+        output_paths=(events_path, requests_path, summary_path, timeline_path),
+        metrics=metrics,
+        generated_tokens=generated,
+    )

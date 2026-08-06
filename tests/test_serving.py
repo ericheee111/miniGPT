@@ -267,7 +267,7 @@ def test_identical_workloads_produce_identical_events_and_tokens() -> None:
 
 
 def tiny_gpt() -> GPT:
-    torch.manual_seed(1234)
+    _ = torch.default_generator.manual_seed(1234)
     model = GPT(
         GPTConfig(
             vocab_size=17,
@@ -279,7 +279,7 @@ def tiny_gpt() -> GPT:
             bias=False,
         )
     )
-    model.eval()
+    _ = model.eval()
     return model
 
 

@@ -1,0 +1,28 @@
+schema_version: 1
+scenario_name: single-request
+model_seed: 1001
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.001
+max_ticks: 32
+output_dir: reports/serving-control-plane/single-request
+vocab_size: 17
+model:
+  block_size: 8
+  n_layer: 1
+  n_head: 1
+  n_embd: 8
+  dropout: 0.0
+  bias: false
+scheduler:
+  max_active_requests: 1
+  max_cached_tokens: 8
+requests:
+  - request_id: baseline-001
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 4
+    max_new_tokens: 4
+    temperature: 1.0
+    top_k: null
+    seed: 1101
+    cancellation_time: null
