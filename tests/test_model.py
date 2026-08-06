@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -231,3 +232,168 @@ def test_expected_parameter_count_matches_instantiated_gpt_for_both_bias_modes(
 
     # Then: the formula covers every trainable scalar without model allocation in callers.
     assert expected == observed
+
+
+def test_prefill_matches_forward_and_returns_layer_caches() -> None:
+    # Given: an eval model and a batched prompt shorter than the context window.
+    _ = torch.default_generator.manual_seed(41)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.long)
+
+    # When: the prompt is evaluated by ordinary forward and cache prefill.
+    expected_logits, _ = call_gpt(gpt, prompt)
+    actual_logits, cache = gpt.prefill(prompt)
+
+    # Then: prefill preserves final-position logits and materializes detached per-layer K/V.
+    assert torch.equal(actual_logits, expected_logits[:, -1:, :])
+    assert len(cache) == tiny_config().n_layer
+    for layer_cache in cache:
+        assert layer_cache.key.shape == (2, 2, 3, 4)
+        assert layer_cache.value.shape == (2, 2, 3, 4)
+        assert layer_cache.key.dtype == torch.float32
+        assert layer_cache.value.dtype == torch.float32
+        assert layer_cache.key.device == prompt.device
+        assert layer_cache.value.device == prompt.device
+        assert layer_cache.length == 3
+        assert not layer_cache.key.requires_grad
+        assert not layer_cache.value.requires_grad
+    assert model.kv_cache_nbytes(cache) == 2 * 2 * 2 * 3 * 4 * 4
+
+
+def test_single_token_decode_matches_full_forward_for_batch() -> None:
+    # Given: two prompts, their cache, and one new token per batch row.
+    _ = torch.default_generator.manual_seed(43)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2], [3, 4]], dtype=torch.long)
+    new_tokens = torch.tensor([[5], [6]], dtype=torch.long)
+    _, cache = gpt.prefill(prompt)
+
+    # When: only the new tokens are decoded and the full sequences are evaluated independently.
+    actual_logits, next_cache = gpt.decode(new_tokens, cache)
+    expected_logits, _ = call_gpt(gpt, torch.cat((prompt, new_tokens), dim=1))
+
+    # Then: incremental final logits and cache growth match full-context semantics.
+    torch.testing.assert_close(actual_logits, expected_logits[:, -1:, :], rtol=1e-5, atol=1e-6)
+    assert all(layer_cache.length == 3 for layer_cache in next_cache)
+    assert all(layer_cache.length == 2 for layer_cache in cache)
+    assert all(
+        next_layer.key.data_ptr() != old_layer.key.data_ptr()
+        for old_layer, next_layer in zip(cache, next_cache, strict=True)
+    )
+
+
+def test_multi_token_decode_uses_offset_causal_mask() -> None:
+    # Given: a one-token prompt and three tokens decoded in a single call.
+    _ = torch.default_generator.manual_seed(47)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1], [2]], dtype=torch.long)
+    new_tokens = torch.tensor([[3, 4, 5], [6, 7, 8]], dtype=torch.long)
+    _, cache = gpt.prefill(prompt)
+
+    # When: cached decode evaluates all new positions.
+    actual_logits, next_cache = gpt.decode(new_tokens, cache)
+    expected_logits, _ = call_gpt(gpt, torch.cat((prompt, new_tokens), dim=1))
+
+    # Then: every new position has the same causal result as full forward.
+    torch.testing.assert_close(actual_logits, expected_logits[:, 1:, :], rtol=1e-5, atol=1e-6)
+    assert all(layer_cache.length == 4 for layer_cache in next_cache)
+
+
+@pytest.mark.parametrize(
+    ("prompt_length", "new_length"),
+    [(1, 1), (2, 1), (2, 2), (3, 1)],
+)
+def test_decode_matches_forward_across_context_lengths(prompt_length: int, new_length: int) -> None:
+    # Given: deterministic tokens spanning several valid prompt/decode partitions.
+    _ = torch.default_generator.manual_seed(53)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    complete = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)[:, : prompt_length + new_length]
+    prompt = complete[:, :prompt_length]
+    new_tokens = complete[:, prompt_length:]
+
+    # When: the suffix is decoded from a prefetched prefix.
+    _, cache = gpt.prefill(prompt)
+    actual_logits, _ = gpt.decode(new_tokens, cache)
+    expected_logits, _ = call_gpt(gpt, complete)
+
+    # Then: all suffix logits match the corresponding ordinary forward positions.
+    torch.testing.assert_close(
+        actual_logits,
+        expected_logits[:, prompt_length:, :],
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
+def test_prefill_and_decode_caches_never_participate_in_gradients() -> None:
+    # Given: a training-mode model whose parameters require gradients.
+    gpt = model.GPT(tiny_config())
+    prompt = torch.tensor([[1, 2]], dtype=torch.long)
+
+    # When: explicit inference APIs build and extend a cache.
+    logits, cache = gpt.prefill(prompt)
+    decoded_logits, next_cache = gpt.decode(torch.tensor([[3]], dtype=torch.long), cache)
+
+    # Then: outputs and every cache tensor are detached despite the surrounding grad mode.
+    assert not logits.requires_grad
+    assert not decoded_logits.requires_grad
+    for layer_cache in (*cache, *next_cache):
+        assert not layer_cache.key.requires_grad
+        assert not layer_cache.value.requires_grad
+
+
+@pytest.mark.parametrize(
+    "cache_mutation",
+    [
+        pytest.param("layer_count", id="layer-count"),
+        pytest.param("batch", id="batch"),
+        pytest.param("head", id="head"),
+        pytest.param("dtype", id="dtype"),
+        pytest.param("length", id="length"),
+        pytest.param("requires_grad", id="requires-grad"),
+    ],
+)
+def test_decode_rejects_invalid_cache_with_clear_error(cache_mutation: str) -> None:
+    # Given: a valid prompt cache modified to violate one explicit cache invariant.
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2]], dtype=torch.long)
+    _, valid_cache = gpt.prefill(prompt)
+    first = valid_cache[0]
+    invalid_first = first
+    if cache_mutation == "layer_count":
+        invalid_cache = valid_cache[:-1]
+    else:
+        if cache_mutation == "batch":
+            invalid_first = replace(first, key=first.key.expand(2, -1, -1, -1))
+        elif cache_mutation == "head":
+            invalid_first = replace(first, key=first.key[:, :1])
+        elif cache_mutation == "dtype":
+            invalid_first = replace(first, key=first.key.to(torch.float64))
+        elif cache_mutation == "length":
+            oversized = torch.zeros(1, 2, 5, 4)
+            invalid_first = model.LayerKVCache(key=oversized, value=oversized.clone())
+        elif cache_mutation == "requires_grad":
+            invalid_first = replace(first, key=first.key.detach().requires_grad_())
+        invalid_cache = (invalid_first, *valid_cache[1:])
+
+    # When: cached decode validates the caller-owned cache.
+    with pytest.raises(model.InvalidKVCacheError, match=cache_mutation.replace("_", " ")):
+        _ = gpt.decode(torch.tensor([[3]], dtype=torch.long), invalid_cache)
+
+
+def test_decode_rejects_cache_overflow_before_attention() -> None:
+    # Given: a cache that already consumes the full learned-position window.
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    _, full_cache = gpt.prefill(torch.tensor([[1, 2, 3, 4]], dtype=torch.long))
+
+    # When: another token is decoded without a window re-prefill.
+    with pytest.raises(
+        model.InvalidKVCacheError, match=r"cached length 4.*new length 1.*block_size 4"
+    ):
+        _ = gpt.decode(torch.tensor([[5]], dtype=torch.long), full_cache)
