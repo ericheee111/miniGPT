@@ -183,6 +183,103 @@ def test_generate_reproduces_tokens_with_equal_local_generator_states() -> None:
     assert torch.equal(first, second)
 
 
+def test_generate_cached_returns_prompt_unchanged_for_zero_new_tokens() -> None:
+    # Given: a batched prompt that is longer than the configured context window.
+    gpt = model.GPT(tiny_config())
+    prompt = torch.tensor([[1, 2, 3, 4, 5], [5, 4, 3, 2, 1]], dtype=torch.long)
+
+    # When: cached generation is asked to append no tokens.
+    generated = gpt.generate_cached(prompt, max_new_tokens=0)
+
+    # Then: it preserves the exact caller tensor without attempting prefill.
+    assert generated is prompt
+
+
+@pytest.mark.parametrize(
+    ("prompt", "max_new_tokens", "temperature", "top_k"),
+    [
+        pytest.param([[1]], 1, 1.0, None, id="short-greedy-domain"),
+        pytest.param([[1, 2], [3, 4]], 2, 0.8, 5, id="batch"),
+        pytest.param([[1, 2, 3]], 4, 1.2, 7, id="cross-overflow"),
+        pytest.param([[1, 2, 3, 4]], 3, 0.9, None, id="full-prompt"),
+        pytest.param([[1, 2, 3, 4, 5, 6]], 3, 0.7, 3, id="long-prompt"),
+    ],
+)
+def test_cached_generation_exactly_matches_uncached_sampling(
+    prompt: list[list[int]],
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int | None,
+) -> None:
+    # Given: one eval model and equal local generator states for both generation modes.
+    _ = torch.default_generator.manual_seed(59)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    token_ids = torch.tensor(prompt, dtype=torch.long)
+    uncached_generator = torch.Generator(device="cpu")
+    cached_generator = torch.Generator(device="cpu")
+    _ = uncached_generator.manual_seed(61)
+    _ = cached_generator.manual_seed(61)
+
+    # When: uncached and cached generation sample the same request.
+    uncached = gpt.generate(
+        token_ids,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        generator=uncached_generator,
+    )
+    cached = gpt.generate_cached(
+        token_ids,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        generator=cached_generator,
+    )
+
+    # Then: cache use and overflow re-prefill do not change any sampled token.
+    assert torch.equal(cached, uncached)
+    assert torch.equal(cached_generator.get_state(), uncached_generator.get_state())
+
+
+def test_generate_cached_does_not_register_cache_as_model_state() -> None:
+    # Given: an eval model and its parameter/buffer inventory before generation.
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    state_names = tuple(gpt.state_dict())
+    buffer_names = tuple(name for name, _ in gpt.named_buffers())
+
+    # When: cached generation crosses the context boundary.
+    _ = gpt.generate_cached(
+        torch.tensor([[1, 2, 3]], dtype=torch.long),
+        max_new_tokens=4,
+        generator=torch.Generator(device="cpu").manual_seed(67),
+    )
+
+    # Then: no caller-lifetime cache appears in parameters, buffers, or serialized state.
+    assert tuple(gpt.state_dict()) == state_names
+    assert tuple(name for name, _ in gpt.named_buffers()) == buffer_names
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    [
+        pytest.param({"max_new_tokens": -1}, "non-negative", id="length"),
+        pytest.param({"max_new_tokens": 1, "temperature": 0.0}, "positive", id="temperature"),
+        pytest.param({"max_new_tokens": 1, "top_k": 0}, "positive", id="top-k"),
+    ],
+)
+def test_generate_cached_validates_sampling_configuration(
+    kwargs: dict[str, int | float], reason: str
+) -> None:
+    # Given: a valid prompt and an invalid sampling request.
+    gpt = model.GPT(tiny_config())
+
+    # When/Then: cached generation reports the same public configuration boundary.
+    with pytest.raises(model.InvalidGenerationConfigError, match=reason):
+        _ = gpt.generate_cached(torch.tensor([[1]], dtype=torch.long), **kwargs)
+
+
 def test_causal_mask_prevents_future_tokens_affecting_prefix_logits() -> None:
     # Given: two sequences with the same prefix but different future tokens.
     _ = torch.default_generator.manual_seed(11)
