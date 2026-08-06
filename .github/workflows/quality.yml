@@ -13,7 +13,7 @@ jobs:
           - os: windows-latest
             python-version: "3.14"
             venv-bin: Scripts
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             python-version: "3.11"
             venv-bin: bin
     runs-on: ${{ matrix.os }}
