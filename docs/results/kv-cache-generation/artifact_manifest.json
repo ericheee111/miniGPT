@@ -1,0 +1,64 @@
+{
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "5d352f7d46bb0ce4ea9442e966cfa3701eebc333e9dbb800df88f6198b064455",
+      "size_bytes": 3927
+    },
+    {
+      "path": "evidence/correctness.json",
+      "sha256": "183a72d844c35792f40826effc996b95f3865bbc28eb309db3a67f41b524849c",
+      "size_bytes": 504
+    },
+    {
+      "path": "evidence/inference/20260806T141742Z-2496ff60fddb-25470a33edd7/environment.json",
+      "sha256": "189cf2a4b57fbfdb22c502b634aec024038744ea6b7be6f644e0ca822018b9a4",
+      "size_bytes": 1482
+    },
+    {
+      "path": "evidence/inference/20260806T141742Z-2496ff60fddb-25470a33edd7/execution_order.json",
+      "sha256": "7a24f8a5ddef8f956625e7a2c63461af0aa4cf4ee33497c4803225faf74f3522",
+      "size_bytes": 18863
+    },
+    {
+      "path": "evidence/inference/20260806T141742Z-2496ff60fddb-25470a33edd7/raw_replicates.jsonl",
+      "sha256": "ad7be864a611edfedf6bb2ba3e477ddb7d31f7f66fe00c1ffacd0c98ccebbba4",
+      "size_bytes": 488418
+    },
+    {
+      "path": "evidence/inference/20260806T141742Z-2496ff60fddb-25470a33edd7/resolved_config.yaml",
+      "sha256": "f30299593323e1f61222f4dea0d345cf146dfe044238e37de978eb46fa1da002",
+      "size_bytes": 637
+    },
+    {
+      "path": "evidence/inference/20260806T141742Z-2496ff60fddb-25470a33edd7/run_manifest.json",
+      "sha256": "5f228535584d2e4945c6bb1c1642a8aa43bf70c76ace79083875377193fed7bf",
+      "size_bytes": 1220
+    },
+    {
+      "path": "evidence/inference/20260806T141742Z-2496ff60fddb-25470a33edd7/summary.json",
+      "sha256": "5fb4ee0edc1f44df4ac56a9664120777d147f15439a19aaa466ac1717cbecbe7",
+      "size_bytes": 50883
+    },
+    {
+      "path": "evidence/inference/20260806T141742Z-2496ff60fddb-25470a33edd7/summary.md",
+      "sha256": "e34926b0ad3e5b7fa32ec92e3807447885627761b00d0b743d30f6358d0eb83c",
+      "size_bytes": 874
+    },
+    {
+      "path": "evidence/profiler-p128-g32.json",
+      "sha256": "aa5ef29e545911378eff8a14368b64de101847ce6759b8ff36ebdab2027285c9",
+      "size_bytes": 15112
+    },
+    {
+      "path": "summary.json",
+      "sha256": "7e4fed079a97de95cc6f3158f18025f8a1e3dcd75875da2628ffb18ad25e13b4",
+      "size_bytes": 10280
+    }
+  ],
+  "generated_at_utc": "2026-08-06T14:30:48.254447+00:00",
+  "schema_version": 1,
+  "source_git_commit_sha": "2496ff60fddbac1c426c8a87a3983809b0f0753e",
+  "source_run_id": "20260806T141742Z-2496ff60fddb-25470a33edd7",
+  "stage": "stage9-kv-cache-generation"
+}

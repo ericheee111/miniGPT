@@ -145,7 +145,12 @@ python train.py --config configs/char_gpt.yaml --resume checkpoints/char_gpt/lat
 
 ```powershell
 python generate.py --checkpoint checkpoints/smoke/latest.pt --prompt "ROMEO:" --max-new-tokens 64 --temperature 0.8 --top-k 20 --seed 1337
+python generate.py --checkpoint checkpoints/smoke/latest.pt --prompt "ROMEO:" --max-new-tokens 64 --temperature 0.8 --top-k 20 --seed 1337 --cached
 ```
+
+默认命令保留逐 token 完整 forward 的 uncached baseline；显式 `--cached` 使用 prompt prefill、
+增量 decode 和 caller-owned KV cache。超过 learned absolute-position `block_size` 后会重新
+prefill 最新窗口，以保持与 baseline 相同的位置重编号和采样结果。
 
 配置中的 `training.max_steps` 是完整实验计划，`training.lr_decay_steps` 是独立的学习率
 调度 horizon；`--run-until-step` 只决定本次进程在哪里退出，不改写 checkpoint 中的实验
@@ -341,6 +346,27 @@ strict run manifests 和六份 comparison JSON。四种 case 中，两组 candid
 都低于两组 baseline，但所有严格 comparison 都因至少一侧 CV 超过 5% 而
 `not_comparable`，所以当前不声称已经稳定证明 batch-only 提速。
 
+### Stage 9 KV-cache inference evidence
+
+[`benchmark_inference.py`](benchmark_inference.py) 独立测量 cached/uncached 生成，不复用训练
+step timer，也不把 Profiler 时间当吞吐。canonical matrix 覆盖 prompt 16/32/64/128、生成
+8/32/64、batch size 1；每个 mode/case 的 replicate 都在独立进程中使用固定权重和 forced
+tokens，并记录 prefill/TTFT、median decode latency、tokens/s、端到端延迟、worker-lifetime
+peak RSS 和 KV-cache bytes。
+
+```powershell
+python benchmark_inference.py --config configs/inference_benchmark_stage9.yaml
+python profile_inference.py `
+  --config configs/inference_benchmark_stage9.yaml `
+  --output reports/inference-profile-stage9/profile-p128-g32.json
+python generate_stage9_evidence.py --verify
+```
+
+[Stage 9 证据包](docs/results/kv-cache-generation/README.md) 绑定 168 个 raw replicate、resolved
+config、环境、执行顺序、summary 和独立 profiler。12 个 case 的 cached 描述性端到端中位数
+都较低，但 5 个 case 的 CV 超过 5%，因此总体 strict verdict 是 `not_comparable`；报告不将
+描述性差异升级为整体性能提升结论。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
@@ -427,13 +453,16 @@ miniGPT/
 │   ├── optimization.py      # seed / AdamW / LR schedule
 │   ├── checkpoint.py        # 原子 checkpoint 与 RNG 恢复
 │   ├── trainer.py           # 训练编排与可观测性
-│   └── benchmark_*.py       # benchmark、报告与 workload
+│   ├── benchmark_*.py       # 训练 benchmark、报告与 workload
+│   └── inference_*.py       # KV-cache inference benchmark 与 profiler
 ├── tests/
 ├── prepare_data.py
 ├── train.py
 ├── generate.py
 ├── benchmark.py
-└── profile_model.py
+├── benchmark_inference.py
+├── profile_inference.py
+└── generate_stage9_evidence.py
 ```
 
 阶段 5 的设计与实施依据见
@@ -459,6 +488,9 @@ python train.py --help
 python generate.py --help
 python benchmark.py --help
 python profile_model.py --help
+python benchmark_inference.py --help
+python profile_inference.py --help
+python generate_stage9_evidence.py --help
 ```
 
 测试遵循 Given/When/Then 结构；网络相关测试用 `file://` 本地语料，不依赖真实 HTTP。
@@ -466,7 +498,8 @@ python profile_model.py --help
 
 ## Roadmap
 
-- 增加 KV cache，对比缓存前后的生成吞吐和算子 trace。
+- Stage 9 已完成 KV cache、cached generation、overflow re-prefill 和隔离推理证据。
+- 下一阶段尚未决定；开始新的模型或性能特性前先明确 stage 设计。
 - 增加 BPE tokenizer，并保持 checkpoint/tokenizer 版本兼容。
 - 增加 mixed precision 与 CUDA benchmark，同时保留 CPU baseline。
 - 增加梯度累积、数据加载 worker 和更长训练实验。
@@ -482,6 +515,8 @@ python profile_model.py --help
   completed step 及全部全局/批处理/采样 RNG，恢复前严格校验实验身份。
 - 构建 CPU 性能工程链路，使用重复 benchmark、吞吐/CV/RSS 指标与 PyTorch Profiler
   scope 定位数据、前反向和优化器阶段开销。
+- 实现显式 KV cache、prompt prefill 和增量 decode，在 learned-position 窗口溢出时
+  re-prefill，并以 fresh-process inference benchmark 验证数值与采样等价。
 - 在 Python 3.11–3.14 下执行 Ruff `ALL`、basedpyright `all` 和严格 pytest 门禁，并在
   Windows/Linux CI 中验证可移植性。
 

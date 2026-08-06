@@ -1,0 +1,1010 @@
+[
+  {
+    "case_name": "p32-g8",
+    "execution_index": 0,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 1,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 2,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 3,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 4,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 5,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 6,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 7,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 8,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 9,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 10,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 11,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 12,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 13,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 14,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 15,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 16,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 17,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 18,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 19,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 20,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 21,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 22,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 23,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 24,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 25,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 26,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 27,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 28,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 29,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 30,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 31,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 32,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 33,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 34,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 35,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 36,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 37,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 38,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 39,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 40,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 41,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 42,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 43,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 44,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 45,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 46,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 47,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 48,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 49,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 50,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 51,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 52,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 53,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 54,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 55,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 56,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 57,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 58,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 59,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 60,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 61,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 62,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 63,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 64,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 65,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 66,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 67,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 68,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 69,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 70,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 71,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 72,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 73,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 74,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 75,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 76,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 77,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 78,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 79,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 80,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 81,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 82,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 83,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 84,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 85,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 86,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 87,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 88,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 89,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 90,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 91,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 92,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 93,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 94,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 95,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 96,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 97,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 98,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 99,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 100,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 101,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 102,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 103,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 104,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 105,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 106,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 107,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 108,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 109,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 110,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 111,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 112,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 113,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 114,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 115,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 116,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 117,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 118,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 119,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 120,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 121,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 122,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 123,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 124,
+    "mode": "cached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g32",
+    "execution_index": 125,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 126,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 127,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 128,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 129,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 130,
+    "mode": "cached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 131,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 132,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 133,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 134,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 135,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 136,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 137,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 138,
+    "mode": "cached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 139,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 140,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 141,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 142,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 143,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 144,
+    "mode": "uncached",
+    "replicate_index": 1
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 145,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g64",
+    "execution_index": 146,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 147,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 148,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 149,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 150,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 151,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p32-g8",
+    "execution_index": 152,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 153,
+    "mode": "cached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 154,
+    "mode": "uncached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p128-g8",
+    "execution_index": 155,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 156,
+    "mode": "uncached",
+    "replicate_index": 2
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 157,
+    "mode": "uncached",
+    "replicate_index": 5
+  },
+  {
+    "case_name": "p32-g32",
+    "execution_index": 158,
+    "mode": "cached",
+    "replicate_index": 6
+  },
+  {
+    "case_name": "p64-g64",
+    "execution_index": 159,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 160,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g32",
+    "execution_index": 161,
+    "mode": "cached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p128-g64",
+    "execution_index": 162,
+    "mode": "uncached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p16-g8",
+    "execution_index": 163,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 164,
+    "mode": "uncached",
+    "replicate_index": 3
+  },
+  {
+    "case_name": "p64-g32",
+    "execution_index": 165,
+    "mode": "uncached",
+    "replicate_index": 4
+  },
+  {
+    "case_name": "p32-g64",
+    "execution_index": 166,
+    "mode": "cached",
+    "replicate_index": 0
+  },
+  {
+    "case_name": "p64-g8",
+    "execution_index": 167,
+    "mode": "cached",
+    "replicate_index": 4
+  }
+]

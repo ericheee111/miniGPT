@@ -1,0 +1,1486 @@
+{
+  "cases": [
+    {
+      "cached": {
+        "case_name": "p16-g8",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.0927895357451067,
+          "count": 7,
+          "median": 8.204400073736906,
+          "median_absolute_deviation": 0.05159992724657059
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.0989225187044305,
+          "count": 7,
+          "median": 975.0865301667563,
+          "median_absolute_deviation": 6.094282220169816
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 94208.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 1.1396581222210445,
+          "count": 7,
+          "median": 0.9227998089045286,
+          "median_absolute_deviation": 0.0035997945815324783
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.08922319161428736,
+          "count": 7,
+          "median": 213.38671875,
+          "median_absolute_deviation": 0.1484375
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 7.506920408503655,
+          "count": 7,
+          "median": 1.2761999387294054,
+          "median_absolute_deviation": 0.011399853974580765
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 7.506920408503655,
+          "count": 7,
+          "median": 1.2761999387294054,
+          "median_absolute_deviation": 0.011399853974580765
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 8,
+        "name": "p16-g8",
+        "prompt_length": 16
+      },
+      "comparison": {
+        "case_name": "p16-g8",
+        "decode_time_change_percent": -30.69472012148111,
+        "end_to_end_change_percent": -24.43703574516559,
+        "reasons": [],
+        "throughput_change_percent": 32.3399644073679,
+        "verdict": "pass"
+      },
+      "uncached": {
+        "case_name": "p16-g8",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 3.254260661822108,
+          "count": 7,
+          "median": 10.857700137421489,
+          "median_absolute_deviation": 0.18210033886134624
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 3.1626493152251007,
+          "count": 7,
+          "median": 736.8042862436113,
+          "median_absolute_deviation": 12.271611416246287
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 2.793293576368242,
+          "count": 7,
+          "median": 1.3315000105649233,
+          "median_absolute_deviation": 0.022900057956576347
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.15853768730285164,
+          "count": 7,
+          "median": 213.8046875,
+          "median_absolute_deviation": 0.3203125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 3.2492602912293336,
+          "count": 7,
+          "median": 1.2630000710487366,
+          "median_absolute_deviation": 0.010699965059757233
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 3.2492602912293336,
+          "count": 7,
+          "median": 1.2630000710487366,
+          "median_absolute_deviation": 0.010699965059757233
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p16-g32",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.89383152610974,
+          "count": 7,
+          "median": 31.918900087475777,
+          "median_absolute_deviation": 0.2693000715225935
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.91654891316775,
+          "count": 7,
+          "median": 1002.5408116289084,
+          "median_absolute_deviation": 8.530417829605994
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 192512.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 1.5972927394298877,
+          "count": 7,
+          "median": 0.919099897146225,
+          "median_absolute_deviation": 0.0074999406933784485
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.1415677568581814,
+          "count": 7,
+          "median": 215.09375,
+          "median_absolute_deviation": 0.203125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 6.696795173737994,
+          "count": 7,
+          "median": 1.3003998901695013,
+          "median_absolute_deviation": 0.04260009154677391
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 6.696795173737994,
+          "count": 7,
+          "median": 1.3003998901695013,
+          "median_absolute_deviation": 0.04260009154677391
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 32,
+        "name": "p16-g32",
+        "prompt_length": 16
+      },
+      "comparison": {
+        "case_name": "p16-g32",
+        "decode_time_change_percent": -42.670918188033966,
+        "end_to_end_change_percent": -39.41178809582496,
+        "reasons": [],
+        "throughput_change_percent": 65.04860740593858,
+        "verdict": "pass"
+      },
+      "uncached": {
+        "case_name": "p16-g32",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.6994226725181465,
+          "count": 7,
+          "median": 52.68170009367168,
+          "median_absolute_deviation": 0.6997997406870127
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.719036267338625,
+          "count": 7,
+          "median": 607.4215513755593,
+          "median_absolute_deviation": 7.962935576169798
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 1.3366142009181985,
+          "count": 7,
+          "median": 1.6032001003623009,
+          "median_absolute_deviation": 0.013599870726466179
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.13048129823199126,
+          "count": 7,
+          "median": 216.65625,
+          "median_absolute_deviation": 0.265625
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 2.293493724514736,
+          "count": 7,
+          "median": 1.2678999919444323,
+          "median_absolute_deviation": 0.018300022929906845
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 2.293493724514736,
+          "count": 7,
+          "median": 1.2678999919444323,
+          "median_absolute_deviation": 0.018300022929906845
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p16-g64",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.7605995511640122,
+          "count": 7,
+          "median": 63.656399957835674,
+          "median_absolute_deviation": 0.5036999937146902
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.7792375016552668,
+          "count": 7,
+          "median": 1005.3977297238285,
+          "median_absolute_deviation": 7.893049270887559
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 323584.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 1.4654341922220553,
+          "count": 7,
+          "median": 0.9279998484998941,
+          "median_absolute_deviation": 0.00390014611184597
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.1363647571899349,
+          "count": 7,
+          "median": 216.21875,
+          "median_absolute_deviation": 0.2421875
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 6.739356253980054,
+          "count": 7,
+          "median": 1.315099885687232,
+          "median_absolute_deviation": 0.023199710994958878
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 6.739356253980054,
+          "count": 7,
+          "median": 1.315099885687232,
+          "median_absolute_deviation": 0.023199710994958878
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 64,
+        "name": "p16-g64",
+        "prompt_length": 16
+      },
+      "comparison": {
+        "case_name": "p16-g64",
+        "decode_time_change_percent": -52.621647673423276,
+        "end_to_end_change_percent": -50.23978655330018,
+        "reasons": [],
+        "throughput_change_percent": 100.96376818623187,
+        "verdict": "pass"
+      },
+      "uncached": {
+        "case_name": "p16-g64",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.147139102806046,
+          "count": 7,
+          "median": 127.92630004696548,
+          "median_absolute_deviation": 0.6283000111579895
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.1563929112285725,
+          "count": 7,
+          "median": 500.28805629885125,
+          "median_absolute_deviation": 2.4451166369204884
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 0.9206488188288542,
+          "count": 7,
+          "median": 1.958700129762292,
+          "median_absolute_deviation": 0.009100185707211494
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.14401643023706098,
+          "count": 7,
+          "median": 217.8046875,
+          "median_absolute_deviation": 0.34765625
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 3.1670555621861745,
+          "count": 7,
+          "median": 1.2938999570906162,
+          "median_absolute_deviation": 0.023499829694628716
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 3.1670555621861745,
+          "count": 7,
+          "median": 1.2938999570906162,
+          "median_absolute_deviation": 0.023499829694628716
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p32-g8",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 6.131414293322734,
+          "count": 7,
+          "median": 8.756999857723713,
+          "median_absolute_deviation": 0.3475998528301716
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 6.102901942430739,
+          "count": 7,
+          "median": 913.5548852320654,
+          "median_absolute_deviation": 37.76149826077517
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 159744.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 3.9412110391268818,
+          "count": 7,
+          "median": 0.9171001147478819,
+          "median_absolute_deviation": 0.034899916499853134
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.25358245907595384,
+          "count": 7,
+          "median": 213.91796875,
+          "median_absolute_deviation": 0.36328125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 5.866616859336802,
+          "count": 7,
+          "median": 1.6215001232922077,
+          "median_absolute_deviation": 0.09720004163682461
+        },
+        "replicate_count": 7,
+        "stability": "unstable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 5.866616859336802,
+          "count": 7,
+          "median": 1.6215001232922077,
+          "median_absolute_deviation": 0.09720004163682461
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 8,
+        "name": "p32-g8",
+        "prompt_length": 32
+      },
+      "comparison": {
+        "case_name": "p32-g8",
+        "decode_time_change_percent": -44.81284931425088,
+        "end_to_end_change_percent": -35.44177934551803,
+        "reasons": [
+          "end-to-end or decode CV exceeds the configured limit"
+        ],
+        "throughput_change_percent": 54.89894081065798,
+        "verdict": "not_comparable"
+      },
+      "uncached": {
+        "case_name": "p32-g8",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 0.7956695317455819,
+          "count": 7,
+          "median": 13.564500026404858,
+          "median_absolute_deviation": 0.05250005051493645
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 0.7987531676627228,
+          "count": 7,
+          "median": 589.7747786079163,
+          "median_absolute_deviation": 2.273863956410878
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 0.5567772749812908,
+          "count": 7,
+          "median": 1.661800080910325,
+          "median_absolute_deviation": 0.0057998113334178925
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.11435525674578892,
+          "count": 7,
+          "median": 213.9375,
+          "median_absolute_deviation": 0.19921875
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 1.2270375753860443,
+          "count": 7,
+          "median": 1.5683001838624477,
+          "median_absolute_deviation": 0.008399831131100655
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 1.2270375753860443,
+          "count": 7,
+          "median": 1.5683001838624477,
+          "median_absolute_deviation": 0.008399831131100655
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p32-g32",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.3303685882534295,
+          "count": 7,
+          "median": 31.856599962338805,
+          "median_absolute_deviation": 0.32819993793964386
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.3249376893138174,
+          "count": 7,
+          "median": 1004.5014231848572,
+          "median_absolute_deviation": 10.24326097322421
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 258048.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 1.0335672747631246,
+          "count": 7,
+          "median": 0.9239001665264368,
+          "median_absolute_deviation": 0.0029001384973526
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.1352750591414864,
+          "count": 7,
+          "median": 216.015625,
+          "median_absolute_deviation": 0.12890625
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 1.764774586928123,
+          "count": 7,
+          "median": 1.6132998280227184,
+          "median_absolute_deviation": 0.025900080800056458
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 1.764774586928123,
+          "count": 7,
+          "median": 1.6132998280227184,
+          "median_absolute_deviation": 0.025900080800056458
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 32,
+        "name": "p32-g32",
+        "prompt_length": 32
+      },
+      "comparison": {
+        "case_name": "p32-g32",
+        "decode_time_change_percent": -52.476716337043825,
+        "end_to_end_change_percent": -50.0219639833775,
+        "reasons": [],
+        "throughput_change_percent": 100.08789454379601,
+        "verdict": "pass"
+      },
+      "uncached": {
+        "case_name": "p32-g32",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.2404924372632977,
+          "count": 7,
+          "median": 63.741200137883425,
+          "median_absolute_deviation": 0.46069989912211895
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.2462947435152572,
+          "count": 7,
+          "median": 502.0300830668135,
+          "median_absolute_deviation": 3.6024667259355283
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 1.1970613023731704,
+          "count": 7,
+          "median": 1.9441000185906887,
+          "median_absolute_deviation": 0.011499971151351929
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.09025014959170076,
+          "count": 7,
+          "median": 215.99609375,
+          "median_absolute_deviation": 0.16015625
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 4.064970471113074,
+          "count": 7,
+          "median": 1.586599973961711,
+          "median_absolute_deviation": 0.02210005186498165
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 4.064970471113074,
+          "count": 7,
+          "median": 1.586599973961711,
+          "median_absolute_deviation": 0.02210005186498165
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p32-g64",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.2432820845100914,
+          "count": 7,
+          "median": 62.91350000537932,
+          "median_absolute_deviation": 0.36249984987080097
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.258781355094047,
+          "count": 7,
+          "median": 1017.2697432908324,
+          "median_absolute_deviation": 5.895351446088057
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 389120.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 0.869482285111124,
+          "count": 7,
+          "median": 0.9280000813305378,
+          "median_absolute_deviation": 0.002400018274784088
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.11612582813111845,
+          "count": 7,
+          "median": 216.08203125,
+          "median_absolute_deviation": 0.23046875
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 1.683825344605116,
+          "count": 7,
+          "median": 1.6286000609397888,
+          "median_absolute_deviation": 0.01500011421740055
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 1.683825344605116,
+          "count": 7,
+          "median": 1.6286000609397888,
+          "median_absolute_deviation": 0.01500011421740055
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 64,
+        "name": "p32-g64",
+        "prompt_length": 32
+      },
+      "comparison": {
+        "case_name": "p32-g64",
+        "decode_time_change_percent": -60.76773278830976,
+        "end_to_end_change_percent": -58.43436218709649,
+        "reasons": [],
+        "throughput_change_percent": 140.58334061929466,
+        "verdict": "pass"
+      },
+      "uncached": {
+        "case_name": "p32-g64",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.098781482704091,
+          "count": 7,
+          "median": 151.3594000134617,
+          "median_absolute_deviation": 1.2624000664800406
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.092014326450517,
+          "count": 7,
+          "median": 422.83465707652067,
+          "median_absolute_deviation": 3.4974459672463354
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 0.6802542630840764,
+          "count": 7,
+          "median": 2.365400083363056,
+          "median_absolute_deviation": 0.009700190275907516
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.10388433669052521,
+          "count": 7,
+          "median": 217.59375,
+          "median_absolute_deviation": 0.05859375
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 2.320367619789013,
+          "count": 7,
+          "median": 1.628299942240119,
+          "median_absolute_deviation": 0.030299881473183632
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 2.320367619789013,
+          "count": 7,
+          "median": 1.628299942240119,
+          "median_absolute_deviation": 0.030299881473183632
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p64-g8",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 2.335623046994767,
+          "count": 7,
+          "median": 9.505899855867028,
+          "median_absolute_deviation": 0.16069994308054447
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 2.377174453432691,
+          "count": 7,
+          "median": 841.5826088323886,
+          "median_absolute_deviation": 14.471844219394029
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 290816.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 1.179426801929167,
+          "count": 7,
+          "median": 0.9491001255810261,
+          "median_absolute_deviation": 0.005899928510189056
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.0855365402443992,
+          "count": 7,
+          "median": 215.44921875,
+          "median_absolute_deviation": 0.0390625
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 2.214612766861565,
+          "count": 7,
+          "median": 2.326000016182661,
+          "median_absolute_deviation": 0.013699987903237343
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 2.214612766861565,
+          "count": 7,
+          "median": 2.326000016182661,
+          "median_absolute_deviation": 0.013699987903237343
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 8,
+        "name": "p64-g8",
+        "prompt_length": 64
+      },
+      "comparison": {
+        "case_name": "p64-g8",
+        "decode_time_change_percent": -60.77612270041604,
+        "end_to_end_change_percent": -51.66573532041685,
+        "reasons": [],
+        "throughput_change_percent": 106.89256506314648,
+        "verdict": "pass"
+      },
+      "uncached": {
+        "case_name": "p64-g8",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.1683552202510024,
+          "count": 7,
+          "median": 19.66700004413724,
+          "median_absolute_deviation": 0.08410005830228329
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.162325116747446,
+          "count": 7,
+          "median": 406.7727656503876,
+          "median_absolute_deviation": 1.746912527343909
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 0.8457398156246753,
+          "count": 7,
+          "median": 2.419699914753437,
+          "median_absolute_deviation": 0.022300053387880325
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.04114781793387303,
+          "count": 7,
+          "median": 214.3125,
+          "median_absolute_deviation": 0.078125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 2.8291546221880424,
+          "count": 7,
+          "median": 2.2857999429106712,
+          "median_absolute_deviation": 0.0241999514400959
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 2.8291546221880424,
+          "count": 7,
+          "median": 2.2857999429106712,
+          "median_absolute_deviation": 0.0241999514400959
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p64-g32",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 10.670734483860171,
+          "count": 7,
+          "median": 33.01500016823411,
+          "median_absolute_deviation": 0.916000222787261
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 9.230304180508005,
+          "count": 7,
+          "median": 969.2563936676667,
+          "median_absolute_deviation": 27.65939979583368
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 389120.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 10.555139048037738,
+          "count": 7,
+          "median": 0.9424001909792423,
+          "median_absolute_deviation": 0.015800120308995247
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.11243076412029962,
+          "count": 7,
+          "median": 216.3515625,
+          "median_absolute_deviation": 0.1953125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 11.798970854230992,
+          "count": 7,
+          "median": 2.3696001153439283,
+          "median_absolute_deviation": 0.05450006574392319
+        },
+        "replicate_count": 7,
+        "stability": "unstable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 11.798970854230992,
+          "count": 7,
+          "median": 2.3696001153439283,
+          "median_absolute_deviation": 0.05450006574392319
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 32,
+        "name": "p64-g32",
+        "prompt_length": 64
+      },
+      "comparison": {
+        "case_name": "p64-g32",
+        "decode_time_change_percent": -65.74584934015803,
+        "end_to_end_change_percent": -63.11783065372101,
+        "reasons": [
+          "end-to-end or decode CV exceeds the configured limit"
+        ],
+        "throughput_change_percent": 171.13372605911783,
+        "verdict": "not_comparable"
+      },
+      "uncached": {
+        "case_name": "p64-g32",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 2.470529278805805,
+          "count": 7,
+          "median": 89.51480011455715,
+          "median_absolute_deviation": 0.7987001445144415
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 2.4247785378560924,
+          "count": 7,
+          "median": 357.4827845121454,
+          "median_absolute_deviation": 3.2183735730909007
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 2.4494601148228643,
+          "count": 7,
+          "median": 2.751199994236231,
+          "median_absolute_deviation": 0.02210005186498165
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.09659044305269564,
+          "count": 7,
+          "median": 217.265625,
+          "median_absolute_deviation": 0.14453125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 4.359486016981473,
+          "count": 7,
+          "median": 2.368499990552664,
+          "median_absolute_deviation": 0.04830001853406429
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 4.359486016981473,
+          "count": 7,
+          "median": 2.368499990552664,
+          "median_absolute_deviation": 0.04830001853406429
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p64-g64",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 1.0823119533222707,
+          "count": 7,
+          "median": 64.9553001858294,
+          "median_absolute_deviation": 0.73970016092062
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 1.0818943787249988,
+          "count": 7,
+          "median": 985.2929601880617,
+          "median_absolute_deviation": 11.34959980008523
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 520192.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 0.8566973786107738,
+          "count": 7,
+          "median": 0.9382001589983702,
+          "median_absolute_deviation": 0.00400003045797348
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.0808548595398426,
+          "count": 7,
+          "median": 216.0625,
+          "median_absolute_deviation": 0.078125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 2.70934914872975,
+          "count": 7,
+          "median": 2.615399891510606,
+          "median_absolute_deviation": 0.04550023004412651
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 2.70934914872975,
+          "count": 7,
+          "median": 2.615399891510606,
+          "median_absolute_deviation": 0.04550023004412651
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 64,
+        "name": "p64-g64",
+        "prompt_length": 64
+      },
+      "comparison": {
+        "case_name": "p64-g64",
+        "decode_time_change_percent": -69.96413919151804,
+        "end_to_end_change_percent": -67.94069182509152,
+        "reasons": [],
+        "throughput_change_percent": 211.92189006207562,
+        "verdict": "pass"
+      },
+      "uncached": {
+        "case_name": "p64-g64",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 0.6262626158510365,
+          "count": 7,
+          "median": 202.60980003513396,
+          "median_absolute_deviation": 1.2256000190973282
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 0.6244601091713469,
+          "count": 7,
+          "median": 315.87810653236886,
+          "median_absolute_deviation": 1.899278600750904
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 1.195292947257486,
+          "count": 7,
+          "median": 3.123600035905838,
+          "median_absolute_deviation": 0.008400063961744308
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.10610545993468741,
+          "count": 7,
+          "median": 218.3515625,
+          "median_absolute_deviation": 0.20703125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 3.1612770011960207,
+          "count": 7,
+          "median": 2.329999813809991,
+          "median_absolute_deviation": 0.05279970355331898
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 3.1612770011960207,
+          "count": 7,
+          "median": 2.329999813809991,
+          "median_absolute_deviation": 0.05279970355331898
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p128-g8",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 2.872199407482825,
+          "count": 7,
+          "median": 11.379000032320619,
+          "median_absolute_deviation": 0.273300101980567
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 2.8942675863435263,
+          "count": 7,
+          "median": 703.0494751100277,
+          "median_absolute_deviation": 16.489748035182856
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 552960.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 3.631623939806393,
+          "count": 7,
+          "median": 0.9725000709295273,
+          "median_absolute_deviation": 0.01629977487027645
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.12355310753562464,
+          "count": 7,
+          "median": 216.06640625,
+          "median_absolute_deviation": 0.1015625
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 2.7403149233443864,
+          "count": 7,
+          "median": 3.9331000298261642,
+          "median_absolute_deviation": 0.04739989526569843
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 2.7403149233443864,
+          "count": 7,
+          "median": 3.9331000298261642,
+          "median_absolute_deviation": 0.04739989526569843
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 8,
+        "name": "p128-g8",
+        "prompt_length": 128
+      },
+      "comparison": {
+        "case_name": "p128-g8",
+        "decode_time_change_percent": -76.41738012620665,
+        "end_to_end_change_percent": -65.85589790752415,
+        "reasons": [
+          "end-to-end or decode CV exceeds the configured limit"
+        ],
+        "throughput_change_percent": 192.87635015019612,
+        "verdict": "not_comparable"
+      },
+      "uncached": {
+        "case_name": "p128-g8",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 9.115824221586855,
+          "count": 7,
+          "median": 33.326399978250265,
+          "median_absolute_deviation": 0.45790011063218117
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 7.761303718923281,
+          "count": 7,
+          "median": 240.04993054218343,
+          "median_absolute_deviation": 3.3442015971287162
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 9.399490801709987,
+          "count": 7,
+          "median": 4.123799968510866,
+          "median_absolute_deviation": 0.0812998041510582
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.10356798825566461,
+          "count": 7,
+          "median": 215.609375,
+          "median_absolute_deviation": 0.12109375
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 11.625653075654363,
+          "count": 7,
+          "median": 3.968600183725357,
+          "median_absolute_deviation": 0.1297001726925373
+        },
+        "replicate_count": 7,
+        "stability": "unstable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 11.625653075654363,
+          "count": 7,
+          "median": 3.968600183725357,
+          "median_absolute_deviation": 0.1297001726925373
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p128-g32",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 12.130106285479902,
+          "count": 7,
+          "median": 34.90479988977313,
+          "median_absolute_deviation": 0.3428999334573746
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 9.76905524180838,
+          "count": 7,
+          "median": 916.7793570240689,
+          "median_absolute_deviation": 9.095668378069035
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 651264.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 11.595513832735788,
+          "count": 7,
+          "median": 0.9516000282019377,
+          "median_absolute_deviation": 0.007200054824352264
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.14962007026503604,
+          "count": 7,
+          "median": 216.5546875,
+          "median_absolute_deviation": 0.19140625
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 12.957407049462095,
+          "count": 7,
+          "median": 3.984499955549836,
+          "median_absolute_deviation": 0.09749992750585079
+        },
+        "replicate_count": 7,
+        "stability": "unstable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 12.957407049462095,
+          "count": 7,
+          "median": 3.984499955549836,
+          "median_absolute_deviation": 0.09749992750585079
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 32,
+        "name": "p128-g32",
+        "prompt_length": 128
+      },
+      "comparison": {
+        "case_name": "p128-g32",
+        "decode_time_change_percent": -78.62389483629757,
+        "end_to_end_change_percent": -75.6644979893976,
+        "reasons": [
+          "end-to-end or decode CV exceeds the configured limit"
+        ],
+        "throughput_change_percent": 310.92228118586746,
+        "verdict": "not_comparable"
+      },
+      "uncached": {
+        "case_name": "p128-g32",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 0.7029538931861017,
+          "count": 7,
+          "median": 143.43159995041788,
+          "median_absolute_deviation": 0.5474998615682125
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 0.7044309060767162,
+          "count": 7,
+          "median": 223.10285886138,
+          "median_absolute_deviation": 0.8483785806522235
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 0.8267742444546372,
+          "count": 7,
+          "median": 4.45169978775084,
+          "median_absolute_deviation": 0.027999747544527054
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.08801753436427837,
+          "count": 7,
+          "median": 218.75,
+          "median_absolute_deviation": 0.12109375
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 2.5221919314790844,
+          "count": 7,
+          "median": 3.970799967646599,
+          "median_absolute_deviation": 0.09680003859102726
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 2.5221919314790844,
+          "count": 7,
+          "median": 3.970799967646599,
+          "median_absolute_deviation": 0.09680003859102726
+        }
+      }
+    },
+    {
+      "cached": {
+        "case_name": "p128-g64",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 11.210114342884783,
+          "count": 7,
+          "median": 68.18159995600581,
+          "median_absolute_deviation": 0.2546000760048628
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 9.176731906979265,
+          "count": 7,
+          "median": 938.6696710152887,
+          "median_absolute_deviation": 3.492089997284552
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 782336.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 10.528921719334287,
+          "count": 7,
+          "median": 0.9592999704182148,
+          "median_absolute_deviation": 0.00809994526207447
+        },
+        "mode": "cached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.13851051316566357,
+          "count": 7,
+          "median": 216.6171875,
+          "median_absolute_deviation": 0.2890625
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 8.375267078475424,
+          "count": 7,
+          "median": 4.022599896416068,
+          "median_absolute_deviation": 0.0967998057603836
+        },
+        "replicate_count": 7,
+        "stability": "unstable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 8.375267078475424,
+          "count": 7,
+          "median": 4.022599896416068,
+          "median_absolute_deviation": 0.0967998057603836
+        }
+      },
+      "case": {
+        "batch_size": 1,
+        "generated_length": 64,
+        "name": "p128-g64",
+        "prompt_length": 128
+      },
+      "comparison": {
+        "case_name": "p128-g64",
+        "decode_time_change_percent": -80.5309207619312,
+        "end_to_end_change_percent": -78.5759196906085,
+        "reasons": [
+          "end-to-end or decode CV exceeds the configured limit"
+        ],
+        "throughput_change_percent": 366.7644937652879,
+        "verdict": "not_comparable"
+      },
+      "uncached": {
+        "case_name": "p128-g64",
+        "end_to_end_time_ms": {
+          "coefficient_of_variation_percent": 0.9602504930708263,
+          "count": 7,
+          "median": 318.2474998757243,
+          "median_absolute_deviation": 1.9746997859328985
+        },
+        "environment_signatures": [
+          "8118de458c8c146b7c18843170999b4981ef7ab8c0377897d3c7f31b9f64552f"
+        ],
+        "failure_count": 0,
+        "generated_tokens_per_second": {
+          "coefficient_of_variation_percent": 0.9585932451006477,
+          "count": 7,
+          "median": 201.1013441582165,
+          "median_absolute_deviation": 1.2556083898055874
+        },
+        "kv_cache_bytes": {
+          "coefficient_of_variation_percent": 0.0,
+          "count": 7,
+          "median": 0.0,
+          "median_absolute_deviation": 0.0
+        },
+        "median_decode_time_ms": {
+          "coefficient_of_variation_percent": 0.8244536024106165,
+          "count": 7,
+          "median": 4.927300149574876,
+          "median_absolute_deviation": 0.015300232917070389
+        },
+        "mode": "uncached",
+        "peak_rss_mib": {
+          "coefficient_of_variation_percent": 0.15163629058011185,
+          "count": 7,
+          "median": 218.75,
+          "median_absolute_deviation": 0.1953125
+        },
+        "prefill_time_ms": {
+          "coefficient_of_variation_percent": 2.2906046900103694,
+          "count": 7,
+          "median": 3.9693000726401806,
+          "median_absolute_deviation": 0.060200225561857224
+        },
+        "replicate_count": 7,
+        "stability": "stable",
+        "success_count": 7,
+        "time_to_first_token_ms": {
+          "coefficient_of_variation_percent": 2.2906046900103694,
+          "count": 7,
+          "median": 3.9693000726401806,
+          "median_absolute_deviation": 0.060200225561857224
+        }
+      }
+    }
+  ],
+  "config_sha256": "25470a33edd78ffb25db3344030b88ccb43707dacedfd0a0051fb763a20f1ef5",
+  "failure_count": 0,
+  "replicate_count": 168,
+  "schema_version": 1,
+  "stage": "stage9-kv-cache-generation",
+  "status": "complete",
+  "strict_verdict": "not_comparable",
+  "success_count": 168
+}

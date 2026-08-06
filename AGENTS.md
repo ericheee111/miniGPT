@@ -19,7 +19,9 @@ implements:
 - isolated Benchmark v2 infrastructure with raw evidence, strict manifests, independent comparison
   policy, deterministic identities, and separate profiler evidence;
 - reproducible Stage 7A reference-training evidence;
-- a vectorized, mmap-preserving `TokenBatcher` path with Stage 8 batch-only and end-to-end evidence.
+- a vectorized, mmap-preserving `TokenBatcher` path with Stage 8 batch-only and end-to-end evidence;
+- explicit per-layer KV caches, prompt prefill, incremental decode, cached generation with
+  learned-position overflow re-prefill, and Stage 9 isolated inference evidence.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -68,8 +70,11 @@ dataset remain gitignored.
 - Profiler timings include instrumentation overhead and must never be used as benchmark throughput.
 - Benchmark v2 infrastructure and Stage 8 batcher/mmap optimization are implemented. The committed
   evidence distinguishes isolated batch-path gains from end-to-end training noise.
-- The next stage is undecided. Do not begin KV cache, BPE, GPU, LoRA, distributed training,
-  `torch.compile`, or another optimization without an explicit stage decision.
+- `python benchmark_inference.py --config configs/inference_benchmark_stage9.yaml` runs the separate
+  fresh-process cached/uncached inference matrix. `python profile_inference.py ...` remains
+  descriptive only, and `docs/results/kv-cache-generation/` contains the hash-bound Stage 9 package.
+- The next stage is undecided. Do not begin BPE, GPU, LoRA, distributed training, `torch.compile`,
+  or another optimization without an explicit stage decision.
 
 ## Quality gates
 

@@ -1,7 +1,7 @@
 # Stage 9 — KV Cache Autoregressive Generation Design
 
 Date: 2026-08-06
-Status: approved for TDD implementation
+Status: implemented and verified
 Scope: CPU autoregressive inference, KV cache correctness, and isolated inference evidence
 
 ## 1. Goal and non-goals
@@ -151,4 +151,3 @@ benchmark verdict.
 The committed package under `docs/results/kv-cache-generation/` separates numerical equivalence,
 functional generation, canonical performance, overflow behavior, cache memory, and profiler
 observations. Stage 8 and reference-training evidence are immutable inputs and must not change.
-

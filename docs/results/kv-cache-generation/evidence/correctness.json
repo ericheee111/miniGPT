@@ -1,0 +1,16 @@
+{
+  "cache_bytes_expected": 512,
+  "cache_bytes_observed": 512,
+  "cache_requires_grad": false,
+  "cached_uncached_overflow_tokens_exact_equal": true,
+  "decode_atol": 1e-06,
+  "decode_max_absolute_difference": 1.7881393432617188e-07,
+  "decode_rtol": 1e-05,
+  "decode_within_tolerance": true,
+  "extended_cache_length": 3,
+  "model_buffer_names_unchanged": true,
+  "model_state_names_unchanged": true,
+  "prefill_exact_equal": true,
+  "sampling_generator_states_exact_equal": true,
+  "seed": 20260806
+}
