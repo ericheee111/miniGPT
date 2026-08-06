@@ -355,6 +355,44 @@ class GPT(nn.Module):
             _invalid_cache(reason)
         return self._cached_forward(token_ids, cache, past_length=past_length)
 
+    @staticmethod
+    def _validate_generation_config(
+        *,
+        max_new_tokens: int,
+        temperature: float,
+        top_k: int | None,
+    ) -> None:
+        if max_new_tokens < 0:
+            raise InvalidGenerationConfigError(_GENERATION_LENGTH_REASON)
+        if temperature <= 0.0:
+            raise InvalidGenerationConfigError(_TEMPERATURE_REASON)
+        if top_k is not None and top_k <= 0:
+            raise InvalidGenerationConfigError(_TOP_K_REASON)
+
+    def _sample_next_token(
+        self,
+        next_token_logits: Tensor,
+        *,
+        temperature: float,
+        top_k: int | None,
+        generator: torch.Generator | None,
+    ) -> Tensor:
+        next_token_logits = next_token_logits / temperature
+        if top_k is not None:
+            retained_count = min(top_k, self.config.vocab_size)
+            retained_logits = torch.topk(next_token_logits, retained_count, dim=-1).values
+            cutoff = retained_logits[:, -1].unsqueeze(-1)
+            next_token_logits = next_token_logits.masked_fill(
+                next_token_logits < cutoff,
+                -torch.inf,
+            )
+        probabilities = functional.softmax(next_token_logits, dim=-1)
+        return torch.multinomial(
+            probabilities,
+            num_samples=1,
+            generator=generator,
+        )
+
     @torch.no_grad()
     def generate(
         self,
@@ -367,31 +405,61 @@ class GPT(nn.Module):
     ) -> Tensor:
         """Autoregressively append sampled token IDs to a prompt."""
         self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
-        if max_new_tokens < 0:
-            raise InvalidGenerationConfigError(_GENERATION_LENGTH_REASON)
-        if temperature <= 0.0:
-            raise InvalidGenerationConfigError(_TEMPERATURE_REASON)
-        if top_k is not None and top_k <= 0:
-            raise InvalidGenerationConfigError(_TOP_K_REASON)
+        self._validate_generation_config(
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+        )
 
         generated = token_ids
         for _ in range(max_new_tokens):
             model_input = generated[:, -self.config.block_size :]
             logits, _ = cast("tuple[Tensor, Tensor | None]", self(model_input))
-            next_token_logits = logits[:, -1, :] / temperature
-            if top_k is not None:
-                retained_count = min(top_k, self.config.vocab_size)
-                retained_logits = torch.topk(next_token_logits, retained_count, dim=-1).values
-                cutoff = retained_logits[:, -1].unsqueeze(-1)
-                next_token_logits = next_token_logits.masked_fill(
-                    next_token_logits < cutoff,
-                    -torch.inf,
-                )
-            probabilities = functional.softmax(next_token_logits, dim=-1)
-            next_token = torch.multinomial(
-                probabilities,
-                num_samples=1,
+            next_token = self._sample_next_token(
+                logits[:, -1, :],
+                temperature=temperature,
+                top_k=top_k,
                 generator=generator,
             )
             generated = torch.cat((generated, next_token), dim=1)
+        return generated
+
+    @torch.no_grad()
+    def generate_cached(
+        self,
+        token_ids: Tensor,
+        *,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+        generator: torch.Generator | None = None,
+    ) -> Tensor:
+        """Append sampled tokens while reusing valid historical key/value states."""
+        self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
+        self._validate_generation_config(
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+        )
+        if max_new_tokens == 0:
+            return token_ids
+
+        generated = token_ids
+        model_input = generated[:, -self.config.block_size :]
+        logits, cache = self.prefill(model_input)
+        for generated_index in range(max_new_tokens):
+            next_token = self._sample_next_token(
+                logits[:, -1, :],
+                temperature=temperature,
+                top_k=top_k,
+                generator=generator,
+            )
+            generated = torch.cat((generated, next_token), dim=1)
+            if generated_index + 1 == max_new_tokens:
+                break
+            if cache[0].length < self.config.block_size:
+                logits, cache = self.decode(next_token, cache)
+            else:
+                model_input = generated[:, -self.config.block_size :]
+                logits, cache = self.prefill(model_input)
         return generated

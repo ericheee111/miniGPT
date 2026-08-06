@@ -105,8 +105,8 @@ class CausalSelfAttention(nn.Module):
     @override
     def forward(self, hidden_states: Tensor) -> Tensor:
         """Transform [B,T,C] states through scaled dot-product attention."""
-        output, _ = self._forward_with_cache(hidden_states, None)
-        return output
+        query, key, value = self._project_qkv(hidden_states)
+        return self._attend(query, key, value, past_length=0)
 
     def forward_cached(
         self,
@@ -114,14 +114,22 @@ class CausalSelfAttention(nn.Module):
         cache: LayerKVCache | None,
     ) -> tuple[Tensor, LayerKVCache]:
         """Attend new states over optional historical keys and values."""
-        return self._forward_with_cache(hidden_states, cache)
+        query, key, value = self._project_qkv(hidden_states)
+        past_length = 0
+        if cache is not None:
+            past_length = cache.length
+            key = torch.cat((cache.key, key), dim=2)
+            value = torch.cat((cache.value, value), dim=2)
+        output = self._attend(query, key, value, past_length=past_length)
+        next_cache = LayerKVCache(key=key.detach(), value=value.detach())
+        return output, next_cache
 
-    def _forward_with_cache(
+    def _project_qkv(
         self,
         hidden_states: Tensor,
-        cache: LayerKVCache | None,
-    ) -> tuple[Tensor, LayerKVCache]:
-        batch_size, time_steps, channels = hidden_states.shape
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Project [B,T,C] states and split them into per-head Q, K, and V."""
+        batch_size, time_steps, _ = hidden_states.shape
         projected_qkv = cast("Tensor", self.qkv_projection(hidden_states))
         query = projected_qkv[..., : self.n_embd]
         key = projected_qkv[..., self.n_embd : 2 * self.n_embd]
@@ -129,14 +137,20 @@ class CausalSelfAttention(nn.Module):
         query = query.view(batch_size, time_steps, self.n_head, self.head_size).transpose(1, 2)
         key = key.view(batch_size, time_steps, self.n_head, self.head_size).transpose(1, 2)
         value = value.view(batch_size, time_steps, self.n_head, self.head_size).transpose(1, 2)
+        return query, key, value
 
-        past_length = 0
-        if cache is not None:
-            past_length = cache.length
-            key = torch.cat((cache.key, key), dim=2)
-            value = torch.cat((cache.value, value), dim=2)
-        key_length = past_length + time_steps
-
+    def _attend(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        *,
+        past_length: int,
+    ) -> Tensor:
+        """Apply offset-causal attention to already projected per-head tensors."""
+        batch_size = query.shape[0]
+        time_steps = query.shape[2]
+        key_length = key.shape[2]
         attention_scores = query @ key.transpose(-2, -1)
         attention_scores = attention_scores / math.sqrt(self.head_size)
         allowed_positions = self.causal_mask[
@@ -150,11 +164,9 @@ class CausalSelfAttention(nn.Module):
         attention_weights = cast("Tensor", self.attention_dropout(attention_weights))
 
         context = attention_weights @ value
-        context = context.transpose(1, 2).contiguous().view(batch_size, time_steps, channels)
+        context = context.transpose(1, 2).contiguous().view(batch_size, time_steps, self.n_embd)
         projected = cast("Tensor", self.output_projection(context))
-        output = cast("Tensor", self.residual_dropout(projected))
-        next_cache = LayerKVCache(key=key.detach(), value=value.detach())
-        return output, next_cache
+        return cast("Tensor", self.residual_dropout(projected))
 
 
 @final

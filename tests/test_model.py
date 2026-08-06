@@ -5,7 +5,7 @@ import pytest
 import torch
 from torch import Tensor, nn
 
-from minigpt import model
+from minigpt import layers, model
 
 
 def call_gpt(
@@ -72,6 +72,28 @@ def test_gpt_forward_returns_finite_scalar_loss() -> None:
     assert loss is not None
     assert loss.shape == ()
     assert torch.isfinite(loss)
+
+
+def test_training_forward_does_not_construct_inference_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: cache construction is forbidden while the ordinary training API runs.
+    gpt = model.GPT(tiny_config())
+    token_ids = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
+    targets = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+
+    def reject_cache_construction(*_args: object, **_kwargs: object) -> None:
+        msg = "ordinary forward constructed an inference cache"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(layers, "LayerKVCache", reject_cache_construction)
+
+    # When: the unchanged training-facing forward computes logits and loss.
+    logits, loss = call_gpt(gpt, token_ids, targets)
+
+    # Then: it never allocates or detaches caller-owned inference cache entries.
+    assert logits.shape == (1, 4, 11)
+    assert loss is not None
 
 
 def test_gpt_calls_transformer_block_through_module_protocol() -> None:
@@ -262,22 +284,30 @@ def test_generate_cached_does_not_register_cache_as_model_state() -> None:
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "reason"),
+    ("max_new_tokens", "temperature", "top_k", "reason"),
     [
-        pytest.param({"max_new_tokens": -1}, "non-negative", id="length"),
-        pytest.param({"max_new_tokens": 1, "temperature": 0.0}, "positive", id="temperature"),
-        pytest.param({"max_new_tokens": 1, "top_k": 0}, "positive", id="top-k"),
+        pytest.param(-1, 1.0, None, "non-negative", id="length"),
+        pytest.param(1, 0.0, None, "positive", id="temperature"),
+        pytest.param(1, 1.0, 0, "positive", id="top-k"),
     ],
 )
 def test_generate_cached_validates_sampling_configuration(
-    kwargs: dict[str, int | float], reason: str
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int | None,
+    reason: str,
 ) -> None:
     # Given: a valid prompt and an invalid sampling request.
     gpt = model.GPT(tiny_config())
 
     # When/Then: cached generation reports the same public configuration boundary.
     with pytest.raises(model.InvalidGenerationConfigError, match=reason):
-        _ = gpt.generate_cached(torch.tensor([[1]], dtype=torch.long), **kwargs)
+        _ = gpt.generate_cached(
+            torch.tensor([[1]], dtype=torch.long),
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+        )
 
 
 def test_causal_mask_prevents_future_tokens_affecting_prefix_logits() -> None:

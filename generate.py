@@ -26,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--seed", type=int)
+    parser.add_argument(
+        "--cached",
+        action="store_true",
+        help="Use KV cache inference instead of the full-context generation baseline.",
+    )
     return parser
 
 
@@ -41,7 +46,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     generator = torch.Generator(device="cpu")
     _ = generator.manual_seed(seed)
     prompt = torch.tensor([tokenizer.encode(arguments.prompt)], dtype=torch.long)
-    generated = model.generate(
+    generate_tokens = model.generate_cached if arguments.cached else model.generate
+    generated = generate_tokens(
         prompt,
         max_new_tokens=arguments.max_new_tokens,
         temperature=arguments.temperature,
