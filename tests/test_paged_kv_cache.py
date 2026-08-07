@@ -165,6 +165,24 @@ def test_prefill_and_append_failures_roll_back_allocations(
     pool.verify_invariants()
 
 
+def test_append_capacity_validation_happens_before_physical_allocation() -> None:
+    # Given: a request with no block reservation and an otherwise empty pool.
+    pool = _pool(block_tokens=2, num_blocks=4)
+    pool.reserve("request", 0)
+
+    # When: append would need its first physical block.
+    with pytest.raises(PagedKVCacheCapacityError, match="reserved 0"):
+        pool.append("request", _cache(1))
+
+    # Then: validation failed before allocation counters or ownership changed.
+    metrics = pool.metrics()
+    assert metrics.free_blocks == metrics.total_blocks == 4
+    assert metrics.allocated_blocks == 0
+    assert metrics.allocation_count == 0
+    assert pool.request_cache("request").block_ids == ()
+    pool.verify_invariants()
+
+
 def test_overflow_rebuild_failure_restores_old_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

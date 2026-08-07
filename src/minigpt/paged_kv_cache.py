@@ -269,12 +269,10 @@ class PagedKVCachePool:
             reason = f"append cache length {cache_length} for request {request_id!r}"
             _invalid(f"{reason} must equal {expected}")
         needs_block = table.cache_length % self.config.block_tokens == 0
-        new_blocks = self._acquire_blocks(1) if needs_block else []
         if needs_block:
             self._require_within_reservation(table, len(table.block_ids) + 1)
-            block_id = new_blocks[0]
-        else:
-            block_id = table.block_ids[-1]
+        new_blocks = self._acquire_blocks(1) if needs_block else []
+        block_id = new_blocks[0] if needs_block else table.block_ids[-1]
         offset = table.cache_length % self.config.block_tokens
         try:
             self._write_token(cache, block_id=block_id, offset=offset, token_index=-1)
