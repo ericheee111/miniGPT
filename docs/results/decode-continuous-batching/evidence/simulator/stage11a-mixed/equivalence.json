@@ -1,0 +1,49 @@
+{
+  "admission_order": [
+    "short",
+    "medium",
+    "cancelled",
+    "long"
+  ],
+  "checked_contracts": [
+    "generated_tokens",
+    "request_terminal_states_and_cancellation",
+    "fifo_admission_order",
+    "logical_event_semantics",
+    "request_metrics"
+  ],
+  "equivalent": true,
+  "generated_tokens": {
+    "cancelled": [
+      14,
+      4
+    ],
+    "long": [
+      2,
+      16,
+      15,
+      8
+    ],
+    "medium": [
+      13,
+      10,
+      4,
+      0,
+      2
+    ],
+    "short": [
+      7,
+      8,
+      11,
+      10,
+      7
+    ]
+  },
+  "scenario": "stage11a-mixed",
+  "terminal_statuses": {
+    "cancelled": "cancelled",
+    "long": "finished",
+    "medium": "finished",
+    "short": "finished"
+  }
+}

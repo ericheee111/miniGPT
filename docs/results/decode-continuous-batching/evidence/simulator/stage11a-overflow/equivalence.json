@@ -1,0 +1,34 @@
+{
+  "admission_order": [
+    "full-window",
+    "crosses-window"
+  ],
+  "checked_contracts": [
+    "generated_tokens",
+    "request_terminal_states_and_cancellation",
+    "fifo_admission_order",
+    "logical_event_semantics",
+    "request_metrics"
+  ],
+  "equivalent": true,
+  "generated_tokens": {
+    "crosses-window": [
+      12,
+      0,
+      1,
+      9,
+      16
+    ],
+    "full-window": [
+      1,
+      2,
+      2,
+      2
+    ]
+  },
+  "scenario": "stage11a-overflow",
+  "terminal_statuses": {
+    "crosses-window": "finished",
+    "full-window": "finished"
+  }
+}

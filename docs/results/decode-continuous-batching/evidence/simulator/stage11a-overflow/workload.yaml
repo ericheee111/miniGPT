@@ -1,0 +1,38 @@
+schema_version: 1
+scenario_name: stage11a-overflow
+executor: continuous_decode
+model_seed: 1102
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.01
+max_ticks: 20
+output_dir: reports/serving-stage11a-overflow
+vocab_size: 17
+model:
+  block_size: 8
+  n_layer: 1
+  n_head: 1
+  n_embd: 8
+  dropout: 0.0
+  bias: false
+scheduler:
+  max_active_requests: 2
+  max_cached_tokens: 16
+requests:
+  - request_id: full-window
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 8
+    max_new_tokens: 4
+    temperature: 1.0
+    top_k: 5
+    seed: 505
+    cancellation_time: null
+  - request_id: crosses-window
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 6
+    max_new_tokens: 5
+    temperature: 0.9
+    top_k: null
+    seed: 606
+    cancellation_time: null

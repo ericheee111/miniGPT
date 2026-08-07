@@ -1,0 +1,36 @@
+{
+  "artifacts": [
+    {
+      "bytes": 677,
+      "path": "environment.json",
+      "sha256": "f42420a348588dd36dcd246aab82c626c178a59f07921ce41e3639f7e3b7a299"
+    },
+    {
+      "bytes": 7940,
+      "path": "execution_order.json",
+      "sha256": "f862146144b7520f34dceccba9f1d466c90357348862251b45c2f31c8ca00fc1"
+    },
+    {
+      "bytes": 276700,
+      "path": "raw_replicates.jsonl",
+      "sha256": "9cf187d130f6a57ad1a1a08f5bad5845384201bcc34b7f642ec091b3c64dde10"
+    },
+    {
+      "bytes": 1752,
+      "path": "resolved_config.yaml",
+      "sha256": "9f76b6baa94b97c38e46f5ccf0a91491cc28851f7f5ec090734138897963b958"
+    },
+    {
+      "bytes": 15834,
+      "path": "summary.json",
+      "sha256": "b2a89a351cdab5fb0571e329ca9d96c628b0e7e582868ef7a6f011995a769412"
+    },
+    {
+      "bytes": 913,
+      "path": "summary.md",
+      "sha256": "e4c7a2c5d10d492d65e538ddeddbc0fb7e5887b0fbe3eaf676ead34d1f04bb87"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "084bc22f87ac4d98bc3272e81a07e584020acd86"
+}

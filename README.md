@@ -388,6 +388,36 @@ co-scheduling，不是张量级 continuous batching，也不构成吞吐提升�
 [Stage 10 证据包](docs/results/serving-control-plane/README.md)。Stage 11 才考虑真正的 batch
 assembly/scatter 与 batched KV-cache executor，并须对照 reference executor 做语义等价测试。
 
+### Stage 11A decode continuous batching
+
+Stage 11A 保留 Stage 10 的请求状态机、FIFO admission、cache reservation、取消、事件和
+request metrics，只增加 `ContinuousDecodeExecutor`：prefill 仍逐请求运行；同一 tick 内合法且
+未 overflow 的 decoding 请求会组装为右侧补零的 dense KV batch，一次执行 single-token decode，
+再按真实 cache length scatter 回紧凑的 per-request cache。每行使用自己的 learned-position
+offset、sampling 参数和 `torch.Generator`；坏 cache 只失败所属请求，block-size overflow 继续走
+Stage 9 sliding-window re-prefill。
+
+```powershell
+python simulate_serving.py `
+  --config configs/serving_stage11a_mixed.yaml `
+  --compare-executors
+python benchmark_serving.py --config configs/serving_benchmark_stage11a.yaml
+python profile_serving.py `
+  --config configs/serving_benchmark_stage11a.yaml `
+  --scenario mixed-cache-lengths `
+  --executor continuous_decode `
+  --output reports/serving-profile-stage11a/mixed
+python generate_stage11a_evidence.py `
+  --benchmark-run reports/serving-benchmark-stage11a/<run-id>
+```
+
+[Stage 11A 证据包](docs/results/decode-continuous-batching/README.md) 绑定 60 个 fresh-process
+replicate、交替执行顺序、环境、resolved config、raw measurements、simulator 双 executor 输出和
+SHA-256。固定 CPU 小模型的六个场景全部满足 correctness 与 CV 门槛，strict verdict 为 `pass`；
+continuous median wall time 的 reference/continuous 比值约为 1.24×–2.22×。mixed-cache 场景
+padding waste 为 35.43%，说明 dense padding 的吞吐收益并非免费。本阶段不是 batched prefill、
+paged attention 或 HTTP serving，Profiler 时间也不参与 canonical 性能结论。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
@@ -475,7 +505,8 @@ miniGPT/
 │   ├── checkpoint.py        # 原子 checkpoint 与 RNG 恢复
 │   ├── trainer.py           # 训练编排与可观测性
 │   ├── benchmark_*.py       # 训练 benchmark、报告与 workload
-│   └── inference_*.py       # KV-cache inference benchmark 与 profiler
+│   ├── inference_*.py       # KV-cache inference benchmark 与 profiler
+│   └── serving_*.py         # serving engine、simulator、benchmark 与证据
 ├── tests/
 ├── prepare_data.py
 ├── train.py
@@ -485,7 +516,10 @@ miniGPT/
 ├── profile_inference.py
 ├── generate_stage9_evidence.py
 ├── simulate_serving.py
-└── generate_stage10_evidence.py
+├── generate_stage10_evidence.py
+├── benchmark_serving.py
+├── profile_serving.py
+└── generate_stage11a_evidence.py
 ```
 
 阶段 5 的设计与实施依据见
@@ -516,6 +550,9 @@ python profile_inference.py --help
 python generate_stage9_evidence.py --help
 python simulate_serving.py --help
 python generate_stage10_evidence.py --help
+python benchmark_serving.py --help
+python profile_serving.py --help
+python generate_stage11a_evidence.py --help
 ```
 
 测试遵循 Given/When/Then 结构；网络相关测试用 `file://` 本地语料，不依赖真实 HTTP。
@@ -525,8 +562,10 @@ python generate_stage10_evidence.py --help
 
 - Stage 9 已完成 KV cache、cached generation、overflow re-prefill 和隔离推理证据。
 - Stage 10 已完成多请求 serving 控制面、逐请求 reference executor、确定性 simulator 和证据。
-- Stage 11 可设计真正 tensor-level continuous batching；必须保留 Stage 10 scheduler/event/
-  metrics 契约，并以 reference executor 做逐请求 token 与状态等价基线。
+- Stage 11A 已完成 variable-length dense KV assembly/scatter、tensor-level decode batching、
+  reference 等价验证和隔离 serving benchmark。
+- Stage 11B 可设计 batched prefill；应优先评估 length bucketing、TTFT guardrail 与 prompt-side
+  padding/memory amplification，不应将 Stage 11A decode padding 方案直接照搬。
 - 增加 BPE tokenizer，并保持 checkpoint/tokenizer 版本兼容。
 - 增加 mixed precision 与 CUDA benchmark，同时保留 CPU baseline。
 - 增加梯度累积、数据加载 worker 和更长训练实验。
