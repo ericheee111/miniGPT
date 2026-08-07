@@ -4,7 +4,7 @@ benchmark_seed: 1112
 output_root: reports/serving-benchmark-stage11b
 worker_timeout_seconds: 120.0
 warmup_iterations: 1
-measurement_iterations: 3
+measurement_iterations: 9
 replicates: 5
 minimum_replicates: 5
 max_cv_percent: 10.0
