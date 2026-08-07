@@ -124,6 +124,26 @@ class CausalSelfAttention(nn.Module):
         next_cache = LayerKVCache(key=key.detach(), value=value.detach())
         return output, next_cache
 
+    def forward_cached_batch(
+        self,
+        hidden_states: Tensor,
+        cache: LayerKVCache,
+        cache_valid_mask: Tensor,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Decode one token per row against a right-padded dense cache."""
+        query, key, value = self._project_qkv(hidden_states)
+        key = torch.cat((cache.key, key), dim=2)
+        value = torch.cat((cache.value, value), dim=2)
+        output = self._attend(
+            query,
+            key,
+            value,
+            past_length=cache.length,
+            allowed_positions=cache_valid_mask,
+        )
+        next_cache = LayerKVCache(key=key.detach(), value=value.detach())
+        return output, next_cache
+
     def _project_qkv(
         self,
         hidden_states: Tensor,
@@ -146,6 +166,7 @@ class CausalSelfAttention(nn.Module):
         value: Tensor,
         *,
         past_length: int,
+        allowed_positions: Tensor | None = None,
     ) -> Tensor:
         """Apply offset-causal attention to already projected per-head tensors."""
         batch_size = query.shape[0]
@@ -153,9 +174,10 @@ class CausalSelfAttention(nn.Module):
         key_length = key.shape[2]
         attention_scores = query @ key.transpose(-2, -1)
         attention_scores = attention_scores / math.sqrt(self.head_size)
-        allowed_positions = self.causal_mask[
-            :, :, past_length : past_length + time_steps, :key_length
-        ]
+        if allowed_positions is None:
+            allowed_positions = self.causal_mask[
+                :, :, past_length : past_length + time_steps, :key_length
+            ]
         attention_scores = attention_scores.masked_fill(
             ~allowed_positions,
             torch.finfo(attention_scores.dtype).min,
@@ -227,6 +249,24 @@ class TransformerBlock(nn.Module):
         """Apply the block to new states and return an extended layer cache."""
         attention_input = cast("Tensor", self.attention_norm(hidden_states))
         attention_output, next_cache = self.attention.forward_cached(attention_input, cache)
+        hidden_states = hidden_states + attention_output
+        mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
+        output = hidden_states + cast("Tensor", self.mlp(mlp_input))
+        return output, next_cache
+
+    def forward_cached_batch(
+        self,
+        hidden_states: Tensor,
+        cache: LayerKVCache,
+        cache_valid_mask: Tensor,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Apply one variable-cache-length decode step to every batch row."""
+        attention_input = cast("Tensor", self.attention_norm(hidden_states))
+        attention_output, next_cache = self.attention.forward_cached_batch(
+            attention_input,
+            cache,
+            cache_valid_mask,
+        )
         hidden_states = hidden_states + attention_output
         mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
         output = hidden_states + cast("Tensor", self.mlp(mlp_input))
