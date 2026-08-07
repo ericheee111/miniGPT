@@ -48,7 +48,7 @@ def benchmark_document(output_root: Path, *, replicates: int = 1) -> dict[str, o
         "scenarios": [
             {
                 "name": "burst-2",
-                "arrival_ticks": [0, 0],
+                "arrival_ticks": [0, 1],
                 "prompt_lengths": [2, 3],
                 "generated_lengths": [3, 3],
                 "cancellation_ticks": [None, None],
@@ -108,6 +108,12 @@ def test_fresh_process_benchmark_writes_raw_order_statistics_and_hashes(tmp_path
         (result.output_dir / "raw_replicates.jsonl").read_text(encoding="utf-8").splitlines()
     )
     assert len(raw_lines) == 2
+    for raw_line in raw_lines:
+        record = cast("dict[str, object]", json.loads(raw_line))
+        for iteration in cast("list[dict[str, object]]", record["iterations"]):
+            assert cast("float", iteration["median_ttft_seconds"]) >= 0.0
+            assert cast("float", iteration["median_tpot_seconds"]) >= 0.0
+            assert cast("float", iteration["median_e2e_seconds"]) >= 0.0
     manifest = cast(
         "dict[str, object]",
         json.loads((result.output_dir / "artifact_manifest.json").read_text(encoding="utf-8")),

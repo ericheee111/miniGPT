@@ -7,7 +7,7 @@ import hashlib
 import json
 import statistics
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import TypeAlias, cast
 
@@ -138,7 +138,12 @@ def run_once(
     for tick in range(max_ticks):
         for index, request in tuple(pending):
             if scenario.arrival_ticks[index] <= tick:
-                engine.submit(request)
+                engine.submit(
+                    replace(
+                        request,
+                        arrival_time=time.perf_counter() - start,
+                    )
+                )
                 pending.remove((index, request))
                 submitted.add(request.request_id)
         for index, cancellation_tick in enumerate(scenario.cancellation_ticks):
