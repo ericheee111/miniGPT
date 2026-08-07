@@ -31,7 +31,11 @@ from minigpt.settings import (
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows is the canonical subprocess runtime")
-def test_serve_cli_starts_uvicorn_and_exits_on_localhost(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kv_cache_backend", ["dense", "paged"])
+def test_serve_cli_starts_uvicorn_and_exits_on_localhost(
+    tmp_path: Path,
+    kv_cache_backend: str,
+) -> None:
     # Given: a complete tiny checkpoint/tokenizer pair and a loopback-only free port.
     checkpoint_path, tokenizer_path = _write_service_checkpoint(tmp_path)
     port = _free_port()
@@ -49,6 +53,8 @@ def test_serve_cli_starts_uvicorn_and_exits_on_localhost(tmp_path: Path) -> None
         str(port),
         "--executor",
         "continuous",
+        "--kv-cache-backend",
+        kv_cache_backend,
         "--log-level",
         "warning",
     ]

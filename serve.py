@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -14,6 +15,7 @@ from minigpt.data import CharTokenizer
 from minigpt.engine_runner import EngineRunner, RunnerConfig
 from minigpt.http_server import MODEL_ID, create_app
 from minigpt.model import GPT
+from minigpt.paged_kv_cache import KVCacheBackend, PagedKVCacheConfig, PagedKVCachePool
 from minigpt.serving import (
     ContinuousDecodeExecutor,
     ContinuousExecutor,
@@ -47,6 +49,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--executor", choices=_EXECUTOR_CHOICES, default="continuous")
     parser.add_argument("--max-active-requests", type=int, default=8)
     parser.add_argument("--max-cached-tokens", type=int)
+    parser.add_argument(
+        "--kv-cache-backend",
+        choices=tuple(backend.value for backend in KVCacheBackend),
+        default=KVCacheBackend.DENSE.value,
+    )
+    parser.add_argument("--kv-block-tokens", type=int, default=16)
+    parser.add_argument("--kv-num-blocks", type=int)
     parser.add_argument("--command-queue-size", type=int, default=256)
     parser.add_argument("--stream-buffer-size", type=int, default=64)
     parser.add_argument(
@@ -84,6 +93,25 @@ def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]
         if configured_cached_tokens is None
         else configured_cached_tokens
     )
+    kv_cache_backend = KVCacheBackend(cast("str", arguments.kv_cache_backend))
+    paged_kv_cache: PagedKVCacheConfig | None = None
+    paged_cache_pool: PagedKVCachePool | None = None
+    if kv_cache_backend is KVCacheBackend.PAGED:
+        block_tokens = cast("int", arguments.kv_block_tokens)
+        configured_num_blocks = cast("int | None", arguments.kv_num_blocks)
+        num_blocks = (
+            math.ceil(max_cached_tokens / block_tokens)
+            if configured_num_blocks is None and block_tokens > 0
+            else configured_num_blocks
+        )
+        if num_blocks is None:
+            reason = "--kv-num-blocks is required when --kv-block-tokens is not positive"
+            raise ValueError(reason)
+        paged_kv_cache = PagedKVCacheConfig(
+            block_tokens=block_tokens,
+            num_blocks=num_blocks,
+        )
+        paged_cache_pool = PagedKVCachePool.from_model(paged_kv_cache, model)
     engine = ServingEngine(
         config=EngineConfig(
             scheduler=SchedulerConfig(
@@ -91,8 +119,11 @@ def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]
                 max_cached_tokens=max_cached_tokens,
             ),
             block_size=experiment.data.block_size,
+            kv_cache_backend=kv_cache_backend,
+            paged_kv_cache=paged_kv_cache,
         ),
         executor=executor,
+        paged_cache_pool=paged_cache_pool,
     )
     runner = EngineRunner(
         engine=engine,

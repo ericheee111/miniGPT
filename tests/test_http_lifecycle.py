@@ -10,12 +10,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 import httpx
+import pytest
+import torch
 import uvicorn
 from httpx import ASGITransport
 
 from minigpt.data import CharTokenizer, JsonValue
 from minigpt.engine_runner import EngineRunner, RunnerConfig, RunnerEventType, RunnerState
 from minigpt.http_server import MODEL_ID, create_app
+from minigpt.layers import LayerKVCache
+from minigpt.paged_kv_cache import KVCacheBackend, PagedKVCacheConfig, PagedKVCachePool
 from minigpt.serving import (
     DecodeBatchObservation,
     EngineConfig,
@@ -54,12 +58,15 @@ class SlowExecutor:
         return ()
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
-        return tuple(self._result(state) for state in requests)
+        return tuple(self._result(state, used_fallback=False) for state in requests)
 
     def decode(self, active_requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
-        return tuple(self._result(state) for state in active_requests)
+        return tuple(
+            self._result(state, used_fallback=state.cached_tokens >= self.block_size)
+            for state in active_requests
+        )
 
-    def _result(self, state: RequestState) -> ExecutionResult:
+    def _result(self, state: RequestState, *, used_fallback: bool) -> ExecutionResult:
         if self.delay_seconds:
             time.sleep(self.delay_seconds)
         request_id = state.request.request_id
@@ -67,13 +74,14 @@ class SlowExecutor:
             return ExecutionResult.failure(request_id, "injected HTTP failure", 0.0)
         generated = len(state.generated_tokens)
         cache_tokens = min(self.block_size, len(state.request.prompt_tokens) + generated)
+        cache_tensor = torch.full((1, 1, cache_tokens, 1), float(state.request.seed))
         return ExecutionResult.success(
             request_id=request_id,
             token_id=(state.request.seed + generated) % 2,
-            cache=(),
+            cache=(LayerKVCache(key=cache_tensor, value=cache_tensor.clone()),),
             cache_tokens=cache_tokens,
             latency_seconds=0.0,
-            used_fallback=False,
+            used_fallback=used_fallback,
         )
 
 
@@ -82,17 +90,38 @@ def _app(
     stream_buffer_size: int = 8,
     delay_seconds: float = 0.01,
     failing_seeds: set[int] | None = None,
+    kv_cache_backend: KVCacheBackend = KVCacheBackend.DENSE,
 ) -> tuple[FastAPI, EngineRunner]:
     executor = SlowExecutor(
         delay_seconds=delay_seconds,
         failing_seeds=set() if failing_seeds is None else failing_seeds,
     )
+    paged_config = (
+        PagedKVCacheConfig(block_tokens=2, num_blocks=32)
+        if kv_cache_backend is KVCacheBackend.PAGED
+        else None
+    )
+    paged_pool = (
+        PagedKVCachePool(
+            paged_config,
+            n_layer=1,
+            n_head=1,
+            head_size=1,
+            dtype=torch.float32,
+            device=torch.device("cpu"),
+        )
+        if paged_config is not None
+        else None
+    )
     engine = ServingEngine(
         config=EngineConfig(
             scheduler=SchedulerConfig(max_active_requests=4, max_cached_tokens=64),
             block_size=executor.block_size,
+            kv_cache_backend=kv_cache_backend,
+            paged_kv_cache=paged_config,
         ),
         executor=executor,
+        paged_cache_pool=paged_pool,
     )
     runner = EngineRunner(
         engine=engine,
@@ -135,7 +164,11 @@ def test_http_stream_backpressure_has_error_without_done() -> None:
 
 async def _check_http_backpressure() -> None:
     # Given: an in-process service with room for only one unconsumed token.
-    app, runner = _app(stream_buffer_size=1, delay_seconds=0.0)
+    app, runner = _app(
+        stream_buffer_size=1,
+        delay_seconds=0.0,
+        kv_cache_backend=KVCacheBackend.DENSE,
+    )
 
     # When: a long stream outruns its ASGI consumer.
     async with _client(app) as client:
@@ -144,6 +177,7 @@ async def _check_http_backpressure() -> None:
             json=_payload(seed=3, stream=True, max_tokens=100),
         )
         events = runner.events
+        metrics = runner.metrics()
 
     # Then: the stream reports bounded-buffer failure, omits [DONE], and records cancellation.
     assert response.status_code == 200
@@ -151,6 +185,9 @@ async def _check_http_backpressure() -> None:
     assert "data: [DONE]" not in response.text
     assert any(event.event_type is RunnerEventType.BACKPRESSURE for event in events)
     assert any(event.event_type is RunnerEventType.CANCELLED for event in events)
+    assert metrics.allocated_blocks == 0
+    assert metrics.reserved_blocks == 0
+    assert metrics.free_blocks == metrics.total_blocks
 
 
 def test_http_generation_failure_does_not_affect_concurrent_peer() -> None:
@@ -178,9 +215,16 @@ async def _check_failure_isolation() -> None:
     assert healthy.status_code == 200
 
 
-def test_real_localhost_disconnect_cancels_engine_request() -> None:
+@pytest.mark.parametrize("kv_cache_backend", list(KVCacheBackend))
+def test_real_localhost_disconnect_cancels_engine_request(
+    kv_cache_backend: KVCacheBackend,
+) -> None:
     # Given: a real Uvicorn socket serving a deliberately slow long stream.
-    app, runner = _app(stream_buffer_size=32, delay_seconds=0.01)
+    app, runner = _app(
+        stream_buffer_size=32,
+        delay_seconds=0.01,
+        kv_cache_backend=kv_cache_backend,
+    )
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
     server_thread = threading.Thread(target=server.run, name="uvicorn-test")
@@ -208,6 +252,9 @@ def test_real_localhost_disconnect_cancels_engine_request() -> None:
         assert metrics.cancelled_requests == 1
         assert metrics.cached_tokens == 0
         assert metrics.reserved_cache_tokens == 0
+        assert metrics.allocated_blocks == 0
+        assert metrics.reserved_blocks == 0
+        assert metrics.free_blocks == metrics.total_blocks
     finally:
         server.should_exit = True
         server_thread.join(timeout=5.0)
