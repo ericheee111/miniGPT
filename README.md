@@ -418,6 +418,35 @@ continuous median wall time 的 reference/continuous 比值约为 1.24×–2.22�
 padding waste 为 35.43%，说明 dense padding 的吞吐收益并非免费。本阶段不是 batched prefill、
 paged attention 或 HTTP serving，Profiler 时间也不参与 canonical 性能结论。
 
+### Stage 11B length-bucketed batched prefill
+
+Stage 11B 新增 `ContinuousExecutor`，同时复用 Stage 11A batched decode。当前 tick 已 eligible 的
+`PREFILLING` 请求按严格 FIFO 连续前缀贪心分组；`max_batch_size`、`max_batch_tokens` 和
+`max_padding_ratio` 限制 dense prompt padding，不会绕过队首或等待未来请求。模型接口接收
+right-padded `[B,Tmax]` 与逐行真实长度，通过 causal/key-valid mask 保持 learned absolute
+position 语义，再将每层 cache scatter 为 `[1,H,L,D]`。
+
+```powershell
+python simulate_serving.py `
+  --config configs/serving_stage11b_mixed.yaml `
+  --compare-executors
+python benchmark_serving.py --config configs/serving_benchmark_stage11b.yaml
+python profile_serving.py `
+  --config configs/serving_benchmark_stage11b.yaml `
+  --scenario burst-mixed-lengths `
+  --executor continuous `
+  --output reports/serving-profile-stage11b/mixed
+python generate_stage11b_evidence.py `
+  --benchmark-run reports/serving-benchmark-stage11b/<run-id>
+```
+
+三方 simulator 分别运行 `reference`、`continuous_decode` 和 `continuous`，比较 token、终态、
+取消、FIFO admission、cache accounting、逻辑请求事件与 request metrics。Prefill batch events
+和 executor timing 单独记录。Prompt padding 会为所有 padded query 重复 attention/MLP 工作，
+通常比单 token decode cache padding 更昂贵；因此 benchmark 主要比较
+`continuous_decode` 与 `continuous`，并同时报告 throughput、TTFT、queue time 与 peak RSS。
+本阶段仍是 dense batching，不是 paged attention。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
@@ -519,7 +548,8 @@ miniGPT/
 ├── generate_stage10_evidence.py
 ├── benchmark_serving.py
 ├── profile_serving.py
-└── generate_stage11a_evidence.py
+├── generate_stage11a_evidence.py
+└── generate_stage11b_evidence.py
 ```
 
 阶段 5 的设计与实施依据见
@@ -553,6 +583,7 @@ python generate_stage10_evidence.py --help
 python benchmark_serving.py --help
 python profile_serving.py --help
 python generate_stage11a_evidence.py --help
+python generate_stage11b_evidence.py --help
 ```
 
 测试遵循 Given/When/Then 结构；网络相关测试用 `file://` 本地语料，不依赖真实 HTTP。
@@ -564,8 +595,10 @@ python generate_stage11a_evidence.py --help
 - Stage 10 已完成多请求 serving 控制面、逐请求 reference executor、确定性 simulator 和证据。
 - Stage 11A 已完成 variable-length dense KV assembly/scatter、tensor-level decode batching、
   reference 等价验证和隔离 serving benchmark。
-- Stage 11B 可设计 batched prefill；应优先评估 length bucketing、TTFT guardrail 与 prompt-side
-  padding/memory amplification，不应将 Stage 11A decode padding 方案直接照搬。
+- Stage 11B 已完成 length-bucketed batched prefill、三 executor 等价验证、prompt padding/TTFT
+  telemetry 和独立 fresh-process benchmark；当前仍采用 dense cache 与 attention。
+- 后续可研究基于历史长度分布的自适应 bucket policy，但应保持 FIFO/no-waiting 约束；paged
+  attention、HTTP 与 GPU serving 需要独立阶段设计。
 - 增加 BPE tokenizer，并保持 checkpoint/tokenizer 版本兼容。
 - 增加 mixed precision 与 CUDA benchmark，同时保留 CPU baseline。
 - 增加梯度累积、数据加载 worker 和更长训练实验。
