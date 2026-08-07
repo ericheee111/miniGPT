@@ -1,0 +1,16 @@
+schema_version: 1
+executor: continuous
+kv_cache_backend: paged
+kv_cache: {block_tokens: 2, num_blocks: 8}
+scenario_name: paged-block-size-overflow
+model_seed: 1306
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.001
+max_ticks: 64
+output_dir: reports/paged-kv-cache-manager/block-size-overflow
+vocab_size: 17
+model: {block_size: 8, n_layer: 1, n_head: 1, n_embd: 8, dropout: 0.0, bias: false}
+scheduler: {max_active_requests: 2, max_cached_tokens: 16}
+requests:
+  - {request_id: overflow-1, arrival_time: 0.0, prompt_tokens: [1, 2, 3, 4, 5, 6, 7], prompt_length: null, max_new_tokens: 5, temperature: 1.0, top_k: null, seed: 601, cancellation_time: null}
+  - {request_id: overflow-2, arrival_time: 0.0, prompt_tokens: [8, 9, 10, 11, 12, 13], prompt_length: null, max_new_tokens: 6, temperature: 0.9, top_k: 8, seed: 602, cancellation_time: null}

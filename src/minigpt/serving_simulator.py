@@ -16,6 +16,7 @@ import yaml
 from typing_extensions import override
 
 from minigpt.model import GPT
+from minigpt.paged_kv_cache import KVCacheBackend, PagedKVCacheConfig, PagedKVCachePool
 from minigpt.serving import (
     ContinuousDecodeExecutor,
     ContinuousExecutor,
@@ -43,6 +44,8 @@ _TOP_LEVEL_KEYS = frozenset(
     {
         "schema_version",
         "executor",
+        "kv_cache_backend",
+        "kv_cache",
         "scenario_name",
         "model_seed",
         "tick_seconds",
@@ -56,10 +59,16 @@ _TOP_LEVEL_KEYS = frozenset(
         "requests",
     }
 )
-_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"executor", "prefill"}
+_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {
+    "executor",
+    "prefill",
+    "kv_cache_backend",
+    "kv_cache",
+}
 _MODEL_KEYS = frozenset({"block_size", "n_layer", "n_head", "n_embd", "dropout", "bias"})
 _SCHEDULER_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
 _PREFILL_KEYS = frozenset({"max_batch_size", "max_batch_tokens", "max_padding_ratio"})
+_KV_CACHE_KEYS = frozenset({"block_tokens", "num_blocks"})
 _REQUEST_KEYS = frozenset(
     {
         "request_id",
@@ -98,6 +107,8 @@ class SimulatorConfig:
 
     schema_version: int
     executor: SimulatorExecutor
+    kv_cache_backend: KVCacheBackend
+    paged_kv_cache: PagedKVCacheConfig | None
     scenario_name: str
     model_seed: int
     tick_seconds: float
@@ -140,6 +151,16 @@ class ExecutorEquivalenceResult:
     reference: SimulationResult
     continuous_decode: SimulationResult
     continuous: SimulationResult
+    equivalent: bool
+    checked_contracts: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CacheBackendEquivalenceResult:
+    """Return dense/paged simulations after logical-contract validation."""
+
+    dense: SimulationResult
+    paged: SimulationResult
     equivalent: bool
     checked_contracts: tuple[str, ...]
 
@@ -199,6 +220,17 @@ def _executor(document: ConfigMapping, source: Path) -> SimulatorExecutor:
     except ValueError:
         choices = ", ".join(executor.value for executor in SimulatorExecutor)
         _invalid(source, f"executor must be one of: {choices}")
+
+
+def _cache_backend(document: ConfigMapping, source: Path) -> KVCacheBackend:
+    raw = document.get("kv_cache_backend", KVCacheBackend.DENSE.value)
+    if not isinstance(raw, str):
+        _invalid(source, "kv_cache_backend must be a string")
+    try:
+        return KVCacheBackend(raw)
+    except ValueError:
+        choices = ", ".join(backend.value for backend in KVCacheBackend)
+        _invalid(source, f"kv_cache_backend must be one of: {choices}")
 
 
 def _integer(
@@ -285,6 +317,24 @@ def _prefill(document: ConfigMapping, source: Path) -> PrefillBatchConfig | None
         max_batch_size=_integer(raw, "max_batch_size", source, positive=True),
         max_batch_tokens=_integer(raw, "max_batch_tokens", source, positive=True),
         max_padding_ratio=_number(raw, "max_padding_ratio", source, non_negative=True),
+    )
+
+
+def _paged_kv_cache(
+    document: ConfigMapping,
+    source: Path,
+    *,
+    backend: KVCacheBackend,
+) -> PagedKVCacheConfig | None:
+    if "kv_cache" not in document:
+        if backend is KVCacheBackend.PAGED:
+            _invalid(source, "paged kv_cache_backend requires kv_cache")
+        return None
+    raw = _mapping(document["kv_cache"], source, "kv_cache")
+    _exact_keys(raw, _KV_CACHE_KEYS, source, "kv_cache")
+    return PagedKVCacheConfig(
+        block_tokens=_integer(raw, "block_tokens", source, positive=True),
+        num_blocks=_integer(raw, "num_blocks", source, positive=True),
     )
 
 
@@ -375,9 +425,12 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
     if schema_version != 1:
         _invalid(source, "schema_version must equal 1")
     vocab_size = _integer(document, "vocab_size", source, positive=True)
+    backend = _cache_backend(document, source)
     return SimulatorConfig(
         schema_version=schema_version,
         executor=_executor(document, source),
+        kv_cache_backend=backend,
+        paged_kv_cache=_paged_kv_cache(document, source, backend=backend),
         scenario_name=_string(document, "scenario_name", source),
         model_seed=_integer(document, "model_seed", source, non_negative=True),
         tick_seconds=_number(document, "tick_seconds", source, positive=True),
@@ -458,6 +511,7 @@ def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[s
             "scenario_name": config.scenario_name,
             "claim": "logical serving correctness; wall-clock performance reported separately",
             "executor": config.executor.value,
+            "kv_cache_backend": config.kv_cache_backend.value,
             "scheduling_level": (
                 "iteration-level with tensor-level prefill and decode batching"
                 if config.executor is SimulatorExecutor.CONTINUOUS
@@ -607,8 +661,20 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
             telemetry_clock=telemetry_clock,
         )
     engine = ServingEngine(
-        config=EngineConfig(scheduler=config.scheduler, block_size=config.model.block_size),
+        config=EngineConfig(
+            scheduler=config.scheduler,
+            block_size=config.model.block_size,
+            kv_cache_backend=config.kv_cache_backend,
+            paged_kv_cache=(
+                config.paged_kv_cache if config.kv_cache_backend is KVCacheBackend.PAGED else None
+            ),
+        ),
         executor=executor,
+        paged_cache_pool=(
+            PagedKVCachePool.from_model(config.paged_kv_cache, model)
+            if config.kv_cache_backend is KVCacheBackend.PAGED and config.paged_kv_cache is not None
+            else None
+        ),
         clock=lambda: 0.0,
     )
     pending = deque(
@@ -732,6 +798,48 @@ def run_executor_equivalence(
         reference=reference,
         continuous_decode=continuous_decode,
         continuous=continuous,
+        equivalent=True,
+        checked_contracts=tuple(comparisons),
+    )
+
+
+def run_cache_backend_equivalence(
+    config: SimulatorConfig,
+    *,
+    output_dir: Path,
+) -> CacheBackendEquivalenceResult:
+    """Run dense/paged storage and reject any logical serving divergence."""
+    if config.paged_kv_cache is None:
+        _invalid(Path("<equivalence>"), "cache backend equivalence requires kv_cache config")
+    dense = run_simulation(
+        replace(config, kv_cache_backend=KVCacheBackend.DENSE),
+        output_dir=output_dir / KVCacheBackend.DENSE.value,
+    )
+    paged = run_simulation(
+        replace(config, kv_cache_backend=KVCacheBackend.PAGED),
+        output_dir=output_dir / KVCacheBackend.PAGED.value,
+    )
+    comparisons = {
+        "generated_tokens": dense.generated_tokens == paged.generated_tokens,
+        "request_terminal_states_and_cancellation": (
+            dense.request_statuses == paged.request_statuses
+        ),
+        "fifo_admission_order": dense.admission_order == paged.admission_order,
+        "logical_event_semantics": dense.events == paged.events,
+        "request_metrics": dense.request_metrics == paged.request_metrics,
+        "logical_cache_accounting": (
+            dense.metrics.cached_tokens == paged.metrics.cached_tokens
+            and dense.metrics.reserved_cache_tokens == paged.metrics.reserved_cache_tokens
+            and dense.metrics.peak_cached_tokens == paged.metrics.peak_cached_tokens
+            and dense.metrics.peak_reserved_cache_tokens == paged.metrics.peak_reserved_cache_tokens
+        ),
+    }
+    failed = tuple(name for name, matches in comparisons.items() if not matches)
+    if failed:
+        _invalid(Path("<equivalence>"), f"cache backend contracts differ: {', '.join(failed)}")
+    return CacheBackendEquivalenceResult(
+        dense=dense,
+        paged=paged,
         equivalent=True,
         checked_contracts=tuple(comparisons),
     )

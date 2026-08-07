@@ -1,0 +1,19 @@
+schema_version: 1
+executor: continuous
+kv_cache_backend: paged
+kv_cache: {block_tokens: 4, num_blocks: 10}
+scenario_name: paged-fragmentation-heavy
+model_seed: 1307
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.001
+max_ticks: 96
+output_dir: reports/paged-kv-cache-manager/fragmentation-heavy
+vocab_size: 17
+model: {block_size: 8, n_layer: 1, n_head: 1, n_embd: 8, dropout: 0.0, bias: false}
+scheduler: {max_active_requests: 4, max_cached_tokens: 32}
+requests:
+  - {request_id: frag-1, arrival_time: 0.0, prompt_tokens: [1], prompt_length: null, max_new_tokens: 1, temperature: 1.0, top_k: null, seed: 701, cancellation_time: null}
+  - {request_id: frag-2, arrival_time: 0.0, prompt_tokens: [2, 3, 4, 5, 6], prompt_length: null, max_new_tokens: 1, temperature: 1.0, top_k: null, seed: 702, cancellation_time: null}
+  - {request_id: frag-3, arrival_time: 0.0, prompt_tokens: [7, 8], prompt_length: null, max_new_tokens: 4, temperature: 1.0, top_k: null, seed: 703, cancellation_time: null}
+  - {request_id: frag-4, arrival_time: 0.0, prompt_tokens: [9, 10, 11], prompt_length: null, max_new_tokens: 2, temperature: 1.0, top_k: null, seed: 704, cancellation_time: null}
+  - {request_id: frag-5, arrival_time: 1.0, prompt_tokens: [12], prompt_length: null, max_new_tokens: 6, temperature: 1.0, top_k: null, seed: 705, cancellation_time: 3.0}
