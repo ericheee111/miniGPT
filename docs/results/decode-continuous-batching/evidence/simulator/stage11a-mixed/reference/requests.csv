@@ -1,0 +1,5 @@
+request_id,status,prompt_tokens,generated_tokens,arrival_time,admission_time,prefill_start_time,first_token_time,finish_time,queue_time_seconds,prefill_latency_seconds,time_to_first_token_seconds,decode_latencies_seconds,time_per_output_token_seconds,end_to_end_latency_seconds,failure_reason
+short,finished,"[16,0]","[7,8,11,10,7]",0.0,0.0,1.0,1.01,5.01,0.0,0.01,1.01,"[0.01,0.01,0.01,0.01]",0.01,5.01,
+medium,finished,"[15,16,0,1,2]","[13,10,4,0,2]",0.0,0.0,1.0,1.01,5.01,0.0,0.01,1.01,"[0.01,0.01,0.01,0.01]",0.01,5.01,
+long,finished,"[14,15,16,0,1,2,3,4]","[2,16,15,8]",1.0,1.0,2.0,2.01,5.01,0.0,0.01,1.0099999999999998,"[0.01,0.01,0.01]",0.01,4.01,
+cancelled,cancelled,"[13,14,15,16]","[14,4]",0.0,0.0,1.0,1.01,3.0,0.0,0.01,1.01,[0.01],0.01,3.0,

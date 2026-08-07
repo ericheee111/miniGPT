@@ -1,0 +1,365 @@
+{
+  "alternating_executor_order": true,
+  "records": [
+    {
+      "execution_index": 0,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 1,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 2,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 3,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 4,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 5,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 6,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 7,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 8,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 9,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 10,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 11,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 12,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 13,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 14,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 15,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 16,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 17,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 18,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 19,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 20,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 21,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 22,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 23,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 24,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 25,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 26,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 27,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 28,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 29,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 30,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 31,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 32,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 33,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 34,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 35,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 36,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 37,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 38,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 39,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 40,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 41,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 42,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 43,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 44,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 45,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 46,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 47,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 48,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 49,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "burst-2"
+    },
+    {
+      "execution_index": 50,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 51,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "burst-4"
+    },
+    {
+      "execution_index": 52,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 53,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "burst-8"
+    },
+    {
+      "execution_index": 54,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 55,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "staggered-arrival"
+    },
+    {
+      "execution_index": 56,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 57,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "mixed-cache-lengths"
+    },
+    {
+      "execution_index": 58,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "cancellation"
+    },
+    {
+      "execution_index": 59,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "cancellation"
+    }
+  ]
+}

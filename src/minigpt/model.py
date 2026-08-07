@@ -49,6 +49,7 @@ _TEMPERATURE_REASON: Final = "temperature must be positive"
 _TOP_K_REASON: Final = "top_k must be positive when provided"
 _TOKEN_TENSOR_DIMENSIONS: Final = 2
 _CACHE_TENSOR_DIMENSIONS: Final = 4
+_CACHE_LENGTH_DIMENSIONS: Final = 1
 
 
 def expected_gpt_parameter_count(config: GPTConfig) -> int:
@@ -330,6 +331,68 @@ class GPT(nn.Module):
         logits = cast("Tensor", self.lm_head(normalized))
         return logits, tuple(next_cache)
 
+    def _validate_batched_cache_lengths(
+        self,
+        token_ids: Tensor,
+        cache: KVCache,
+        cache_lengths: Tensor,
+    ) -> int:
+        padded_length = self._validate_cache(token_ids, cache)
+        if cache_lengths.ndim != _CACHE_LENGTH_DIMENSIONS:
+            _invalid_cache("cache_lengths must have shape [batch]")
+        if cache_lengths.shape[0] != token_ids.shape[0]:
+            _invalid_cache("cache_lengths batch must equal input batch")
+        if cache_lengths.dtype != torch.long:
+            _invalid_cache("cache_lengths dtype must be torch.int64")
+        if cache_lengths.device != token_ids.device:
+            _invalid_cache("cache_lengths device must equal input device")
+        minimum = int(cache_lengths.min().item())
+        maximum = int(cache_lengths.max().item())
+        if minimum <= 0 or maximum > padded_length:
+            _invalid_cache(f"cache_lengths must be in [1, padded cache length {padded_length}]")
+        if maximum >= self.config.block_size:
+            reason = (
+                f"cache length {maximum} plus new length 1 exceeds "
+                f"block_size {self.config.block_size}"
+            )
+            _invalid_cache(reason)
+        return padded_length
+
+    def _batched_cached_forward(
+        self,
+        token_ids: Tensor,
+        cache: KVCache,
+        cache_lengths: Tensor,
+        *,
+        padded_length: int,
+    ) -> tuple[Tensor, KVCache]:
+        positions = cache_lengths.view(-1, 1)
+        token_embeddings = cast("Tensor", self.token_embedding(token_ids))
+        position_embeddings = cast("Tensor", self.position_embedding(positions))
+        hidden_states = cast(
+            "Tensor",
+            self.embedding_dropout(token_embeddings + position_embeddings),
+        )
+        cache_columns = torch.arange(padded_length + 1, device=token_ids.device)
+        valid_history = cache_columns.view(1, -1) < cache_lengths.view(-1, 1)
+        valid_current = cache_columns == padded_length
+        cache_valid_mask = (valid_history | valid_current).view(
+            token_ids.shape[0], 1, 1, padded_length + 1
+        )
+        next_cache: list[LayerKVCache] = []
+        for index, module in enumerate(self.blocks):
+            if not isinstance(module, TransformerBlock):
+                raise UnexpectedTransformerBlockError(index, type(module).__name__)
+            hidden_states, next_layer_cache = module.forward_cached_batch(
+                hidden_states,
+                cache[index],
+                cache_valid_mask,
+            )
+            next_cache.append(next_layer_cache)
+        normalized = cast("Tensor", self.final_norm(hidden_states))
+        logits = cast("Tensor", self.lm_head(normalized))
+        return logits, tuple(next_cache)
+
     @torch.no_grad()
     def prefill(self, token_ids: Tensor) -> tuple[Tensor, KVCache]:
         """Evaluate a complete prompt and return final logits plus detached K/V."""
@@ -354,6 +417,25 @@ class GPT(nn.Module):
             )
             _invalid_cache(reason)
         return self._cached_forward(token_ids, cache, past_length=past_length)
+
+    @torch.no_grad()
+    def decode_batch(
+        self,
+        token_ids: Tensor,
+        cache: KVCache,
+        cache_lengths: Tensor,
+    ) -> tuple[Tensor, KVCache]:
+        """Decode one token per row against variable-length right-padded K/V."""
+        self._validate_token_tensor(token_ids, name=_INPUT_NAME)
+        if token_ids.shape[1] != 1:
+            raise InvalidTokenTensorError(_INPUT_NAME, "batched decode requires one token per row")
+        padded_length = self._validate_batched_cache_lengths(token_ids, cache, cache_lengths)
+        return self._batched_cached_forward(
+            token_ids,
+            cache,
+            cache_lengths,
+            padded_length=padded_length,
+        )
 
     @staticmethod
     def _validate_generation_config(

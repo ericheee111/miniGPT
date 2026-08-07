@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+import pytest
 import torch
 
+from minigpt.layers import KVCache, LayerKVCache
 from minigpt.model import GPT, GPTConfig
 from minigpt.serving import (
+    ContinuousDecodeExecutor,
+    DecodeBatchObservation,
     EngineConfig,
     EngineEventType,
     ExecutionResult,
@@ -30,6 +34,10 @@ class FakeExecutor:
     failing_ids: set[str] = field(default_factory=set)
     prefill_calls: list[tuple[str, ...]] = field(default_factory=list)
     decode_calls: list[tuple[str, ...]] = field(default_factory=list)
+
+    @property
+    def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
+        return ()
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         self.prefill_calls.append(tuple(state.request.request_id for state in requests))
@@ -59,7 +67,7 @@ def make_engine(
     *,
     max_active_requests: int = 2,
     max_cached_tokens: int = 32,
-    executor: FakeExecutor | ReferenceExecutor | None = None,
+    executor: FakeExecutor | ReferenceExecutor | ContinuousDecodeExecutor | None = None,
 ) -> ServingEngine:
     selected = executor if executor is not None else FakeExecutor()
     return ServingEngine(
@@ -296,6 +304,18 @@ def run_reference_requests(requests: Sequence[GenerationRequest]) -> ServingEngi
     return engine
 
 
+def run_continuous_requests(requests: Sequence[GenerationRequest]) -> ServingEngine:
+    executor = ContinuousDecodeExecutor(tiny_gpt(), clock=StepClock(step=0.01))
+    engine = make_engine(max_active_requests=4, executor=executor)
+    for definition in requests:
+        engine.submit(definition)
+    for tick_time in range(12):
+        if engine.is_idle:
+            break
+        engine.tick(now=float(tick_time))
+    return engine
+
+
 @dataclass(slots=True)
 class StepClock:
     step: float
@@ -389,3 +409,175 @@ def test_learned_position_overflow_reuses_stage9_reprefill_fallback() -> None:
     assert len(engine.request_state("overflow").generated_tokens) == 3
     assert len(fallback_events) == 2
     assert engine.metrics().peak_cached_tokens == 4
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 4])
+def test_continuous_executor_matches_reference_tokens_states_events_and_metrics(
+    batch_size: int,
+) -> None:
+    # Given: mixed prompts, generation lengths, and request-local sampling streams.
+    definitions = tuple(
+        request(
+            f"request-{index}",
+            prompt_tokens=tuple(range(1, 2 + (index % 3))),
+            max_new_tokens=2 + (index % 3),
+            seed=100 + index,
+        )
+        for index in range(batch_size)
+    )
+
+    # When: identical models run through reference and continuous decode executors.
+    reference = run_reference_requests(definitions)
+    continuous = run_continuous_requests(definitions)
+
+    # Then: tokens, terminal state, and logical event semantics remain identical.
+    for definition in definitions:
+        request_id = definition.request_id
+        assert (
+            continuous.request_state(request_id).generated_tokens
+            == reference.request_state(request_id).generated_tokens
+        )
+        assert continuous.request_state(request_id).status is RequestStatus.FINISHED
+        assert continuous.request_metrics(request_id) == reference.request_metrics(request_id)
+    assert continuous.events == reference.events
+    continuous_metrics = continuous.metrics()
+    reference_metrics = reference.metrics()
+    assert continuous_metrics.completed_requests == reference_metrics.completed_requests
+    assert continuous_metrics.generated_tokens == reference_metrics.generated_tokens
+    assert continuous_metrics.max_decode_batch_size == batch_size
+
+
+def test_continuous_batch_order_does_not_change_request_outputs() -> None:
+    # Given: the same four request identities in forward and reverse active order.
+    definitions = tuple(
+        request(
+            f"request-{index}",
+            prompt_tokens=tuple(range(1, index + 2)),
+            max_new_tokens=4,
+            seed=200 + index,
+        )
+        for index in range(4)
+    )
+
+    # When: continuous decode batches use opposite row orders.
+    forward = run_continuous_requests(definitions)
+    reverse = run_continuous_requests(tuple(reversed(definitions)))
+
+    # Then: stable request identity and local generators determine every output.
+    for definition in definitions:
+        request_id = definition.request_id
+        assert (
+            forward.request_state(request_id).generated_tokens
+            == reverse.request_state(request_id).generated_tokens
+        )
+
+
+def test_continuous_cancellation_does_not_perturb_surviving_request_rng() -> None:
+    # Given: one target run alone and with a peer cancelled before its first decode.
+    target = request("target", prompt_tokens=(1, 2), max_new_tokens=4, seed=301)
+    peer = GenerationRequest(
+        request_id="peer",
+        prompt_tokens=(3, 4, 5),
+        max_new_tokens=4,
+        seed=302,
+        cancellation_time=2.0,
+    )
+
+    # When: both continuous workloads finish.
+    alone = run_continuous_requests((target,))
+    with_cancel = run_continuous_requests((peer, target))
+
+    # Then: cancellation and peer admission never consume the target generator.
+    assert (
+        alone.request_state("target").generated_tokens
+        == with_cancel.request_state("target").generated_tokens
+    )
+    assert with_cancel.request_state("peer").status is RequestStatus.CANCELLED
+
+
+def test_continuous_invalid_cache_fails_only_bad_request() -> None:
+    # Given: two valid requests prefetched together, then one caller-owned cache is corrupted.
+    executor = ContinuousDecodeExecutor(tiny_gpt(), clock=StepClock(step=0.01))
+    engine = make_engine(max_active_requests=2, executor=executor)
+    engine.submit(request("bad", max_new_tokens=3, seed=401))
+    engine.submit(request("good", max_new_tokens=3, seed=402))
+    engine.tick(now=0.0)
+    engine.tick(now=1.0)
+    bad_state = engine.request_state("bad")
+    assert bad_state.kv_cache is not None
+    first = bad_state.kv_cache[0]
+    bad_state.kv_cache = (LayerKVCache(key=first.key.to(torch.float64), value=first.value),)
+
+    # When: the next decode tick validates requests before assembly.
+    engine.tick(now=2.0)
+
+    # Then: the malformed request fails and its valid peer still decodes.
+    assert engine.request_state("bad").status is RequestStatus.FAILED
+    assert engine.request_state("bad").kv_cache is None
+    assert engine.request_state("good").status is RequestStatus.DECODING
+    assert len(engine.request_state("good").generated_tokens) == 2
+    assert executor.decode_observations[-1].request_ids == ("good",)
+
+
+def test_continuous_scatter_returns_compact_cache_without_padding_or_mutation() -> None:
+    # Given: two decoding states whose compact caches have different true lengths.
+    model_instance = tiny_gpt()
+    executor = ContinuousDecodeExecutor(model_instance, clock=StepClock(step=0.01))
+    states: list[RequestState] = []
+    for request_id, prompt in (("short", (1,)), ("long", (2, 3, 4))):
+        definition = request(request_id, prompt_tokens=prompt, max_new_tokens=4, seed=500)
+        generator = torch.Generator(device="cpu").manual_seed(definition.seed)
+        token_ids = torch.tensor((prompt,), dtype=torch.long)
+        logits, cache = model_instance.prefill(token_ids)
+        token_id = int(logits[:, -1, :].argmax(dim=-1).item())
+        states.append(
+            RequestState(
+                request=definition,
+                generator=generator,
+                status=RequestStatus.DECODING,
+                generated_tokens=[token_id],
+                kv_cache=cache,
+                cached_tokens=len(prompt),
+                reserved_cache_tokens=4,
+            )
+        )
+    old_keys = tuple(cast("KVCache", state.kv_cache)[0].key.clone() for state in states)
+
+    # When: one dense batch is assembled and scattered back to both requests.
+    results = executor.decode_batch(states)
+
+    # Then: each result is compact, typed correctly, and caller caches remain unchanged.
+    assert [result.cache_tokens for result in results] == [2, 4]
+    for state, old_key, result in zip(states, old_keys, results, strict=True):
+        assert state.kv_cache is not None
+        assert torch.equal(state.kv_cache[0].key, old_key)
+        assert result.cache is not None
+        assert result.cache[0].length == state.cached_tokens + 1
+        assert result.cache[0].key.dtype == model_instance.token_embedding.weight.dtype
+        assert result.cache[0].key.device == model_instance.token_embedding.weight.device
+        assert result.cache[0].key.shape[0] == 1
+    observation = executor.decode_observations[-1]
+    assert observation.batch_size == 2
+    assert observation.useful_cache_tokens == 4
+    assert observation.padded_cache_tokens == 6
+
+
+def test_continuous_overflow_matches_reference_reprefill_tokens() -> None:
+    # Given: a full learned-position window that requires Stage 9 re-prefill every later tick.
+    definition = request(
+        "overflow",
+        prompt_tokens=(1, 2, 3, 4),
+        max_new_tokens=3,
+        seed=601,
+    )
+
+    # When: reference and continuous executors cross the same window boundary.
+    reference = run_reference_requests((definition,))
+    continuous = run_continuous_requests((definition,))
+
+    # Then: tokens and fallback event semantics are identical.
+    assert (
+        continuous.request_state("overflow").generated_tokens
+        == reference.request_state("overflow").generated_tokens
+    )
+    assert continuous.events == reference.events

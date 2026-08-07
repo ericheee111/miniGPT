@@ -1,0 +1,156 @@
+schema_version: 1
+experiment_name: stage11a-decode-continuous-batching
+benchmark_seed: 1101
+output_root: reports/serving-benchmark-stage11a
+worker_timeout_seconds: 120.0
+warmup_iterations: 1
+measurement_iterations: 3
+replicates: 5
+minimum_replicates: 5
+max_cv_percent: 10.0
+torch_num_threads: 1
+torch_num_interop_threads: 1
+vocab_size: 65
+model:
+  vocab_size: 65
+  block_size: 32
+  n_layer: 2
+  n_head: 2
+  n_embd: 32
+  dropout: 0.0
+  bias: false
+scenarios:
+- name: burst-2
+  arrival_ticks:
+  - 0
+  - 0
+  prompt_lengths:
+  - 8
+  - 8
+  generated_lengths:
+  - 8
+  - 8
+  cancellation_ticks:
+  - null
+  - null
+- name: burst-4
+  arrival_ticks:
+  - 0
+  - 0
+  - 0
+  - 0
+  prompt_lengths:
+  - 8
+  - 8
+  - 8
+  - 8
+  generated_lengths:
+  - 8
+  - 8
+  - 8
+  - 8
+  cancellation_ticks:
+  - null
+  - null
+  - null
+  - null
+- name: burst-8
+  arrival_ticks:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  prompt_lengths:
+  - 8
+  - 8
+  - 8
+  - 8
+  - 8
+  - 8
+  - 8
+  - 8
+  generated_lengths:
+  - 8
+  - 8
+  - 8
+  - 8
+  - 8
+  - 8
+  - 8
+  - 8
+  cancellation_ticks:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+- name: staggered-arrival
+  arrival_ticks:
+  - 0
+  - 1
+  - 2
+  - 3
+  prompt_lengths:
+  - 8
+  - 8
+  - 8
+  - 8
+  generated_lengths:
+  - 8
+  - 8
+  - 8
+  - 8
+  cancellation_ticks:
+  - null
+  - null
+  - null
+  - null
+- name: mixed-cache-lengths
+  arrival_ticks:
+  - 0
+  - 0
+  - 1
+  - 2
+  prompt_lengths:
+  - 2
+  - 8
+  - 16
+  - 24
+  generated_lengths:
+  - 12
+  - 8
+  - 6
+  - 4
+  cancellation_ticks:
+  - null
+  - null
+  - null
+  - null
+- name: cancellation
+  arrival_ticks:
+  - 0
+  - 0
+  - 0
+  - 0
+  prompt_lengths:
+  - 8
+  - 8
+  - 8
+  - 8
+  generated_lengths:
+  - 10
+  - 10
+  - 10
+  - 10
+  cancellation_ticks:
+  - null
+  - 3
+  - null
+  - 4

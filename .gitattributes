@@ -22,3 +22,6 @@ docs/results/kv-cache-generation/** text eol=lf
 
 # Stage 10 simulator artifacts are byte-reproducible UTF-8/LF evidence.
 docs/results/serving-control-plane/** text eol=lf
+
+# Stage 11A simulator and benchmark evidence binds exact UTF-8/LF checkout bytes.
+docs/results/decode-continuous-batching/** text eol=lf

@@ -524,3 +524,99 @@ def test_decode_rejects_cache_overflow_before_attention() -> None:
         model.InvalidKVCacheError, match=r"cached length 4.*new length 1.*block_size 4"
     ):
         _ = gpt.decode(torch.tensor([[5]], dtype=torch.long), full_cache)
+
+
+def test_variable_length_batched_decode_matches_individual_decode() -> None:
+    # Given: two independently prefetched prompts with different true cache lengths.
+    _ = torch.default_generator.manual_seed(59)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    _, short_cache = gpt.prefill(torch.tensor([[1, 2]], dtype=torch.long))
+    _, long_cache = gpt.prefill(torch.tensor([[3, 4, 5]], dtype=torch.long))
+    dense_cache = tuple(
+        model.LayerKVCache(
+            key=torch.cat(
+                (short_layer.key, torch.zeros_like(long_layer.key[:, :, :1])), dim=2
+            ).clone(),
+            value=torch.cat(
+                (short_layer.value, torch.zeros_like(long_layer.value[:, :, :1])), dim=2
+            ).clone(),
+        )
+        for short_layer, long_layer in zip(short_cache, long_cache, strict=True)
+    )
+    dense_cache = tuple(
+        model.LayerKVCache(
+            key=torch.cat((layer.key, long_cache[index].key), dim=0),
+            value=torch.cat((layer.value, long_cache[index].value), dim=0),
+        )
+        for index, layer in enumerate(dense_cache)
+    )
+    old_keys = tuple(layer.key.clone() for layer in dense_cache)
+    new_tokens = torch.tensor([[6], [7]], dtype=torch.long)
+
+    # When: one model call decodes both rows with their real position offsets and validity mask.
+    batched_logits, next_dense = gpt.decode_batch(
+        new_tokens,
+        dense_cache,
+        torch.tensor([2, 3], dtype=torch.long),
+    )
+    short_logits, short_next = gpt.decode(new_tokens[:1], short_cache)
+    long_logits, long_next = gpt.decode(new_tokens[1:], long_cache)
+
+    # Then: masked logits match individual decode and the caller-owned padding stays unchanged.
+    torch.testing.assert_close(batched_logits[:1], short_logits, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(batched_logits[1:], long_logits, rtol=1e-5, atol=1e-6)
+    for index, (old_key, dense_layer, next_layer) in enumerate(
+        zip(old_keys, dense_cache, next_dense, strict=True)
+    ):
+        assert torch.equal(dense_layer.key, old_key)
+        assert next_layer.key.shape == (2, 2, 4, 4)
+        torch.testing.assert_close(next_layer.key[0, :, :2], short_next[index].key[0, :, :2])
+        torch.testing.assert_close(next_layer.key[0, :, -1:], short_next[index].key[0, :, -1:])
+        torch.testing.assert_close(next_layer.key[1], long_next[index].key[0])
+
+
+def test_variable_length_batched_decode_size_one_matches_decode() -> None:
+    # Given: one ordinary compact request cache.
+    _ = torch.default_generator.manual_seed(61)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    _, cache = gpt.prefill(torch.tensor([[1, 2]], dtype=torch.long))
+    token = torch.tensor([[3]], dtype=torch.long)
+
+    # When: it uses ordinary and batched single-token decode paths.
+    expected_logits, expected_cache = gpt.decode(token, cache)
+    actual_logits, actual_cache = gpt.decode_batch(
+        token,
+        cache,
+        torch.tensor([2], dtype=torch.long),
+    )
+
+    # Then: batch size one is numerically and structurally equivalent.
+    torch.testing.assert_close(actual_logits, expected_logits, rtol=1e-5, atol=1e-6)
+    for actual_layer, expected_layer in zip(actual_cache, expected_cache, strict=True):
+        torch.testing.assert_close(actual_layer.key, expected_layer.key)
+        torch.testing.assert_close(actual_layer.value, expected_layer.value)
+
+
+@pytest.mark.parametrize(
+    ("cache_lengths", "message"),
+    [
+        (torch.tensor([[2]], dtype=torch.long), "shape"),
+        (torch.tensor([2], dtype=torch.int32), "dtype"),
+        (torch.tensor([0], dtype=torch.long), "must be in"),
+        (torch.tensor([3], dtype=torch.long), "padded cache length"),
+    ],
+)
+def test_batched_decode_rejects_invalid_real_cache_lengths(
+    cache_lengths: torch.Tensor,
+    message: str,
+) -> None:
+    # Given: a valid compact cache and invalid real-length metadata.
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    _, cache = gpt.prefill(torch.tensor([[1, 2]], dtype=torch.long))
+
+    # When/Then: validation rejects the metadata before attention executes.
+    with pytest.raises(model.InvalidKVCacheError, match=message):
+        _ = gpt.decode_batch(torch.tensor([[3]], dtype=torch.long), cache, cache_lengths)
