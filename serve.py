@@ -20,6 +20,7 @@ from minigpt.serving import (
     ContinuousDecodeExecutor,
     ContinuousExecutor,
     EngineConfig,
+    PagedAttentionExecutor,
     ReferenceExecutor,
     SchedulerConfig,
     ServingEngine,
@@ -31,11 +32,12 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
 
-ExecutorName = Literal["reference", "continuous_decode", "continuous"]
+ExecutorName = Literal["reference", "continuous_decode", "continuous", "paged_attention"]
 _EXECUTOR_CHOICES: tuple[ExecutorName, ...] = (
     "reference",
     "continuous_decode",
     "continuous",
+    "paged_attention",
 )
 
 
@@ -84,8 +86,6 @@ def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]
     load_model_state(checkpoint_path, model)
     _ = model.eval()
 
-    executor_name = cast("ExecutorName", arguments.executor)
-    executor = _executor(executor_name, model)
     max_active_requests = cast("int", arguments.max_active_requests)
     configured_cached_tokens = cast("int | None", arguments.max_cached_tokens)
     max_cached_tokens = (
@@ -112,6 +112,8 @@ def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]
             num_blocks=num_blocks,
         )
         paged_cache_pool = PagedKVCachePool.from_model(paged_kv_cache, model)
+    executor_name = cast("ExecutorName", arguments.executor)
+    executor = _executor(executor_name, model, paged_cache_pool=paged_cache_pool)
     engine = ServingEngine(
         config=EngineConfig(
             scheduler=SchedulerConfig(
@@ -156,12 +158,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _executor(name: ExecutorName, model: GPT) -> ServingExecutor:
+def _executor(
+    name: ExecutorName,
+    model: GPT,
+    *,
+    paged_cache_pool: PagedKVCachePool | None,
+) -> ServingExecutor:
     if name == "reference":
         return ReferenceExecutor(model)
     if name == "continuous_decode":
         return ContinuousDecodeExecutor(model)
-    return ContinuousExecutor(model)
+    if name == "continuous":
+        return ContinuousExecutor(model)
+    if paged_cache_pool is None:
+        reason = "--executor paged_attention requires --kv-cache-backend paged"
+        raise ValueError(reason)
+    return PagedAttentionExecutor(model, paged_cache_pool)
 
 
 if __name__ == "__main__":

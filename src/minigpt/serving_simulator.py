@@ -24,6 +24,7 @@ from minigpt.serving import (
     EngineEvent,
     EngineMetrics,
     GenerationRequest,
+    PagedAttentionExecutor,
     PrefillBatchConfig,
     PrefillBatchEvent,
     ReferenceExecutor,
@@ -142,6 +143,7 @@ class SimulatorExecutor(StrEnum):
     REFERENCE = "reference"
     CONTINUOUS_DECODE = "continuous_decode"
     CONTINUOUS = "continuous"
+    PAGED_ATTENTION = "paged_attention"
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +163,17 @@ class CacheBackendEquivalenceResult:
 
     dense: SimulationResult
     paged: SimulationResult
+    equivalent: bool
+    checked_contracts: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PagedAttentionEquivalenceResult:
+    """Return dense, materialized-paged, and direct-paged correctness runs."""
+
+    dense: SimulationResult
+    materialized: SimulationResult
+    direct: SimulationResult
     equivalent: bool
     checked_contracts: tuple[str, ...]
 
@@ -426,9 +439,12 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         _invalid(source, "schema_version must equal 1")
     vocab_size = _integer(document, "vocab_size", source, positive=True)
     backend = _cache_backend(document, source)
+    executor = _executor(document, source)
+    if executor is SimulatorExecutor.PAGED_ATTENTION and backend is not KVCacheBackend.PAGED:
+        _invalid(source, "paged_attention executor requires paged kv_cache_backend")
     return SimulatorConfig(
         schema_version=schema_version,
-        executor=_executor(document, source),
+        executor=executor,
         kv_cache_backend=backend,
         paged_kv_cache=_paged_kv_cache(document, source, backend=backend),
         scenario_name=_string(document, "scenario_name", source),
@@ -513,12 +529,16 @@ def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[s
             "executor": config.executor.value,
             "kv_cache_backend": config.kv_cache_backend.value,
             "scheduling_level": (
-                "iteration-level with tensor-level prefill and decode batching"
-                if config.executor is SimulatorExecutor.CONTINUOUS
+                "iteration-level with tensor-level prefill and block-aware decode batching"
+                if config.executor is SimulatorExecutor.PAGED_ATTENTION
                 else (
-                    "iteration-level with tensor-level decode batching"
-                    if config.executor is SimulatorExecutor.CONTINUOUS_DECODE
-                    else "iteration-level with per-request model execution"
+                    "iteration-level with tensor-level prefill and decode batching"
+                    if config.executor is SimulatorExecutor.CONTINUOUS
+                    else (
+                        "iteration-level with tensor-level decode batching"
+                        if config.executor is SimulatorExecutor.CONTINUOUS_DECODE
+                        else "iteration-level with per-request model execution"
+                    )
                 )
             ),
             "max_active_requests": config.scheduler.max_active_requests,
@@ -641,7 +661,22 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
     model = _build_model(config)
     executor_clock = StepClock(config.executor_clock_step_seconds)
     telemetry_clock = StepClock(config.executor_clock_step_seconds / 10.0)
-    if config.executor is SimulatorExecutor.CONTINUOUS:
+    paged_pool = (
+        PagedKVCachePool.from_model(config.paged_kv_cache, model)
+        if config.kv_cache_backend is KVCacheBackend.PAGED and config.paged_kv_cache is not None
+        else None
+    )
+    if config.executor is SimulatorExecutor.PAGED_ATTENTION:
+        if paged_pool is None:
+            _invalid(Path("<runtime>"), "paged_attention executor requires paged cache pool")
+        executor = PagedAttentionExecutor(
+            model,
+            paged_pool,
+            prefill_config=config.prefill,
+            clock=executor_clock,
+            telemetry_clock=telemetry_clock,
+        )
+    elif config.executor is SimulatorExecutor.CONTINUOUS:
         executor = ContinuousExecutor(
             model,
             prefill_config=config.prefill,
@@ -670,11 +705,7 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
             ),
         ),
         executor=executor,
-        paged_cache_pool=(
-            PagedKVCachePool.from_model(config.paged_kv_cache, model)
-            if config.kv_cache_backend is KVCacheBackend.PAGED and config.paged_kv_cache is not None
-            else None
-        ),
+        paged_cache_pool=paged_pool,
         clock=lambda: 0.0,
     )
     pending = deque(
@@ -840,6 +871,74 @@ def run_cache_backend_equivalence(
     return CacheBackendEquivalenceResult(
         dense=dense,
         paged=paged,
+        equivalent=True,
+        checked_contracts=tuple(comparisons),
+    )
+
+
+def run_paged_attention_equivalence(
+    config: SimulatorConfig,
+    *,
+    output_dir: Path,
+) -> PagedAttentionEquivalenceResult:
+    """Compare dense, materialized-paged, and direct block-aware decode contracts."""
+    if config.paged_kv_cache is None:
+        _invalid(Path("<equivalence>"), "paged attention equivalence requires kv_cache config")
+    dense = run_simulation(
+        replace(
+            config,
+            executor=SimulatorExecutor.CONTINUOUS,
+            kv_cache_backend=KVCacheBackend.DENSE,
+        ),
+        output_dir=output_dir / "dense",
+    )
+    materialized = run_simulation(
+        replace(
+            config,
+            executor=SimulatorExecutor.CONTINUOUS,
+            kv_cache_backend=KVCacheBackend.PAGED,
+        ),
+        output_dir=output_dir / "materialized",
+    )
+    direct = run_simulation(
+        replace(
+            config,
+            executor=SimulatorExecutor.PAGED_ATTENTION,
+            kv_cache_backend=KVCacheBackend.PAGED,
+        ),
+        output_dir=output_dir / "direct",
+    )
+    comparisons = {
+        "generated_tokens": (
+            dense.generated_tokens == materialized.generated_tokens == direct.generated_tokens
+        ),
+        "request_terminal_states_and_cancellation": (
+            dense.request_statuses == materialized.request_statuses == direct.request_statuses
+        ),
+        "fifo_admission_order": (
+            dense.admission_order == materialized.admission_order == direct.admission_order
+        ),
+        "logical_event_semantics": dense.events == materialized.events == direct.events,
+        "request_metrics": (
+            dense.request_metrics == materialized.request_metrics == direct.request_metrics
+        ),
+        "logical_cache_accounting": (
+            dense.metrics.peak_cached_tokens
+            == materialized.metrics.peak_cached_tokens
+            == direct.metrics.peak_cached_tokens
+            and dense.metrics.peak_reserved_cache_tokens
+            == materialized.metrics.peak_reserved_cache_tokens
+            == direct.metrics.peak_reserved_cache_tokens
+        ),
+        "direct_decode_has_no_cache_padding": direct.metrics.padding_waste_ratio == 0.0,
+    }
+    failed = tuple(name for name, matches in comparisons.items() if not matches)
+    if failed:
+        _invalid(Path("<equivalence>"), f"paged attention contracts differ: {', '.join(failed)}")
+    return PagedAttentionEquivalenceResult(
+        dense=dense,
+        materialized=materialized,
+        direct=direct,
         equivalent=True,
         checked_contracts=tuple(comparisons),
     )

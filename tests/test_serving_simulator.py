@@ -13,6 +13,7 @@ from minigpt.serving_simulator import (
     load_simulator_config,
     run_cache_backend_equivalence,
     run_executor_equivalence,
+    run_paged_attention_equivalence,
     run_simulation,
 )
 
@@ -266,16 +267,52 @@ def test_paged_backend_requires_explicit_pool_config(tmp_path: Path) -> None:
 def test_invalid_executor_name_is_rejected(tmp_path: Path) -> None:
     # Given: a strict simulator document naming an unsupported executor.
     document = config_document()
-    document["executor"] = "paged_attention"
+    document["executor"] = "unsupported"
     config_path = tmp_path / "invalid-executor.json"
     write_config(config_path, document)
 
     # When/Then: loading rejects the out-of-scope executor explicitly.
     with pytest.raises(
         InvalidSimulatorConfigError,
-        match="reference, continuous_decode, continuous",
+        match="reference, continuous_decode, continuous, paged_attention",
     ):
         _ = load_simulator_config(config_path)
+
+
+def test_direct_paged_attention_matches_dense_and_materialized_simulation(tmp_path: Path) -> None:
+    # Given: a block-size overflow workload configured for direct paged attention.
+    config = load_simulator_config(Path("configs") / "serving_paged_overflow.yaml")
+
+    # When: all three storage/decode strategies run from identical weights and request seeds.
+    comparison = run_paged_attention_equivalence(config, output_dir=tmp_path / "comparison")
+
+    # Then: logical contracts match and direct traversal removes dense cache padding.
+    assert comparison.equivalent
+    assert comparison.dense.generated_tokens == comparison.direct.generated_tokens
+    assert comparison.materialized.events == comparison.direct.events
+    assert "direct_decode_has_no_cache_padding" in comparison.checked_contracts
+    assert comparison.direct.metrics.padding_waste_ratio == 0.0
+
+
+def test_committed_direct_paged_attention_scenario_finishes_without_leaks(tmp_path: Path) -> None:
+    # Given: the fixed Stage 13B mixed-length and cancellation workload.
+    config = load_simulator_config(Path("configs") / "serving_paged_attention.yaml")
+    assert config.executor is SimulatorExecutor.PAGED_ATTENTION
+
+    # When: block-aware decode runs through the simulator entrypoint.
+    result = run_simulation(config, output_dir=tmp_path / "direct")
+
+    # Then: all requests are terminal and every physical block is released.
+    terminal = (
+        result.metrics.completed_requests
+        + result.metrics.cancelled_requests
+        + result.metrics.failed_requests
+    )
+    assert terminal == result.metrics.total_requests
+    assert result.metrics.cancelled_requests == 1
+    assert result.metrics.allocated_blocks == 0
+    assert result.metrics.reserved_blocks == 0
+    assert result.metrics.free_blocks == result.metrics.total_blocks
 
 
 def test_invalid_prompt_source_is_rejected(tmp_path: Path) -> None:
