@@ -5,7 +5,7 @@ from collections.abc import Callable
 import pytest
 import torch
 
-from minigpt.engine_runner import EngineRunner, RunnerConfig, RunnerState
+from minigpt.engine_runner import EngineRunner, RunnerConfig, RunnerEventType, RunnerState
 from minigpt.model import GPT
 from minigpt.paged_kv_cache import KVCacheBackend, PagedKVCacheConfig, PagedKVCachePool
 from minigpt.serving import (
@@ -312,6 +312,38 @@ def test_engine_runner_graceful_shutdown_releases_paged_pool() -> None:
     assert metrics.allocated_blocks == 0
     assert metrics.reserved_blocks == 0
     assert metrics.free_blocks == metrics.total_blocks
+
+
+def test_engine_runner_stream_backpressure_releases_paged_pool() -> None:
+    # Given: one paged request producing into a deliberately unconsumed one-token stream buffer.
+    model = _model()
+    engine = _engine(model, _reference, backend=KVCacheBackend.PAGED, num_blocks=4)
+    pool = engine.paged_cache_pool
+    assert pool is not None
+    runner = EngineRunner(
+        engine=engine,
+        config=RunnerConfig(command_queue_size=8, stream_buffer_size=1),
+    )
+    runner.start()
+    handle = runner.submit(
+        GenerationRequest("backpressure", (1, 2), 20, seed=17),
+        stream=True,
+    )
+
+    try:
+        # When: the owner outruns the intentionally idle stream consumer.
+        result = handle.future.result(timeout=5.0)
+
+        # Then: bounded-buffer cancellation releases every physical block and reservation.
+        assert result.status is RequestStatus.CANCELLED
+        assert any(event.event_type is RunnerEventType.BACKPRESSURE for event in runner.events)
+        pool.verify_invariants()
+        metrics = pool.metrics()
+        assert metrics.allocated_blocks == 0
+        assert metrics.reserved_blocks == 0
+        assert metrics.free_blocks == metrics.total_blocks
+    finally:
+        runner.shutdown()
 
 
 def test_dense_backend_reports_zero_storage_specific_metrics() -> None:
