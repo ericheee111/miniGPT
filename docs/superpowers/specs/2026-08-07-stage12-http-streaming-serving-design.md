@@ -95,4 +95,3 @@ scheduler wait, and engine execution at concurrency 1/2/4/8 for short and mixed 
 and non-stream modes. It reports requests/s, generated tokens/s, TTFT, TPOT, E2E P50/P95/P99,
 HTTP errors, cancellations, peak active requests, and observed prefill/decode batch sizes. Shared CI
 results are correctness smoke evidence, not performance truth, and no speedup is assumed.
-
