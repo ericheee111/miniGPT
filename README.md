@@ -447,6 +447,33 @@ python generate_stage11b_evidence.py `
 `continuous_decode` 与 `continuous`，并同时报告 throughput、TTFT、queue time 与 peak RSS。
 本阶段仍是 dense batching，不是 paged attention。
 
+### Stage 12 OpenAI-compatible HTTP serving
+
+Stage 12 用可选的 FastAPI/Uvicorn 依赖把 Stage 10 FIFO scheduler 与 Stage 11 executors 暴露为
+`GET /healthz`、`GET /v1/models` 和 `POST /v1/completions`。训练核心不会强制依赖 Web 框架；
+checkpoint、tokenizer、config 与 model 只在启动时加载一次。async HTTP handler 通过线程安全
+command queue 提交给专用 `EngineRunner`，只有该线程可以调用 `ServingEngine.tick()` 与 model。
+
+```powershell
+python -m pip install -e ".[serve]"
+python serve.py `
+  --checkpoint checkpoints/reference.pt `
+  --tokenizer data/processed/tinyshakespeare_char/tokenizer.json `
+  --host 127.0.0.1 `
+  --port 8000 `
+  --executor continuous
+```
+
+`stream=true` 每 token 发送一个 SSE chunk，正常结束才发送最终 usage/finish reason 与
+`data: [DONE]`。每个 stream 使用有界 channel；慢消费者溢出或 client disconnect 只取消对应
+request，并由现有 scheduler 释放 KV reservation，不阻塞其他 decode。当前只接受 `model`、
+`prompt`、`max_tokens`、`temperature`、`stream`、`seed`；其他 OpenAI 参数会明确拒绝。
+
+[`benchmark_server.py`](benchmark_server.py) 独立测量 HTTP validation、serialization、queue、
+scheduler 与 engine 的端到端 TTFT/TPOT/E2E、P50/P95/P99；它不替代 Stage 11 executor 隔离
+benchmark，也不建立跨机器性能结论。curl/SSE、并发、取消/背压和 canonical localhost matrix
+见 [Stage 12 证据包](docs/results/http-serving/README.md)。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
@@ -535,7 +562,9 @@ miniGPT/
 │   ├── trainer.py           # 训练编排与可观测性
 │   ├── benchmark_*.py       # 训练 benchmark、报告与 workload
 │   ├── inference_*.py       # KV-cache inference benchmark 与 profiler
-│   └── serving_*.py         # serving engine、simulator、benchmark 与证据
+│   ├── serving_*.py         # serving engine、simulator、benchmark 与证据
+│   ├── engine_runner.py     # 单模型执行 owner 与请求 channel
+│   └── http_server.py       # 可选 OpenAI-compatible HTTP/SSE 边界
 ├── tests/
 ├── prepare_data.py
 ├── train.py
@@ -549,7 +578,10 @@ miniGPT/
 ├── benchmark_serving.py
 ├── profile_serving.py
 ├── generate_stage11a_evidence.py
-└── generate_stage11b_evidence.py
+├── generate_stage11b_evidence.py
+├── serve.py
+├── benchmark_server.py
+└── generate_stage12_evidence.py
 ```
 
 阶段 5 的设计与实施依据见
@@ -584,9 +616,13 @@ python benchmark_serving.py --help
 python profile_serving.py --help
 python generate_stage11a_evidence.py --help
 python generate_stage11b_evidence.py --help
+python serve.py --help
+python benchmark_server.py --help
+python generate_stage12_evidence.py --help
 ```
 
-测试遵循 Given/When/Then 结构；网络相关测试用 `file://` 本地语料，不依赖真实 HTTP。
+测试遵循 Given/When/Then 结构；HTTP 合同优先使用 ASGI/in-process 测试，仅以少量真实 localhost
+subprocess smoke 覆盖 Uvicorn 启动、disconnect cancellation 与退出，不访问公网。
 `.github/workflows/quality.yml` 在 Windows/Python 3.14 与 Linux/Python 3.11 上执行相同门禁。
 
 ## Roadmap
@@ -597,8 +633,10 @@ python generate_stage11b_evidence.py --help
   reference 等价验证和隔离 serving benchmark。
 - Stage 11B 已完成 length-bucketed batched prefill、三 executor 等价验证、prompt padding/TTFT
   telemetry 和独立 fresh-process benchmark；当前仍采用 dense cache 与 attention。
-- 后续可研究基于历史长度分布的自适应 bucket policy，但应保持 FIFO/no-waiting 约束；paged
-  attention、HTTP 与 GPU serving 需要独立阶段设计。
+- Stage 12 已完成 OpenAI-compatible completions subset、SSE、单 owner EngineRunner、有界背压、
+  disconnect cancellation、真实 localhost lifecycle smoke 与独立 HTTP system benchmark。
+- 后续可研究基于历史长度分布的自适应 bucket policy，但应保持 FIFO/no-waiting 约束；Paged
+  KV Cache、BPE 与 GPU serving 需要各自独立阶段设计。
 - 增加 BPE tokenizer，并保持 checkpoint/tokenizer 版本兼容。
 - 增加 mixed precision 与 CUDA benchmark，同时保留 CPU baseline。
 - 增加梯度累积、数据加载 worker 和更长训练实验。

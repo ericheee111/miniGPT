@@ -19,14 +19,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+serve = [
+    "fastapi>=0.116",
+    "httpx>=0.28",
+    "uvicorn>=0.35",
+]
 report = [
     "matplotlib>=3.10",
 ]
 dev = [
     "basedpyright>=1.39.9",
+    "fastapi>=0.116",
+    "httpx>=0.28",
     "matplotlib>=3.10",
     "pytest>=8.0",
     "ruff>=0.15.20",
+    "uvicorn>=0.35",
 ]
 
 [tool.setuptools.packages.find]
