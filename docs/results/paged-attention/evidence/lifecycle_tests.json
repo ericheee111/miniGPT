@@ -1,0 +1,21 @@
+{
+  "covered_contracts": [
+    "paged_logits_and_kv_delta",
+    "no_dense_materialization_guard",
+    "three_strategy_logical_equivalence",
+    "overflow_dense_reprefill",
+    "cancellation_and_zero_leaks",
+    "http_cli_direct_executor",
+    "descriptive_cpu_benchmark"
+  ],
+  "exit_code": 0,
+  "schema_version": 1,
+  "test_files": [
+    "tests/test_model.py",
+    "tests/test_paged_kv_cache.py",
+    "tests/test_paged_serving.py",
+    "tests/test_serving_simulator.py",
+    "tests/test_paged_attention_benchmark.py",
+    "tests/test_serve_subprocess.py"
+  ]
+}
