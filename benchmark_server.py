@@ -85,6 +85,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _ = output.write_text(
             json.dumps(result.to_document(), indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
+            newline="\n",
         )
         _ = stdout.write(f"{output}\n")
     finally:
