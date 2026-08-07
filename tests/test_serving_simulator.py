@@ -155,11 +155,64 @@ def test_continuous_simulator_matches_reference_logical_contracts(tmp_path: Path
         "generated_tokens",
         "request_terminal_states_and_cancellation",
         "fifo_admission_order",
+        "cache_accounting",
         "logical_event_semantics",
         "request_metrics",
     )
-    assert comparison.reference.generated_tokens == comparison.continuous.generated_tokens
-    assert comparison.reference.request_statuses == comparison.continuous.request_statuses
+    assert (
+        comparison.reference.generated_tokens
+        == comparison.continuous_decode.generated_tokens
+        == comparison.continuous.generated_tokens
+    )
+    assert (
+        comparison.reference.request_statuses
+        == comparison.continuous_decode.request_statuses
+        == comparison.continuous.request_statuses
+    )
+
+
+def test_continuous_simulator_writes_prefill_batch_events_and_metrics(tmp_path: Path) -> None:
+    # Given: an explicit Stage 11B prefill policy and two equal-length eligible prompts.
+    document = config_document()
+    document["executor"] = "continuous"
+    document["prefill"] = {
+        "max_batch_size": 8,
+        "max_batch_tokens": 32,
+        "max_padding_ratio": 0.25,
+    }
+    requests = cast("list[dict[str, object]]", document["requests"])
+    requests[1]["arrival_time"] = 0.0
+    requests[1]["prompt_length"] = 2
+    config_path = tmp_path / "stage11b.json"
+    write_config(config_path, document)
+
+    # When: the full continuous simulator executes the workload.
+    result = run_simulation(load_simulator_config(config_path), output_dir=tmp_path / "run")
+    event_lines = [
+        cast("dict[str, object]", json.loads(line))
+        for line in (result.output_dir / "prefill_events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    # Then: batch boundaries and prompt-utilization metrics are explicit and deterministic.
+    assert {path.name for path in result.output_paths} == {
+        "events.jsonl",
+        "prefill_events.jsonl",
+        "requests.csv",
+        "summary.json",
+        "timeline.md",
+    }
+    assert [line["event_type"] for line in event_lines[:2]] == [
+        "PREFILL_BATCH_STARTED",
+        "PREFILL_BATCH_FINISHED",
+    ]
+    assert event_lines[1]["request_ids"] == ["explicit", "derived"]
+    assert event_lines[1]["batch_size"] == 2
+    assert event_lines[1]["useful_prompt_tokens"] == 4
+    assert event_lines[1]["padded_prompt_tokens"] == 4
+    assert result.metrics.max_prefill_batch_size == 2
+    assert result.metrics.prompt_padding_waste_ratio == 0.0
 
 
 def test_invalid_executor_name_is_rejected(tmp_path: Path) -> None:
@@ -170,7 +223,10 @@ def test_invalid_executor_name_is_rejected(tmp_path: Path) -> None:
     write_config(config_path, document)
 
     # When/Then: loading rejects the out-of-scope executor explicitly.
-    with pytest.raises(InvalidSimulatorConfigError, match="reference, continuous_decode"):
+    with pytest.raises(
+        InvalidSimulatorConfigError,
+        match="reference, continuous_decode, continuous",
+    ):
         _ = load_simulator_config(config_path)
 
 

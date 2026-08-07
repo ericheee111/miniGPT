@@ -10,11 +10,16 @@ from minigpt.layers import KVCache, LayerKVCache
 from minigpt.model import GPT, GPTConfig
 from minigpt.serving import (
     ContinuousDecodeExecutor,
+    ContinuousExecutor,
     DecodeBatchObservation,
     EngineConfig,
     EngineEventType,
     ExecutionResult,
     GenerationRequest,
+    PrefillBatchConfig,
+    PrefillBatchEvent,
+    PrefillBatchEventType,
+    PrefillBatchObservation,
     ReferenceExecutor,
     RequestState,
     RequestStatus,
@@ -37,6 +42,14 @@ class FakeExecutor:
 
     @property
     def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
+        return ()
+
+    @property
+    def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
+        return ()
+
+    @property
+    def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
         return ()
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
@@ -67,7 +80,11 @@ def make_engine(
     *,
     max_active_requests: int = 2,
     max_cached_tokens: int = 32,
-    executor: FakeExecutor | ReferenceExecutor | ContinuousDecodeExecutor | None = None,
+    executor: FakeExecutor
+    | ReferenceExecutor
+    | ContinuousDecodeExecutor
+    | ContinuousExecutor
+    | None = None,
 ) -> ServingEngine:
     selected = executor if executor is not None else FakeExecutor()
     return ServingEngine(
@@ -294,7 +311,7 @@ def tiny_gpt() -> GPT:
 
 def run_reference_requests(requests: Sequence[GenerationRequest]) -> ServingEngine:
     executor = ReferenceExecutor(tiny_gpt(), clock=StepClock(step=0.01))
-    engine = make_engine(max_active_requests=4, executor=executor)
+    engine = make_engine(max_active_requests=8, executor=executor)
     for definition in requests:
         engine.submit(definition)
     for tick_time in range(12):
@@ -306,10 +323,30 @@ def run_reference_requests(requests: Sequence[GenerationRequest]) -> ServingEngi
 
 def run_continuous_requests(requests: Sequence[GenerationRequest]) -> ServingEngine:
     executor = ContinuousDecodeExecutor(tiny_gpt(), clock=StepClock(step=0.01))
-    engine = make_engine(max_active_requests=4, executor=executor)
+    engine = make_engine(max_active_requests=8, executor=executor)
     for definition in requests:
         engine.submit(definition)
     for tick_time in range(12):
+        if engine.is_idle:
+            break
+        engine.tick(now=float(tick_time))
+    return engine
+
+
+def run_fully_continuous_requests(
+    requests: Sequence[GenerationRequest],
+    *,
+    prefill_config: PrefillBatchConfig | None = None,
+) -> ServingEngine:
+    executor = ContinuousExecutor(
+        tiny_gpt(),
+        prefill_config=prefill_config,
+        clock=StepClock(step=0.01),
+    )
+    engine = make_engine(max_active_requests=8, executor=executor)
+    for definition in requests:
+        engine.submit(definition)
+    for tick_time in range(16):
         if engine.is_idle:
             break
         engine.tick(now=float(tick_time))
@@ -581,3 +618,203 @@ def test_continuous_overflow_matches_reference_reprefill_tokens() -> None:
         == reference.request_state("overflow").generated_tokens
     )
     assert continuous.events == reference.events
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 4, 8])
+def test_three_executors_preserve_tokens_states_events_metrics_and_rng(batch_size: int) -> None:
+    # Given: equal-length FIFO prompts with mixed generation lengths and independent generators.
+    definitions = tuple(
+        request(
+            f"prefill-{index}",
+            prompt_tokens=(1, 2),
+            max_new_tokens=1 + (index % 3),
+            seed=700 + index,
+        )
+        for index in range(batch_size)
+    )
+
+    # When: reference, decode-only batching, and full continuous execution run the workload.
+    reference = run_reference_requests(definitions)
+    decode_only = run_continuous_requests(definitions)
+    continuous = run_fully_continuous_requests(definitions)
+
+    # Then: tensor grouping changes no request-level deterministic contract.
+    for definition in definitions:
+        request_id = definition.request_id
+        expected = reference.request_state(request_id)
+        for actual_engine in (decode_only, continuous):
+            actual = actual_engine.request_state(request_id)
+            assert actual.generated_tokens == expected.generated_tokens
+            assert actual.status is expected.status
+            assert actual_engine.request_metrics(request_id) == reference.request_metrics(
+                request_id
+            )
+    assert decode_only.events == reference.events
+    assert continuous.events == reference.events
+    assert continuous.metrics().max_prefill_batch_size == batch_size
+
+
+def test_prefill_bucketing_is_fifo_contiguous_and_never_skips_queue_head() -> None:
+    # Given: short prompts separated by a long FIFO head under a strict padding-ratio policy.
+    definitions = (
+        request("short-first", prompt_tokens=(1,), max_new_tokens=1),
+        request("long-head", prompt_tokens=(1, 2, 3, 4), max_new_tokens=1),
+        request("short-last", prompt_tokens=(2,), max_new_tokens=1),
+    )
+    config = PrefillBatchConfig(
+        max_batch_size=8,
+        max_batch_tokens=32,
+        max_padding_ratio=0.25,
+    )
+
+    # When: every currently eligible request is prefetched without waiting for future arrivals.
+    engine = run_fully_continuous_requests(definitions, prefill_config=config)
+
+    # Then: the executor does not bypass the long head to combine non-contiguous short requests.
+    finished_events = [
+        event
+        for event in engine.prefill_events
+        if event.event_type is PrefillBatchEventType.FINISHED
+    ]
+    assert [event.request_ids for event in finished_events] == [
+        ("short-first",),
+        ("long-head",),
+        ("short-last",),
+    ]
+    assert all(
+        engine.request_state(item.request_id).status is RequestStatus.FINISHED
+        for item in definitions
+    )
+
+
+def test_prefill_batch_scatter_is_compact_and_does_not_mutate_prompt_tokens() -> None:
+    # Given: mixed prompt lengths that fit one dense prefill batch.
+    model_instance = tiny_gpt()
+    executor = ContinuousExecutor(
+        model_instance,
+        prefill_config=PrefillBatchConfig(
+            max_batch_size=4,
+            max_batch_tokens=16,
+            max_padding_ratio=0.5,
+        ),
+        clock=StepClock(step=0.01),
+    )
+    definitions = (
+        request("short", prompt_tokens=(1, 2), max_new_tokens=1, seed=801),
+        request("long", prompt_tokens=(3, 4, 5, 6), max_new_tokens=1, seed=802),
+    )
+    states = tuple(
+        RequestState(
+            request=definition,
+            generator=torch.Generator(device="cpu").manual_seed(definition.seed),
+            status=RequestStatus.PREFILLING,
+            reserved_cache_tokens=len(definition.prompt_tokens),
+        )
+        for definition in definitions
+    )
+    original_prompts = tuple(state.request.prompt_tokens for state in states)
+
+    # When: one padded model call is scattered into per-request results.
+    results = executor.prefill(states)
+
+    # Then: result caches use true lengths and share no dense padding storage.
+    assert [result.cache_tokens for result in results] == [2, 4]
+    for state, original, result in zip(states, original_prompts, results, strict=True):
+        assert state.request.prompt_tokens == original
+        assert state.kv_cache is None
+        assert result.cache is not None
+        assert all(layer.key.shape == (1, 1, len(original), 8) for layer in result.cache)
+        assert all(layer.value.shape == (1, 1, len(original), 8) for layer in result.cache)
+        assert all(not layer.key.requires_grad for layer in result.cache)
+    observation = executor.prefill_observations[-1]
+    assert observation.batch_size == 2
+    assert observation.useful_prompt_tokens == 6
+    assert observation.padded_prompt_tokens == 8
+    assert observation.padding_waste_ratio == 0.25
+
+
+def test_invalid_prefill_prompt_fails_only_its_request() -> None:
+    # Given: one out-of-vocabulary prompt preceding a valid FIFO peer.
+    definitions = (
+        request("invalid", prompt_tokens=(1, 99), max_new_tokens=1, seed=901),
+        request("valid", prompt_tokens=(2, 3), max_new_tokens=1, seed=902),
+    )
+
+    # When: the continuous executor validates requests before batch assembly.
+    engine = run_fully_continuous_requests(definitions)
+
+    # Then: only the malformed request fails and the valid peer still executes.
+    assert engine.request_state("invalid").status is RequestStatus.FAILED
+    assert engine.request_state("invalid").kv_cache is None
+    assert engine.request_state("invalid").reserved_cache_tokens == 0
+    assert engine.request_state("valid").status is RequestStatus.FINISHED
+    finished = [
+        event
+        for event in engine.prefill_events
+        if event.event_type is PrefillBatchEventType.FINISHED
+    ]
+    assert [event.request_ids for event in finished] == [("valid",)]
+
+
+def test_batched_prefill_order_and_cancelled_peer_do_not_change_survivor_rng() -> None:
+    # Given: stable request identities run alone, reordered, and beside a cancelled peer.
+    target = request("target", prompt_tokens=(1, 2), max_new_tokens=4, seed=1001)
+    peer = GenerationRequest(
+        request_id="peer",
+        prompt_tokens=(3, 4, 5),
+        max_new_tokens=4,
+        seed=1002,
+        cancellation_time=1.0,
+    )
+    other = request("other", prompt_tokens=(6,), max_new_tokens=4, seed=1003)
+
+    # When: full continuous execution uses different eligible batch membership and row order.
+    alone = run_fully_continuous_requests((target,))
+    forward = run_fully_continuous_requests((target, other))
+    reverse = run_fully_continuous_requests((other, target))
+    cancelled = run_fully_continuous_requests((peer, target))
+
+    # Then: only the target generator determines its continuation.
+    expected = alone.request_state("target").generated_tokens
+    assert forward.request_state("target").generated_tokens == expected
+    assert reverse.request_state("target").generated_tokens == expected
+    assert cancelled.request_state("target").generated_tokens == expected
+    assert cancelled.request_state("peer").status is RequestStatus.CANCELLED
+
+
+def test_prefill_model_batch_exception_records_complete_failure_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: two valid requests and an injected failure at the actual batched model boundary.
+    model_instance = tiny_gpt()
+    executor = ContinuousExecutor(model_instance, clock=StepClock(step=0.01))
+    states = tuple(
+        RequestState(
+            request=request(request_id, max_new_tokens=1),
+            generator=torch.Generator(device="cpu").manual_seed(seed),
+            status=RequestStatus.PREFILLING,
+        )
+        for request_id, seed in (("one", 1101), ("two", 1102))
+    )
+
+    def fail_prefill_batch(_tokens: torch.Tensor, _lengths: torch.Tensor) -> object:
+        msg = "injected batched prefill failure"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(model_instance, "prefill_batch", fail_prefill_batch)
+
+    # When: the grouped model call fails.
+    results = executor.prefill(states)
+
+    # Then: every batch member receives failure plus started/finished evidence.
+    assert [result.request_id for result in results] == ["one", "two"]
+    assert all(
+        result.error == "RuntimeError: injected batched prefill failure" for result in results
+    )
+    observation = executor.prefill_observations[-1]
+    assert observation.request_ids == ("one", "two")
+    assert observation.batch_failed
+    assert [event.event_type for event in executor.prefill_events] == [
+        PrefillBatchEventType.STARTED,
+        PrefillBatchEventType.FINISHED,
+    ]

@@ -1,0 +1,69 @@
+schema_version: 1
+executor: continuous
+scenario_name: stage11b-mixed
+model_seed: 1112
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.01
+max_ticks: 32
+output_dir: reports/serving-stage11b-mixed
+vocab_size: 65
+model:
+  block_size: 16
+  n_layer: 2
+  n_head: 2
+  n_embd: 16
+  dropout: 0.0
+  bias: false
+scheduler:
+  max_active_requests: 8
+  max_cached_tokens: 128
+prefill:
+  max_batch_size: 8
+  max_batch_tokens: 128
+  max_padding_ratio: 0.25
+requests:
+  - request_id: short-a
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 2
+    max_new_tokens: 4
+    temperature: 1.0
+    top_k: 5
+    seed: 1201
+    cancellation_time: null
+  - request_id: short-b
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 3
+    max_new_tokens: 3
+    temperature: 0.8
+    top_k: 7
+    seed: 1202
+    cancellation_time: null
+  - request_id: medium
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 6
+    max_new_tokens: 4
+    temperature: 1.1
+    top_k: null
+    seed: 1203
+    cancellation_time: null
+  - request_id: long
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 12
+    max_new_tokens: 3
+    temperature: 0.9
+    top_k: 9
+    seed: 1204
+    cancellation_time: null
+  - request_id: cancelled
+    arrival_time: 1.0
+    prompt_tokens: null
+    prompt_length: 4
+    max_new_tokens: 5
+    temperature: 1.0
+    top_k: 5
+    seed: 1205
+    cancellation_time: 3.0

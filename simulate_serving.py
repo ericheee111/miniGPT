@@ -21,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     _ = parser.add_argument(
         "--compare-executors",
         action="store_true",
-        help="run reference and continuous_decode and verify logical equivalence",
+        help="run reference, continuous_decode, and continuous and verify logical equivalence",
     )
     return parser
 

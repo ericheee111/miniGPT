@@ -18,10 +18,13 @@ from typing_extensions import override
 from minigpt.model import GPT
 from minigpt.serving import (
     ContinuousDecodeExecutor,
+    ContinuousExecutor,
     EngineConfig,
     EngineEvent,
     EngineMetrics,
     GenerationRequest,
+    PrefillBatchConfig,
+    PrefillBatchEvent,
     ReferenceExecutor,
     RequestMetrics,
     RequestStatus,
@@ -48,13 +51,15 @@ _TOP_LEVEL_KEYS = frozenset(
         "output_dir",
         "vocab_size",
         "model",
+        "prefill",
         "scheduler",
         "requests",
     }
 )
-_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"executor"}
+_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"executor", "prefill"}
 _MODEL_KEYS = frozenset({"block_size", "n_layer", "n_head", "n_embd", "dropout", "bias"})
 _SCHEDULER_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
+_PREFILL_KEYS = frozenset({"max_batch_size", "max_batch_tokens", "max_padding_ratio"})
 _REQUEST_KEYS = frozenset(
     {
         "request_id",
@@ -101,6 +106,7 @@ class SimulatorConfig:
     output_dir: Path
     model: GPTConfig
     scheduler: SchedulerConfig
+    prefill: PrefillBatchConfig | None
     requests: tuple[GenerationRequest, ...]
 
 
@@ -116,20 +122,23 @@ class SimulationResult:
     request_metrics: dict[str, RequestMetrics]
     admission_order: tuple[str, ...]
     events: tuple[EngineEvent, ...]
+    prefill_events: tuple[PrefillBatchEvent, ...]
 
 
 class SimulatorExecutor(StrEnum):
-    """Select the Stage 10 reference or Stage 11A decode executor."""
+    """Select per-request, decode-batched, or fully continuous execution."""
 
     REFERENCE = "reference"
     CONTINUOUS_DECODE = "continuous_decode"
+    CONTINUOUS = "continuous"
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutorEquivalenceResult:
-    """Return both simulations after complete logical-contract validation."""
+    """Return all three simulations after complete logical-contract validation."""
 
     reference: SimulationResult
+    continuous_decode: SimulationResult
     continuous: SimulationResult
     equivalent: bool
     checked_contracts: tuple[str, ...]
@@ -267,6 +276,18 @@ def _scheduler(document: ConfigMapping, source: Path) -> SchedulerConfig:
     )
 
 
+def _prefill(document: ConfigMapping, source: Path) -> PrefillBatchConfig | None:
+    if "prefill" not in document:
+        return None
+    raw = _mapping(document["prefill"], source, "prefill")
+    _exact_keys(raw, _PREFILL_KEYS, source, "prefill")
+    return PrefillBatchConfig(
+        max_batch_size=_integer(raw, "max_batch_size", source, positive=True),
+        max_batch_tokens=_integer(raw, "max_batch_tokens", source, positive=True),
+        max_padding_ratio=_number(raw, "max_padding_ratio", source, non_negative=True),
+    )
+
+
 def _optional_integer(document: ConfigMapping, key: str, source: Path) -> int | None:
     value = document[key]
     if value is None:
@@ -370,6 +391,7 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         output_dir=Path(_string(document, "output_dir", source)),
         model=_model(document, source, vocab_size=vocab_size),
         scheduler=_scheduler(document, source),
+        prefill=_prefill(document, source),
         requests=_requests(document, source, vocab_size=vocab_size),
     )
 
@@ -437,9 +459,13 @@ def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[s
             "claim": "logical serving correctness; wall-clock performance reported separately",
             "executor": config.executor.value,
             "scheduling_level": (
-                "iteration-level with tensor-level decode batching"
-                if config.executor is SimulatorExecutor.CONTINUOUS_DECODE
-                else "iteration-level with per-request model execution"
+                "iteration-level with tensor-level prefill and decode batching"
+                if config.executor is SimulatorExecutor.CONTINUOUS
+                else (
+                    "iteration-level with tensor-level decode batching"
+                    if config.executor is SimulatorExecutor.CONTINUOUS_DECODE
+                    else "iteration-level with per-request model execution"
+                )
             ),
             "max_active_requests": config.scheduler.max_active_requests,
             "max_cached_tokens": config.scheduler.max_cached_tokens,
@@ -458,6 +484,27 @@ def _write_json(path: Path, document: dict[str, JsonValue]) -> None:
 
 def _write_events(path: Path, events: tuple[EngineEvent, ...]) -> None:
     lines = [json.dumps(_event_document(event), sort_keys=True) for event in events]
+    _ = path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def _write_prefill_events(path: Path, events: tuple[PrefillBatchEvent, ...]) -> None:
+    lines = [
+        json.dumps(
+            {
+                "sequence": event.sequence,
+                "timestamp": event.timestamp,
+                "event_type": event.event_type.value,
+                "request_ids": list(event.request_ids),
+                "batch_size": event.batch_size,
+                "useful_prompt_tokens": event.useful_prompt_tokens,
+                "padded_prompt_tokens": event.padded_prompt_tokens,
+                "padding_waste_ratio": event.padding_waste_ratio,
+                "batch_failed": event.batch_failed,
+            },
+            sort_keys=True,
+        )
+        for event in events
+    ]
     _ = path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
@@ -501,9 +548,13 @@ def _write_timeline(
     executor: SimulatorExecutor,
 ) -> None:
     execution_note = (
-        "Prefill remains per request; eligible decode rows are tensor-batched with dense padding."
-        if executor is SimulatorExecutor.CONTINUOUS_DECODE
-        else "Model prefill and decode calls both remain per request."
+        "Eligible prompts and decode rows are tensor-batched with dense padding."
+        if executor is SimulatorExecutor.CONTINUOUS
+        else (
+            "Prefill per request; eligible decode rows use tensor-level dense batching."
+            if executor is SimulatorExecutor.CONTINUOUS_DECODE
+            else "Model prefill and decode calls both remain per request."
+        )
     )
     lines = [
         f"# {scenario_name} timeline",
@@ -536,19 +587,25 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
     model = _build_model(config)
     executor_clock = StepClock(config.executor_clock_step_seconds)
     telemetry_clock = StepClock(config.executor_clock_step_seconds / 10.0)
-    executor = (
-        ContinuousDecodeExecutor(
+    if config.executor is SimulatorExecutor.CONTINUOUS:
+        executor = ContinuousExecutor(
+            model,
+            prefill_config=config.prefill,
+            clock=executor_clock,
+            telemetry_clock=telemetry_clock,
+        )
+    elif config.executor is SimulatorExecutor.CONTINUOUS_DECODE:
+        executor = ContinuousDecodeExecutor(
             model,
             clock=executor_clock,
             telemetry_clock=telemetry_clock,
         )
-        if config.executor is SimulatorExecutor.CONTINUOUS_DECODE
-        else ReferenceExecutor(
+    else:
+        executor = ReferenceExecutor(
             model,
             clock=executor_clock,
             telemetry_clock=telemetry_clock,
         )
-    )
     engine = ServingEngine(
         config=EngineConfig(scheduler=config.scheduler, block_size=config.model.block_size),
         executor=executor,
@@ -578,6 +635,11 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
     metrics = engine.metrics()
     _write_json(summary_path, _summary_document(config, metrics))
     _write_timeline(timeline_path, engine.events, config.scenario_name, config.executor)
+    output_paths = [events_path, requests_path, summary_path, timeline_path]
+    if config.prefill is not None:
+        prefill_events_path = destination / "prefill_events.jsonl"
+        _write_prefill_events(prefill_events_path, engine.prefill_events)
+        output_paths.append(prefill_events_path)
     generated = {
         request.request_id: tuple(engine.request_state(request.request_id).generated_tokens)
         for request in config.requests
@@ -595,13 +657,14 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
     )
     return SimulationResult(
         output_dir=destination,
-        output_paths=(events_path, requests_path, summary_path, timeline_path),
+        output_paths=tuple(output_paths),
         metrics=metrics,
         generated_tokens=generated,
         request_statuses=request_statuses,
         request_metrics=request_metrics,
         admission_order=admission_order,
         events=engine.events,
+        prefill_events=engine.prefill_events,
     )
 
 
@@ -610,29 +673,64 @@ def run_executor_equivalence(
     *,
     output_dir: Path,
 ) -> ExecutorEquivalenceResult:
-    """Run both executors and reject any logical serving contract divergence."""
+    """Run all executors and reject any request-level logical contract divergence."""
     reference = run_simulation(
         replace(config, executor=SimulatorExecutor.REFERENCE),
         output_dir=output_dir / SimulatorExecutor.REFERENCE.value,
     )
-    continuous = run_simulation(
+    continuous_decode = run_simulation(
         replace(config, executor=SimulatorExecutor.CONTINUOUS_DECODE),
         output_dir=output_dir / SimulatorExecutor.CONTINUOUS_DECODE.value,
     )
+    continuous = run_simulation(
+        replace(config, executor=SimulatorExecutor.CONTINUOUS),
+        output_dir=output_dir / SimulatorExecutor.CONTINUOUS.value,
+    )
     comparisons = {
-        "generated_tokens": reference.generated_tokens == continuous.generated_tokens,
-        "request_terminal_states_and_cancellation": (
-            reference.request_statuses == continuous.request_statuses
+        "generated_tokens": (
+            reference.generated_tokens
+            == continuous_decode.generated_tokens
+            == continuous.generated_tokens
         ),
-        "fifo_admission_order": reference.admission_order == continuous.admission_order,
-        "logical_event_semantics": reference.events == continuous.events,
-        "request_metrics": reference.request_metrics == continuous.request_metrics,
+        "request_terminal_states_and_cancellation": (
+            reference.request_statuses
+            == continuous_decode.request_statuses
+            == continuous.request_statuses
+        ),
+        "fifo_admission_order": (
+            reference.admission_order
+            == continuous_decode.admission_order
+            == continuous.admission_order
+        ),
+        "cache_accounting": (
+            reference.metrics.cached_tokens
+            == continuous_decode.metrics.cached_tokens
+            == continuous.metrics.cached_tokens
+            and reference.metrics.reserved_cache_tokens
+            == continuous_decode.metrics.reserved_cache_tokens
+            == continuous.metrics.reserved_cache_tokens
+            and reference.metrics.peak_cached_tokens
+            == continuous_decode.metrics.peak_cached_tokens
+            == continuous.metrics.peak_cached_tokens
+            and reference.metrics.peak_reserved_cache_tokens
+            == continuous_decode.metrics.peak_reserved_cache_tokens
+            == continuous.metrics.peak_reserved_cache_tokens
+        ),
+        "logical_event_semantics": (
+            reference.events == continuous_decode.events == continuous.events
+        ),
+        "request_metrics": (
+            reference.request_metrics
+            == continuous_decode.request_metrics
+            == continuous.request_metrics
+        ),
     }
     failed = tuple(name for name, matches in comparisons.items() if not matches)
     if failed:
         _invalid(Path("<equivalence>"), f"executor contracts differ: {', '.join(failed)}")
     return ExecutorEquivalenceResult(
         reference=reference,
+        continuous_decode=continuous_decode,
         continuous=continuous,
         equivalent=True,
         checked_contracts=tuple(comparisons),

@@ -11,11 +11,13 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import TypeAlias, cast
 
+import psutil
 import torch
 
 from minigpt.model import GPT
 from minigpt.serving import (
     ContinuousDecodeExecutor,
+    ContinuousExecutor,
     EngineConfig,
     EngineEventType,
     GenerationRequest,
@@ -107,18 +109,19 @@ def _correctness_sha256(document: WorkerDocument) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def run_once(
+def run_once(  # noqa: C901
     config: ServingBenchmarkConfig,
     scenario: ServingBenchmarkScenario,
     executor_name: SimulatorExecutor,
     model: GPT,
 ) -> WorkerDocument:
     """Execute one complete workload and return canonical wall-clock metrics."""
-    executor = (
-        ContinuousDecodeExecutor(model)
-        if executor_name is SimulatorExecutor.CONTINUOUS_DECODE
-        else ReferenceExecutor(model)
-    )
+    if executor_name is SimulatorExecutor.CONTINUOUS:
+        executor = ContinuousExecutor(model, prefill_config=config.prefill)
+    elif executor_name is SimulatorExecutor.CONTINUOUS_DECODE:
+        executor = ContinuousDecodeExecutor(model)
+    else:
+        executor = ReferenceExecutor(model)
     requests = _requests(config, scenario)
     engine = ServingEngine(
         config=EngineConfig(
@@ -133,6 +136,8 @@ def run_once(
     pending = list(enumerate(requests))
     submitted: set[str] = set()
     cancelled: set[str] = set()
+    process = psutil.Process()
+    peak_rss_bytes = process.memory_info().rss
     start = time.perf_counter()
     max_ticks = max(scenario.arrival_ticks) + max(scenario.generated_lengths) + 4
     for tick in range(max_ticks):
@@ -164,6 +169,7 @@ def run_once(
                 cancelled.add(request_id)
         if not engine.is_idle:
             engine.tick(now=time.perf_counter() - start)
+        peak_rss_bytes = max(peak_rss_bytes, process.memory_info().rss)
         if not pending and engine.is_idle:
             break
     elapsed = time.perf_counter() - start
@@ -187,6 +193,16 @@ def run_once(
         for metric in request_metrics
         if metric.end_to_end_latency_seconds is not None
     ]
+    queue = [
+        metric.queue_time_seconds
+        for metric in request_metrics
+        if metric.queue_time_seconds is not None
+    ]
+    prefill = [
+        metric.prefill_latency_seconds
+        for metric in request_metrics
+        if metric.prefill_latency_seconds is not None
+    ]
     metrics = engine.metrics()
     correctness = _correctness_document(engine, requests)
     completed_or_cancelled = metrics.completed_requests + metrics.cancelled_requests
@@ -197,6 +213,8 @@ def run_once(
         "median_ttft_seconds": _finite_median(ttft),
         "median_tpot_seconds": _finite_median(tpot),
         "median_e2e_seconds": _finite_median(e2e),
+        "median_queue_time_seconds": _finite_median(queue),
+        "median_prefill_latency_seconds": _finite_median(prefill),
         "average_decode_batch_size": metrics.average_decode_batch_size,
         "max_decode_batch_size": metrics.max_decode_batch_size,
         "padded_cache_tokens": metrics.padded_cache_tokens,
@@ -205,6 +223,17 @@ def run_once(
         "executor_time_seconds": metrics.executor_time_seconds,
         "model_execution_time_seconds": metrics.model_execution_time_seconds,
         "batch_assembly_scatter_time_seconds": metrics.batch_assembly_scatter_time_seconds,
+        "average_prefill_batch_size": metrics.average_prefill_batch_size,
+        "max_prefill_batch_size": metrics.max_prefill_batch_size,
+        "padded_prompt_tokens": metrics.padded_prompt_tokens,
+        "useful_prompt_tokens": metrics.useful_prompt_tokens,
+        "prompt_padding_waste_ratio": metrics.prompt_padding_waste_ratio,
+        "prefill_executor_time_seconds": metrics.prefill_executor_time_seconds,
+        "prefill_model_execution_time_seconds": metrics.prefill_model_execution_time_seconds,
+        "prefill_batch_assembly_scatter_time_seconds": (
+            metrics.prefill_batch_assembly_scatter_time_seconds
+        ),
+        "worker_peak_rss_bytes": peak_rss_bytes,
         "generated_tokens": metrics.generated_tokens,
         "completed_requests": metrics.completed_requests,
         "cancelled_requests": metrics.cancelled_requests,
@@ -242,7 +271,7 @@ def run_worker(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run one Stage 11A serving benchmark worker.")
+    parser = argparse.ArgumentParser(description="Run one serving executor benchmark worker.")
     _ = parser.add_argument("--config", type=Path, required=True)
     _ = parser.add_argument("--scenario", required=True)
     _ = parser.add_argument(

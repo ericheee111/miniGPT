@@ -6,7 +6,7 @@ import math
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Never, Protocol, Self, cast, final
 
@@ -263,6 +263,101 @@ class DecodeBatchObservation:
     batch_failed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PrefillBatchConfig:
+    """Bound deterministic FIFO prompt grouping and dense padding."""
+
+    max_batch_size: int = 8
+    max_batch_tokens: int = 1024
+    max_padding_ratio: float = 0.25
+
+    def __post_init__(self) -> None:
+        """Reject unusable batch and padding limits."""
+        if isinstance(self.max_batch_size, bool) or self.max_batch_size <= 0:
+            _invalid("prefill max_batch_size must be a positive integer")
+        if isinstance(self.max_batch_tokens, bool) or self.max_batch_tokens <= 0:
+            _invalid("prefill max_batch_tokens must be a positive integer")
+        if not math.isfinite(self.max_padding_ratio) or not 0.0 <= self.max_padding_ratio <= 1.0:
+            _invalid("prefill max_padding_ratio must be finite and in [0, 1]")
+
+
+@dataclass(frozen=True, slots=True)
+class PrefillBatchObservation:
+    """Separate prefill utilization and wall-clock phase timings."""
+
+    request_ids: tuple[str, ...]
+    batch_size: int
+    padded_prompt_tokens: int
+    useful_prompt_tokens: int
+    assembly_seconds: float
+    model_seconds: float
+    scatter_seconds: float
+    executor_seconds: float
+    started_at: float
+    finished_at: float
+    batch_failed: bool
+
+    @property
+    def padding_waste_ratio(self) -> float:
+        """Return the fraction of dense prompt slots occupied only by padding."""
+        if self.padded_prompt_tokens == 0:
+            return 0.0
+        return (self.padded_prompt_tokens - self.useful_prompt_tokens) / self.padded_prompt_tokens
+
+
+class PrefillBatchEventType(StrEnum):
+    """Identify executor-level prefill batch evidence without changing request events."""
+
+    STARTED = "PREFILL_BATCH_STARTED"
+    FINISHED = "PREFILL_BATCH_FINISHED"
+
+
+@dataclass(frozen=True, slots=True)
+class PrefillBatchEvent:
+    """Record one prefill batch boundary and its utilization evidence."""
+
+    sequence: int
+    timestamp: float
+    event_type: PrefillBatchEventType
+    request_ids: tuple[str, ...]
+    batch_size: int
+    useful_prompt_tokens: int
+    padded_prompt_tokens: int
+    padding_waste_ratio: float
+    batch_failed: bool
+
+
+def _prefill_events(
+    observation: PrefillBatchObservation,
+    *,
+    starting_sequence: int,
+) -> tuple[PrefillBatchEvent, PrefillBatchEvent]:
+    return (
+        PrefillBatchEvent(
+            sequence=starting_sequence,
+            timestamp=observation.started_at,
+            event_type=PrefillBatchEventType.STARTED,
+            request_ids=observation.request_ids,
+            batch_size=observation.batch_size,
+            useful_prompt_tokens=observation.useful_prompt_tokens,
+            padded_prompt_tokens=observation.padded_prompt_tokens,
+            padding_waste_ratio=observation.padding_waste_ratio,
+            batch_failed=observation.batch_failed,
+        ),
+        PrefillBatchEvent(
+            sequence=starting_sequence + 1,
+            timestamp=observation.finished_at,
+            event_type=PrefillBatchEventType.FINISHED,
+            request_ids=observation.request_ids,
+            batch_size=observation.batch_size,
+            useful_prompt_tokens=observation.useful_prompt_tokens,
+            padded_prompt_tokens=observation.padded_prompt_tokens,
+            padding_waste_ratio=observation.padding_waste_ratio,
+            batch_failed=observation.batch_failed,
+        ),
+    )
+
+
 class ServingExecutor(Protocol):
     """Advance request states without defining scheduler policy."""
 
@@ -271,6 +366,16 @@ class ServingExecutor(Protocol):
     @property
     def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
         """Return append-only model-batch telemetry."""
+        ...
+
+    @property
+    def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
+        """Return append-only prompt-batch telemetry."""
+        ...
+
+    @property
+    def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
+        """Return executor-level prompt batch boundary evidence."""
         ...
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
@@ -298,12 +403,24 @@ class ReferenceExecutor:
         self._clock = clock
         self._telemetry_clock = telemetry_clock
         self._decode_observations: list[DecodeBatchObservation] = []
+        self._prefill_observations: list[PrefillBatchObservation] = []
+        self._prefill_events: list[PrefillBatchEvent] = []
         self.block_size = model.config.block_size
 
     @property
     def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
         """Return per-request reference decode calls as size-one batches."""
         return tuple(self._decode_observations)
+
+    @property
+    def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
+        """Return one observation per reference prompt call."""
+        return tuple(self._prefill_observations)
+
+    @property
+    def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
+        """Return size-one reference prompt batch boundaries."""
+        return tuple(self._prefill_events)
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Prefill each prompt independently and sample its first token."""
@@ -324,29 +441,94 @@ class ReferenceExecutor:
         return tuple(results)
 
     def _prefill_one(self, state: RequestState, *, used_fallback: bool) -> ExecutionResult:
-        start = self._clock()
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        assembly_seconds = 0.0
+        model_seconds = 0.0
+        scatter_seconds = 0.0
+        context = state.all_tokens[-self.block_size :]
         try:
-            context = state.all_tokens[-self.block_size :]
+            assembly_start = self._telemetry_clock()
             token_ids = torch.tensor(
                 (context,),
                 dtype=torch.long,
                 device=self._model.token_embedding.weight.device,
             )
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
             logits, cache = self._model.prefill(token_ids)
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+            scatter_start = self._telemetry_clock()
             token_id = self._sample(state, logits[:, -1, :])
+            scatter_seconds = max(0.0, self._telemetry_clock() - scatter_start)
         except Exception as error:  # noqa: BLE001
+            elapsed = self._elapsed(logical_start)
+            self._record_prefill(
+                state,
+                context_length=len(context),
+                logical_start=logical_start,
+                elapsed=elapsed,
+                executor_start=executor_start,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                batch_failed=True,
+            )
             return ExecutionResult.failure(
                 state.request.request_id,
                 f"{type(error).__name__}: {error}",
-                self._elapsed(start),
+                elapsed,
             )
+        elapsed = self._elapsed(logical_start)
+        self._record_prefill(
+            state,
+            context_length=len(context),
+            logical_start=logical_start,
+            elapsed=elapsed,
+            executor_start=executor_start,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            scatter_seconds=scatter_seconds,
+            batch_failed=False,
+        )
         return ExecutionResult.success(
             request_id=state.request.request_id,
             token_id=token_id,
             cache=cache,
             cache_tokens=len(context),
-            latency_seconds=self._elapsed(start),
+            latency_seconds=elapsed,
             used_fallback=used_fallback,
+        )
+
+    def _record_prefill(  # noqa: PLR0913
+        self,
+        state: RequestState,
+        *,
+        context_length: int,
+        logical_start: float,
+        elapsed: float,
+        executor_start: float,
+        assembly_seconds: float,
+        model_seconds: float,
+        scatter_seconds: float,
+        batch_failed: bool,
+    ) -> None:
+        observation = PrefillBatchObservation(
+            request_ids=(state.request.request_id,),
+            batch_size=1,
+            padded_prompt_tokens=context_length,
+            useful_prompt_tokens=context_length,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            scatter_seconds=scatter_seconds,
+            executor_seconds=max(0.0, self._telemetry_clock() - executor_start),
+            started_at=logical_start,
+            finished_at=logical_start + elapsed,
+            batch_failed=batch_failed,
+        )
+        self._prefill_observations.append(observation)
+        self._prefill_events.extend(
+            _prefill_events(observation, starting_sequence=len(self._prefill_events))
         )
 
     def _decode_one(self, state: RequestState) -> ExecutionResult:
@@ -448,6 +630,16 @@ class ContinuousDecodeExecutor:
     def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
         """Return one observation for every actual continuous decode model call."""
         return tuple(self._decode_observations)
+
+    @property
+    def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
+        """Expose the delegated per-request prefill observations."""
+        return self._reference.prefill_observations
+
+    @property
+    def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
+        """Expose the delegated per-request prefill batch boundaries."""
+        return self._reference.prefill_events
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Preserve Stage 10 per-request prompt execution."""
@@ -673,6 +865,270 @@ class ContinuousDecodeExecutor:
         return int(sampled.item())
 
 
+@final
+class ContinuousExecutor:
+    """Length-bucket prompt prefill and reuse Stage 11A continuous decode."""
+
+    def __init__(
+        self,
+        model: GPT,
+        *,
+        prefill_config: PrefillBatchConfig | None = None,
+        clock: Clock = time.perf_counter,
+        telemetry_clock: Clock = time.perf_counter,
+    ) -> None:
+        """Bind deterministic prompt grouping and the existing decode executor."""
+        self._model = model
+        self._clock = clock
+        self._telemetry_clock = telemetry_clock
+        self.prefill_config = prefill_config or PrefillBatchConfig()
+        self._decode = ContinuousDecodeExecutor(
+            model,
+            clock=clock,
+            telemetry_clock=telemetry_clock,
+        )
+        self._prefill_observations: list[PrefillBatchObservation] = []
+        self.block_size = model.config.block_size
+
+    @property
+    def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
+        """Expose the unchanged Stage 11A decode telemetry."""
+        return self._decode.decode_observations
+
+    @property
+    def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
+        """Return initial batched prefill plus Stage 9 overflow re-prefill calls."""
+        return (*self._prefill_observations, *self._decode.prefill_observations)
+
+    @property
+    def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
+        """Return resequenced boundaries for initial and overflow prefill calls."""
+        events: list[PrefillBatchEvent] = []
+        for observation in self.prefill_observations:
+            events.extend(_prefill_events(observation, starting_sequence=len(events)))
+        return tuple(events)
+
+    def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        """Validate independently, group valid FIFO prefixes, and prefill each batch."""
+        results: dict[str, ExecutionResult] = {}
+        valid: list[RequestState] = []
+        for state in requests:
+            error = self._validate_prefill_state(state)
+            if error is None:
+                valid.append(state)
+            else:
+                results[state.request.request_id] = ExecutionResult.failure(
+                    state.request.request_id,
+                    error,
+                    0.0,
+                )
+        for batch in self._batches(valid):
+            for result in self.prefill_batch(batch):
+                results[result.request_id] = result
+        return tuple(results[state.request.request_id] for state in requests)
+
+    def prefill_batch(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        """Assemble, execute, sample, and scatter one padded prompt batch."""
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        request_ids = tuple(state.request.request_id for state in requests)
+        lengths = tuple(len(state.request.prompt_tokens) for state in requests)
+        useful_tokens = sum(lengths)
+        padded_tokens = len(requests) * max(lengths, default=0)
+        assembly_seconds = 0.0
+        model_seconds = 0.0
+        scatter_seconds = 0.0
+        try:
+            assembly_start = self._telemetry_clock()
+            token_ids, prompt_lengths = self._assemble_prefill(requests)
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
+            logits, dense_cache = self._model.prefill_batch(token_ids, prompt_lengths)
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+            scatter_start = self._telemetry_clock()
+            compact_caches = self._scatter_prefill(dense_cache, prompt_lengths)
+            results: list[ExecutionResult] = []
+            for row, (state, cache) in enumerate(zip(requests, compact_caches, strict=True)):
+                try:
+                    token_id = self._sample(state, logits[row : row + 1, -1, :])
+                except Exception as error:  # noqa: BLE001
+                    results.append(
+                        ExecutionResult.failure(
+                            state.request.request_id,
+                            f"{type(error).__name__}: {error}",
+                            0.0,
+                        )
+                    )
+                    continue
+                results.append(
+                    ExecutionResult.success(
+                        request_id=state.request.request_id,
+                        token_id=token_id,
+                        cache=cache,
+                        cache_tokens=len(state.request.prompt_tokens),
+                        latency_seconds=0.0,
+                        used_fallback=False,
+                    )
+                )
+            scatter_seconds = max(0.0, self._telemetry_clock() - scatter_start)
+        except Exception as error:  # noqa: BLE001
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            self._record_prefill_batch(
+                request_ids=request_ids,
+                useful_tokens=useful_tokens,
+                padded_tokens=padded_tokens,
+                logical_start=logical_start,
+                elapsed=elapsed,
+                executor_start=executor_start,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                batch_failed=True,
+            )
+            message = f"{type(error).__name__}: {error}"
+            return tuple(
+                ExecutionResult.failure(state.request.request_id, message, elapsed)
+                for state in requests
+            )
+
+        elapsed = _logical_elapsed(self._clock, logical_start)
+        results = [replace(result, latency_seconds=elapsed) for result in results]
+        self._record_prefill_batch(
+            request_ids=request_ids,
+            useful_tokens=useful_tokens,
+            padded_tokens=padded_tokens,
+            logical_start=logical_start,
+            elapsed=elapsed,
+            executor_start=executor_start,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            scatter_seconds=scatter_seconds,
+            batch_failed=False,
+        )
+        return tuple(results)
+
+    def decode(self, active_requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        """Reuse Stage 11A validation, overflow fallback, batching, and sampling."""
+        return self._decode.decode(active_requests)
+
+    def _validate_prefill_state(self, state: RequestState) -> str | None:
+        tokens = state.request.prompt_tokens
+        if not tokens:
+            return "prefill prompt must be non-empty"
+        if len(tokens) > self.block_size:
+            return f"prefill prompt length {len(tokens)} exceeds block_size {self.block_size}"
+        if any(type(token) is not int for token in tokens):
+            return "prefill prompt tokens must be integers"
+        if any(token < 0 or token >= self._model.config.vocab_size for token in tokens):
+            return "prefill prompt token is outside model vocabulary"
+        return None
+
+    def _batches(self, requests: Sequence[RequestState]) -> tuple[tuple[RequestState, ...], ...]:
+        batches: list[tuple[RequestState, ...]] = []
+        current: list[RequestState] = []
+        for state in requests:
+            if not current:
+                current.append(state)
+                continue
+            candidate = [*current, state]
+            lengths = [len(item.request.prompt_tokens) for item in candidate]
+            padded = len(candidate) * max(lengths)
+            useful = sum(lengths)
+            waste_ratio = (padded - useful) / padded
+            config = self.prefill_config
+            fits = (
+                len(candidate) <= config.max_batch_size
+                and padded <= config.max_batch_tokens
+                and waste_ratio <= config.max_padding_ratio
+            )
+            if fits:
+                current.append(state)
+            else:
+                batches.append(tuple(current))
+                current = [state]
+        if current:
+            batches.append(tuple(current))
+        return tuple(batches)
+
+    def _assemble_prefill(
+        self,
+        requests: Sequence[RequestState],
+    ) -> tuple[Tensor, Tensor]:
+        device = self._model.token_embedding.weight.device
+        lengths = [len(state.request.prompt_tokens) for state in requests]
+        token_ids = torch.zeros(
+            (len(requests), max(lengths)),
+            dtype=torch.long,
+            device=device,
+        )
+        for row, state in enumerate(requests):
+            row_tokens = torch.tensor(
+                state.request.prompt_tokens,
+                dtype=torch.long,
+                device=device,
+            )
+            token_ids[row, : row_tokens.shape[0]] = row_tokens
+        return token_ids, torch.tensor(lengths, dtype=torch.long, device=device)
+
+    @staticmethod
+    def _scatter_prefill(
+        dense_cache: KVCache,
+        prompt_lengths: Tensor,
+    ) -> tuple[KVCache, ...]:
+        compact: list[KVCache] = []
+        for row, length_tensor in enumerate(prompt_lengths):
+            length = int(length_tensor.item())
+            layers = tuple(
+                LayerKVCache(
+                    key=layer.key[row : row + 1, :, :length, :].clone().detach(),
+                    value=layer.value[row : row + 1, :, :length, :].clone().detach(),
+                )
+                for layer in dense_cache
+            )
+            compact.append(layers)
+        return tuple(compact)
+
+    def _sample(self, state: RequestState, logits: Tensor) -> int:
+        scaled = logits / state.request.temperature
+        if state.request.top_k is not None:
+            retained_count = min(state.request.top_k, self._model.config.vocab_size)
+            retained = torch.topk(scaled, retained_count, dim=-1).values
+            cutoff = retained[:, -1].unsqueeze(-1)
+            scaled = scaled.masked_fill(scaled < cutoff, -torch.inf)
+        probabilities = functional.softmax(scaled, dim=-1)
+        sampled = torch.multinomial(probabilities, 1, generator=state.generator)
+        return int(sampled.item())
+
+    def _record_prefill_batch(  # noqa: PLR0913
+        self,
+        *,
+        request_ids: tuple[str, ...],
+        useful_tokens: int,
+        padded_tokens: int,
+        logical_start: float,
+        elapsed: float,
+        executor_start: float,
+        assembly_seconds: float,
+        model_seconds: float,
+        scatter_seconds: float,
+        batch_failed: bool,
+    ) -> None:
+        observation = PrefillBatchObservation(
+            request_ids=request_ids,
+            batch_size=len(request_ids),
+            padded_prompt_tokens=padded_tokens,
+            useful_prompt_tokens=useful_tokens,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            scatter_seconds=scatter_seconds,
+            executor_seconds=max(0.0, self._telemetry_clock() - executor_start),
+            started_at=logical_start,
+            finished_at=logical_start + elapsed,
+            batch_failed=batch_failed,
+        )
+        self._prefill_observations.append(observation)
+
+
 @dataclass(frozen=True, slots=True)
 class EngineEvent:
     """Record one ordered transition with a scheduler snapshot."""
@@ -736,6 +1192,15 @@ class EngineMetrics:
     executor_time_seconds: float
     model_execution_time_seconds: float
     batch_assembly_scatter_time_seconds: float
+    prefill_batch_sizes: tuple[int, ...]
+    average_prefill_batch_size: float
+    max_prefill_batch_size: int
+    padded_prompt_tokens: int
+    useful_prompt_tokens: int
+    prompt_padding_waste_ratio: float
+    prefill_executor_time_seconds: float
+    prefill_model_execution_time_seconds: float
+    prefill_batch_assembly_scatter_time_seconds: float
 
 
 @final
@@ -771,6 +1236,11 @@ class ServingEngine:
     def events(self) -> tuple[EngineEvent, ...]:
         """Return an immutable snapshot of the append-only event stream."""
         return tuple(self._events)
+
+    @property
+    def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
+        """Return executor-level prompt batch evidence separately from request events."""
+        return self._executor.prefill_events
 
     @property
     def is_idle(self) -> bool:
@@ -904,6 +1374,18 @@ class ServingEngine:
         padding_waste_ratio = (
             padding_waste / padded_cache_tokens if padded_cache_tokens > 0 else 0.0
         )
+        prefill_observations = self._executor.prefill_observations
+        prefill_batch_sizes = tuple(observation.batch_size for observation in prefill_observations)
+        padded_prompt_tokens = sum(
+            observation.padded_prompt_tokens for observation in prefill_observations
+        )
+        useful_prompt_tokens = sum(
+            observation.useful_prompt_tokens for observation in prefill_observations
+        )
+        prompt_padding_waste = padded_prompt_tokens - useful_prompt_tokens
+        prompt_padding_waste_ratio = (
+            prompt_padding_waste / padded_prompt_tokens if padded_prompt_tokens > 0 else 0.0
+        )
         return EngineMetrics(
             total_requests=len(states),
             completed_requests=completed,
@@ -934,6 +1416,24 @@ class ServingEngine:
             batch_assembly_scatter_time_seconds=sum(
                 observation.assembly_seconds + observation.scatter_seconds
                 for observation in observations
+            ),
+            prefill_batch_sizes=prefill_batch_sizes,
+            average_prefill_batch_size=(
+                sum(prefill_batch_sizes) / len(prefill_batch_sizes) if prefill_batch_sizes else 0.0
+            ),
+            max_prefill_batch_size=max(prefill_batch_sizes, default=0),
+            padded_prompt_tokens=padded_prompt_tokens,
+            useful_prompt_tokens=useful_prompt_tokens,
+            prompt_padding_waste_ratio=prompt_padding_waste_ratio,
+            prefill_executor_time_seconds=sum(
+                observation.executor_seconds for observation in prefill_observations
+            ),
+            prefill_model_execution_time_seconds=sum(
+                observation.model_seconds for observation in prefill_observations
+            ),
+            prefill_batch_assembly_scatter_time_seconds=sum(
+                observation.assembly_seconds + observation.scatter_seconds
+                for observation in prefill_observations
             ),
         )
 
