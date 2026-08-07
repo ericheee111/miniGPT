@@ -388,6 +388,115 @@ def test_prefill_matches_forward_and_returns_layer_caches() -> None:
     assert model.kv_cache_nbytes(cache) == 2 * 2 * 2 * 2 * 3 * 4 * 4
 
 
+@pytest.mark.parametrize("batch_size", [1, 2, 4, 8])
+def test_batched_prefill_matches_individual_prefill_for_equal_lengths(batch_size: int) -> None:
+    # Given: equally sized prompts that can be evaluated either together or one at a time.
+    _ = torch.default_generator.manual_seed(42)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    rows = [
+        [(row + column) % gpt.config.vocab_size for column in range(3)] for row in range(batch_size)
+    ]
+    prompts = torch.tensor(
+        rows,
+        dtype=torch.long,
+    )
+    original = prompts.clone()
+
+    # When: one padded-prefill call evaluates the complete batch.
+    actual_logits, actual_cache = gpt.prefill_batch(
+        prompts,
+        torch.full((batch_size,), 3, dtype=torch.long),
+    )
+
+    # Then: every row is numerically equal to its ordinary single-request prefill.
+    for row in range(batch_size):
+        expected_logits, expected_cache = gpt.prefill(prompts[row : row + 1])
+        torch.testing.assert_close(actual_logits[row : row + 1], expected_logits)
+        for actual_layer, expected_layer in zip(actual_cache, expected_cache, strict=True):
+            torch.testing.assert_close(actual_layer.key[row : row + 1], expected_layer.key)
+            torch.testing.assert_close(actual_layer.value[row : row + 1], expected_layer.value)
+    assert torch.equal(prompts, original)
+
+
+def test_variable_length_batched_prefill_matches_compact_individual_caches() -> None:
+    # Given: right-padded prompts with mixed true lengths and non-zero padding tokens.
+    _ = torch.default_generator.manual_seed(44)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompts = torch.tensor([[1, 2, 10, 9], [3, 4, 5, 8], [6, 7, 8, 9]], dtype=torch.long)
+    lengths = torch.tensor([2, 3, 4], dtype=torch.long)
+
+    # When: the shared Transformer path performs one masked padded prefill.
+    actual_logits, dense_cache = gpt.prefill_batch(prompts, lengths)
+
+    # Then: final logits and every valid cache prefix equal ordinary compact prefill exactly.
+    for row, length_tensor in enumerate(lengths):
+        length = int(length_tensor.item())
+        expected_logits, expected_cache = gpt.prefill(prompts[row : row + 1, :length])
+        torch.testing.assert_close(actual_logits[row : row + 1], expected_logits)
+        for dense_layer, expected_layer in zip(dense_cache, expected_cache, strict=True):
+            torch.testing.assert_close(
+                dense_layer.key[row : row + 1, :, :length],
+                expected_layer.key,
+            )
+            torch.testing.assert_close(
+                dense_layer.value[row : row + 1, :, :length],
+                expected_layer.value,
+            )
+            assert dense_layer.key.shape == (3, 2, 4, 4)
+            assert dense_layer.value.shape == (3, 2, 4, 4)
+
+
+def test_batched_prefill_padding_values_cannot_change_valid_outputs() -> None:
+    # Given: two copies of the same valid prompts with different right-padding token values.
+    _ = torch.default_generator.manual_seed(46)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    first = torch.tensor([[1, 2, 0, 0], [3, 4, 5, 0]], dtype=torch.long)
+    second = torch.tensor([[1, 2, 9, 10], [3, 4, 5, 8]], dtype=torch.long)
+    lengths = torch.tensor([2, 3], dtype=torch.long)
+
+    # When: both padded representations are evaluated.
+    first_logits, first_cache = gpt.prefill_batch(first, lengths)
+    second_logits, second_cache = gpt.prefill_batch(second, lengths)
+
+    # Then: valid final logits and valid K/V prefixes do not depend on padding token IDs.
+    torch.testing.assert_close(first_logits, second_logits)
+    for row, length_tensor in enumerate(lengths):
+        length = int(length_tensor.item())
+        for first_layer, second_layer in zip(first_cache, second_cache, strict=True):
+            torch.testing.assert_close(
+                first_layer.key[row : row + 1, :, :length],
+                second_layer.key[row : row + 1, :, :length],
+            )
+            torch.testing.assert_close(
+                first_layer.value[row : row + 1, :, :length],
+                second_layer.value[row : row + 1, :, :length],
+            )
+
+
+@pytest.mark.parametrize(
+    ("lengths", "message"),
+    [
+        (torch.tensor([[2]], dtype=torch.long), "shape"),
+        (torch.tensor([2], dtype=torch.int32), "dtype"),
+        (torch.tensor([0], dtype=torch.long), "values must be"),
+        (torch.tensor([3], dtype=torch.long), "padded prompt length"),
+    ],
+)
+def test_batched_prefill_rejects_invalid_prompt_lengths(
+    lengths: torch.Tensor,
+    message: str,
+) -> None:
+    # Given: a valid padded prompt and malformed true-length metadata.
+    gpt = model.GPT(tiny_config())
+
+    # When/Then: validation rejects metadata before Transformer execution.
+    with pytest.raises(model.InvalidTokenTensorError, match=message):
+        _ = gpt.prefill_batch(torch.tensor([[1, 2]], dtype=torch.long), lengths)
+
+
 def test_single_token_decode_matches_full_forward_for_batch() -> None:
     # Given: two prompts, their cache, and one new token per batch row.
     _ = torch.default_generator.manual_seed(43)

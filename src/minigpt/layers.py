@@ -144,6 +144,23 @@ class CausalSelfAttention(nn.Module):
         next_cache = LayerKVCache(key=key.detach(), value=value.detach())
         return output, next_cache
 
+    def forward_prefill_batch(
+        self,
+        hidden_states: Tensor,
+        allowed_positions: Tensor,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Attend right-padded prompts through the shared projection and attention path."""
+        query, key, value = self._project_qkv(hidden_states)
+        output = self._attend(
+            query,
+            key,
+            value,
+            past_length=0,
+            allowed_positions=allowed_positions,
+        )
+        cache = LayerKVCache(key=key.detach(), value=value.detach())
+        return output, cache
+
     def _project_qkv(
         self,
         hidden_states: Tensor,
@@ -271,3 +288,19 @@ class TransformerBlock(nn.Module):
         mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
         output = hidden_states + cast("Tensor", self.mlp(mlp_input))
         return output, next_cache
+
+    def forward_prefill_batch(
+        self,
+        hidden_states: Tensor,
+        allowed_positions: Tensor,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Apply the block to right-padded prompts and retain dense temporary K/V."""
+        attention_input = cast("Tensor", self.attention_norm(hidden_states))
+        attention_output, cache = self.attention.forward_prefill_batch(
+            attention_input,
+            allowed_positions,
+        )
+        hidden_states = hidden_states + attention_output
+        mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
+        output = hidden_states + cast("Tensor", self.mlp(mlp_input))
+        return output, cache

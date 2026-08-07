@@ -41,6 +41,7 @@ __all__ = (
 _INPUT_NAME: Final = "input"
 _TARGET_NAME: Final = "target"
 _PROMPT_NAME: Final = "prompt"
+_PROMPT_LENGTHS_NAME: Final = "prompt lengths"
 _SHAPE_REASON: Final = "expected shape [batch, time]"
 _DTYPE_REASON: Final = "dtype must be torch.int64"
 _NON_EMPTY_REASON: Final = "batch and time dimensions must be non-zero"
@@ -403,6 +404,62 @@ class GPT(nn.Module):
             raise InvalidTokenTensorError(_PROMPT_NAME, reason)
         logits, cache = self._cached_forward(token_ids, None, past_length=0)
         return logits[:, -1:, :], cache
+
+    @torch.no_grad()
+    def prefill_batch(
+        self,
+        token_ids: Tensor,
+        prompt_lengths: Tensor,
+    ) -> tuple[Tensor, KVCache]:
+        """Evaluate variable-length right-padded prompts in one model call."""
+        self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
+        batch_size, padded_length = token_ids.shape
+        if padded_length > self.config.block_size:
+            reason = f"time dimension {padded_length} exceeds block_size {self.config.block_size}"
+            raise InvalidTokenTensorError(_PROMPT_NAME, reason)
+        if prompt_lengths.ndim != _CACHE_LENGTH_DIMENSIONS:
+            reason = "expected shape [batch]"
+            raise InvalidTokenTensorError(_PROMPT_LENGTHS_NAME, reason)
+        if prompt_lengths.shape[0] != batch_size:
+            reason = "batch dimension must equal prompt batch"
+            raise InvalidTokenTensorError(_PROMPT_LENGTHS_NAME, reason)
+        if prompt_lengths.dtype != torch.long:
+            raise InvalidTokenTensorError(_PROMPT_LENGTHS_NAME, _DTYPE_REASON)
+        if prompt_lengths.device != token_ids.device:
+            reason = "device must equal prompt device"
+            raise InvalidTokenTensorError(_PROMPT_LENGTHS_NAME, reason)
+        minimum = int(prompt_lengths.min().item())
+        maximum = int(prompt_lengths.max().item())
+        if minimum <= 0 or maximum > padded_length:
+            reason = f"values must be in [1, padded prompt length {padded_length}]"
+            raise InvalidTokenTensorError(_PROMPT_LENGTHS_NAME, reason)
+
+        positions = torch.arange(padded_length, device=token_ids.device)
+        token_embeddings = cast("Tensor", self.token_embedding(token_ids))
+        position_embeddings = cast("Tensor", self.position_embedding(positions))
+        hidden_states = cast(
+            "Tensor",
+            self.embedding_dropout(token_embeddings + position_embeddings),
+        )
+        key_positions = positions.view(1, 1, 1, padded_length)
+        query_positions = positions.view(1, 1, padded_length, 1)
+        valid_keys = key_positions < prompt_lengths.view(-1, 1, 1, 1)
+        causal = key_positions <= query_positions
+        allowed_positions = causal & valid_keys
+        next_cache: list[LayerKVCache] = []
+        for index, module in enumerate(self.blocks):
+            if not isinstance(module, TransformerBlock):
+                raise UnexpectedTransformerBlockError(index, type(module).__name__)
+            hidden_states, layer_cache = module.forward_prefill_batch(
+                hidden_states,
+                allowed_positions,
+            )
+            next_cache.append(layer_cache)
+        normalized = cast("Tensor", self.final_norm(hidden_states))
+        logits = cast("Tensor", self.lm_head(normalized))
+        final_rows = prompt_lengths - 1
+        batch_rows = torch.arange(batch_size, device=token_ids.device)
+        return logits[batch_rows, final_rows].unsqueeze(1), tuple(next_cache)
 
     @torch.no_grad()
     def decode(self, token_ids: Tensor, cache: KVCache) -> tuple[Tensor, KVCache]:
