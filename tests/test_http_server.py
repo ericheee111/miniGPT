@@ -2,27 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, cast
 
 import httpx
 import torch
 from httpx import ASGITransport
+
+from minigpt.data import CharTokenizer, JsonValue
 from minigpt.engine_runner import EngineRunner, RunnerConfig
 from minigpt.http_server import MODEL_ID, create_app
-
-from minigpt.data import CharTokenizer
 from minigpt.model import GPT
 from minigpt.serving import (
     ContinuousExecutor,
     EngineConfig,
+    GenerationRequest,
     SchedulerConfig,
     ServingEngine,
 )
 from minigpt.settings import GPTConfig
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
     from fastapi import FastAPI
 
@@ -32,7 +34,7 @@ _DATA_PREFIX = "data: "
 
 
 def build_app() -> FastAPI:
-    torch.manual_seed(1234)
+    _ = torch.default_generator.manual_seed(1234)
     config = GPTConfig(
         vocab_size=2,
         block_size=_BLOCK_SIZE,
@@ -67,7 +69,7 @@ def build_app() -> FastAPI:
 
 
 @asynccontextmanager
-async def _test_client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+async def _test_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient, None]:
     """Enter the FastAPI lifespan manually and yield an in-process HTTP client."""
     async with (
         app.router.lifespan_context(app),
@@ -96,13 +98,17 @@ def _completion_payload(
     }
 
 
-def _response_body(response: httpx.Response) -> dict[str, object]:
-    body: object = response.json()
+def _response_json(response: httpx.Response) -> JsonValue:
+    return cast("JsonValue", response.json())
+
+
+def _response_body(response: httpx.Response) -> dict[str, JsonValue]:
+    body = _response_json(response)
     assert isinstance(body, dict)
-    return cast("dict[str, object]", body)
+    return body
 
 
-def _error_code(body: object) -> str:
+def _error_code(body: JsonValue) -> str:
     assert isinstance(body, dict)
     error = body.get("error")
     assert isinstance(error, dict)
@@ -111,9 +117,9 @@ def _error_code(body: object) -> str:
     return code
 
 
-def _parse_sse_data(lines: list[str]) -> list[dict[str, object] | None]:
+def _parse_sse_data(lines: list[str]) -> list[dict[str, JsonValue] | None]:
     """Extract parsed JSON chunks and the [DONE] sentinel from SSE data lines."""
-    chunks: list[dict[str, object] | None] = []
+    chunks: list[dict[str, JsonValue] | None] = []
     for line in lines:
         if not line.startswith(_DATA_PREFIX):
             continue
@@ -121,13 +127,13 @@ def _parse_sse_data(lines: list[str]) -> list[dict[str, object] | None]:
         if payload == "[DONE]":
             chunks.append(None)
             continue
-        decoded: object = json.loads(payload)
+        decoded = cast("JsonValue", json.loads(payload))
         assert isinstance(decoded, dict)
-        chunks.append(cast("dict[str, object]", decoded))
+        chunks.append(decoded)
     return chunks
 
 
-def _choice_text(chunk: dict[str, object]) -> str:
+def _choice_text(chunk: dict[str, JsonValue]) -> str:
     choices = chunk.get("choices")
     assert isinstance(choices, list)
     assert len(choices) >= 1
@@ -138,7 +144,7 @@ def _choice_text(chunk: dict[str, object]) -> str:
     return text
 
 
-def _choice_finish_reason(chunk: dict[str, object]) -> str | None:
+def _choice_finish_reason(chunk: dict[str, JsonValue]) -> str | None:
     choices = chunk.get("choices")
     assert isinstance(choices, list)
     assert len(choices) >= 1
@@ -254,8 +260,8 @@ async def _check_repeated_request() -> None:
     # Then: both responses carry identical generated text.
     assert first.status_code == 200
     assert second.status_code == 200
-    first_text = cast("str", _response_body(first).get("choices", [{}])[0].get("text"))
-    second_text = cast("str", _response_body(second).get("choices", [{}])[0].get("text"))
+    first_text = _choice_text(_response_body(first))
+    second_text = _choice_text(_response_body(second))
     assert first_text == second_text
 
 
@@ -334,7 +340,7 @@ async def _check_unknown_model() -> None:
 
     # Then: the response is 404 with a stable error envelope and model_not_found code.
     assert response.status_code == 404
-    assert _error_code(response.json()) == "model_not_found"
+    assert _error_code(_response_json(response)) == "model_not_found"
 
 
 # --- Contract 7: Prompt too long ---
@@ -355,7 +361,7 @@ async def _check_prompt_too_long() -> None:
 
     # Then: the response is 400 with a stable error envelope and prompt_too_long code.
     assert response.status_code == 400
-    assert _error_code(response.json()) == "prompt_too_long"
+    assert _error_code(_response_json(response)) == "prompt_too_long"
 
 
 # --- Contract 8: Empty prompt ---
@@ -376,7 +382,7 @@ async def _check_empty_prompt() -> None:
 
     # Then: the response is 422 with a stable error envelope and invalid_request code.
     assert response.status_code == 422
-    assert _error_code(response.json()) == "invalid_request"
+    assert _error_code(_response_json(response)) == "invalid_request"
 
 
 # --- Contract 9: Unsupported field ---
@@ -397,4 +403,89 @@ async def _check_unsupported_field() -> None:
 
     # Then: the response is 422 with a stable error envelope and invalid_request code.
     assert response.status_code == 422
-    assert _error_code(response.json()) == "invalid_request"
+    assert _error_code(_response_json(response)) == "invalid_request"
+
+
+def test_http_result_matches_direct_serving_engine() -> None:
+    asyncio.run(_check_direct_equivalence())
+
+
+async def _check_direct_equivalence() -> None:
+    # Given: identical tiny models behind a direct engine and the HTTP app.
+    expected = _direct_completion(seed=73, max_tokens=5)
+    app = build_app()
+
+    # When: HTTP serves the same prompt, generation length, and request seed.
+    async with _test_client(app) as client:
+        response = await client.post(
+            "/v1/completions",
+            json=_completion_payload(seed=73, max_tokens=5),
+        )
+
+    # Then: the HTTP boundary preserves the direct engine's decoded tokens.
+    assert response.status_code == 200
+    assert _choice_text(_response_body(response)) == expected
+
+
+def test_concurrent_http_requests_preserve_independent_rng() -> None:
+    asyncio.run(_check_concurrent_requests())
+
+
+async def _check_concurrent_requests() -> None:
+    # Given: eight concurrent requests split across two fixed seeds.
+    app = build_app()
+    seeds = [100 + index % 2 for index in range(8)]
+
+    # When: all requests are posted concurrently through the ASGI boundary.
+    async with _test_client(app) as client:
+        responses = await asyncio.gather(
+            *(
+                client.post(
+                    "/v1/completions",
+                    json=_completion_payload(seed=seed, max_tokens=5),
+                )
+                for seed in seeds
+            )
+        )
+
+    # Then: every request succeeds and equal seeds match regardless of peers.
+    assert all(response.status_code == 200 for response in responses)
+    texts = [_choice_text(_response_body(response)) for response in responses]
+    assert len(set(texts[::2])) == 1
+    assert len(set(texts[1::2])) == 1
+    assert texts[0] != texts[1]
+
+
+def _direct_completion(*, seed: int, max_tokens: int) -> str:
+    _ = torch.default_generator.manual_seed(1234)
+    tokenizer = CharTokenizer.from_text("AB")
+    model = GPT(
+        GPTConfig(
+            vocab_size=2,
+            block_size=_BLOCK_SIZE,
+            n_layer=1,
+            n_head=1,
+            n_embd=8,
+            dropout=0.0,
+        )
+    ).eval()
+    engine = ServingEngine(
+        config=EngineConfig(
+            scheduler=SchedulerConfig(max_active_requests=4, max_cached_tokens=64),
+            block_size=_BLOCK_SIZE,
+        ),
+        executor=ContinuousExecutor(model),
+    )
+    request_id = "direct"
+    engine.submit(
+        GenerationRequest(
+            request_id=request_id,
+            prompt_tokens=tuple(tokenizer.encode("A")),
+            max_new_tokens=max_tokens,
+            seed=seed,
+            arrival_time=time.perf_counter(),
+        )
+    )
+    while not engine.is_idle:
+        engine.tick()
+    return tokenizer.decode(engine.request_state(request_id).generated_tokens)
