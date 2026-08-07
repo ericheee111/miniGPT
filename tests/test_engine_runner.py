@@ -99,7 +99,7 @@ class BlockingExecutor(RecordingExecutor):
             self._blocked = True
             self.entered.set()
             assert self.release.wait(timeout=5.0)
-        return super().prefill(requests)
+        return RecordingExecutor.prefill(self, requests)
 
 
 def _request(
