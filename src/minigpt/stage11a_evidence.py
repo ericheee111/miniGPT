@@ -181,9 +181,8 @@ def _readme(summary: EvidenceDocument) -> str:
         [
             "",
             "Canonical timings come from alternating fresh processes using `time.perf_counter`.",
-            "Raw replicates are unfiltered and include environment, resolved configuration,",
-            "Order, median, MAD, CV, TTFT, TPOT, E2E, throughput, utilization, and hashes",
-            "are included.",
+            "Raw replicates are unfiltered. Environment, resolved configuration, execution order,",
+            "median, MAD, CV, TTFT, TPOT, E2E, throughput, utilization, and hashes are included.",
             "Profiler output is explicitly separate and is not used for throughput claims.",
             "",
             "The simulator evidence runs reference and continuous executors from identical model",
