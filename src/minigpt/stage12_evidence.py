@@ -113,7 +113,7 @@ def generate_stage12_evidence(
         manifest_path,
         {
             "schema_version": 1,
-            "stage": 12,
+            "stage": STAGE_NUMBER,
             "source_commit": source_commit,
             "artifacts": artifacts,
         },
@@ -209,7 +209,7 @@ def _summary(
         _invalid("streaming API evidence is missing")
     return {
         "schema_version": 1,
-        "stage": 12,
+        "stage": STAGE_NUMBER,
         "source_commit": source_commit,
         "openai_compatible_subset": True,
         "chat_completions": False,
@@ -242,6 +242,8 @@ def _readme(
     non_stream = cast("EvidenceDocument", api_examples["non_stream"])
     streaming = cast("EvidenceDocument", api_examples["streaming"])
     concurrent = cast("EvidenceDocument", api_examples["concurrent"])
+    status_codes = json.dumps(concurrent["status_codes"], ensure_ascii=False)
+    concurrent_texts = json.dumps(concurrent["texts"], ensure_ascii=False)
     performance_caveat = "are descriptive for this machine and are not a speedup claim or shared-CI performance truth."  # noqa: E501
     benchmark_header = "| Concurrency | Prompts | Stream | req/s | tokens/s | TTFT P50/P95/P99 | TPOT P50/P95/P99 | E2E P50/P95/P99 | Errors |"  # noqa: E501
     lines = [
@@ -288,8 +290,8 @@ def _readme(
         "",
         "## Concurrent workload",
         "",
-        f"Concurrent example status codes: `{concurrent['status_codes']}`; ",
-        f"independent fixed-seed outputs: `{concurrent['texts']}`.",
+        f"Concurrent example status codes: `{status_codes}`;",
+        f"independent fixed-seed outputs: `{concurrent_texts}`.",
         "",
         "HTTP concurrency is the number of requests in flight at the API boundary. Continuous",
         "batching is the executor's tensor-level grouping of eligible prefill/decode work after",
