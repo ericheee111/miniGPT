@@ -125,13 +125,13 @@ def _simulator_evidence(
             "checked_contracts": list(comparison.checked_contracts),
             "generated_tokens": {
                 request_id: list(tokens)
-                for request_id, tokens in comparison.continuous.generated_tokens.items()
+                for request_id, tokens in comparison.continuous_decode.generated_tokens.items()
             },
             "terminal_statuses": {
                 request_id: status.value
-                for request_id, status in comparison.continuous.request_statuses.items()
+                for request_id, status in comparison.continuous_decode.request_statuses.items()
             },
-            "admission_order": list(comparison.continuous.admission_order),
+            "admission_order": list(comparison.continuous_decode.admission_order),
         }
         _write_json(scenario_root / "equivalence.json", document)
         scenarios.append(document)
