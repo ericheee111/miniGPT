@@ -474,6 +474,37 @@ scheduler 与 engine 的端到端 TTFT/TPOT/E2E、P50/P95/P99；它不替代 Sta
 benchmark，也不建立跨机器性能结论。curl/SSE、并发、取消/背压和 canonical localhost matrix
 见 [Stage 12 证据包](docs/results/http-serving/README.md)。
 
+### Stage 13A/13B paged KV cache 与 block-aware decode
+
+Stage 13A 保留 `dense` reference backend，并新增固定 K/V block pool、per-request block table、
+block reservation、事务化 prefill/append/overflow rebuild，以及 finish/cancel/failure/shutdown
+零泄漏回收。普通 Stage 13A decode 会先把 block table 临时 materialize 成 compact dense cache，
+因此不是 PagedAttention，也不预设更快。7 个固定容量/回收/碎片场景、3000 步 allocator stress
+和 hash-bound 结果见 [Stage 13A 证据包](docs/results/paged-kv-cache-manager/README.md)。
+
+Stage 13B 的 `paged_attention` executor 在正常单 token decode 中直接遍历有序 physical block
+views：只拼接 attention score 做全序列 softmax，再逐 block 累加 value context；历史 K/V 不再
+compact materialize 或 dense padding。模型只返回当前 token 的 per-layer K/V delta，由 pool
+事务化 append。初始 prefill 和 learned-position overflow re-prefill 仍保持 dense reference 语义。
+
+```powershell
+python serve.py `
+  --checkpoint checkpoints/reference.pt `
+  --tokenizer data/processed/tinyshakespeare_char/tokenizer.json `
+  --executor paged_attention `
+  --kv-cache-backend paged `
+  --kv-block-tokens 16
+
+python simulate_serving.py --config configs/serving_paged_attention.yaml
+python benchmark_paged_attention.py --output reports/paged-attention/benchmark.json
+```
+
+dense、Stage 13A materialized paged 和 Stage 13B direct paged 在固定 workload 下保持 token、终态、
+取消、FIFO、逻辑事件、request metrics 与 cache accounting 等价。canonical CPU 测量仅为当前机器
+描述：direct E2E 中位数略慢于 materialized reference，虽然 block-view cache access 更轻；证据因此
+明确标记 `descriptive_only`，不宣称 speedup。完整 correctness hashes、timings 与 caveat 见
+[Stage 13B 证据包](docs/results/paged-attention/README.md)。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：

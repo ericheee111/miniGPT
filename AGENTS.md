@@ -25,7 +25,10 @@ implements:
 - a deterministic FIFO serving control plane with per-request RNG/cache state, admission and cache
   reservations, cancellation/backpressure, metrics, three Stage 10/11 executors, batched prefill/
   decode evidence, and an optional Stage 12 OpenAI-compatible completions HTTP/SSE boundary with a
-  single-owner engine thread.
+  single-owner engine thread;
+- an optional fixed-block paged KV-cache manager with transactional ownership, block reservations,
+  lifecycle cleanup, invariant stress evidence, and a Stage 13B block-aware decode executor that
+  avoids normal-path dense historical K/V materialization.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -83,8 +86,11 @@ dataset remain gitignored.
 - `python serve.py --checkpoint ... --tokenizer ... --executor continuous` loads one CPU model and
   runs the Stage 12 optional HTTP service. `python benchmark_server.py ...` is an end-to-end HTTP
   system benchmark and must remain separate from Stage 11 executor benchmarks.
-- Do not begin PagedAttention/Paged KV Cache, BPE, GPU, LoRA, distributed training, `torch.compile`,
-  or another optimization without an explicit stage decision.
+- `python serve.py ... --executor paged_attention --kv-cache-backend paged` selects the Stage 13B
+  block-aware decode path. Initial/overflow prefill remains dense; do not describe it as an all-path
+  paged kernel or claim speedup from descriptive single-machine evidence.
+- Do not begin prefix caching, shared/COW blocks, BPE, GPU, LoRA, distributed training,
+  `torch.compile`, or another optimization without an explicit stage decision.
 
 ## Quality gates
 
