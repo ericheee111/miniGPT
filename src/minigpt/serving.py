@@ -245,6 +245,7 @@ class ExecutionResult:
     latency_seconds: float
     error: str | None
     used_fallback: bool
+    cache_is_delta: bool
 
     @classmethod
     def success(  # noqa: PLR0913
@@ -256,6 +257,7 @@ class ExecutionResult:
         cache_tokens: int,
         latency_seconds: float,
         used_fallback: bool,
+        cache_is_delta: bool = False,
     ) -> Self:
         """Build a successful token result."""
         return cls(
@@ -266,6 +268,7 @@ class ExecutionResult:
             latency_seconds=latency_seconds,
             error=None,
             used_fallback=used_fallback,
+            cache_is_delta=cache_is_delta,
         )
 
     @classmethod
@@ -279,6 +282,7 @@ class ExecutionResult:
             latency_seconds=latency_seconds,
             error=error,
             used_fallback=False,
+            cache_is_delta=False,
         )
 
 
@@ -1163,6 +1167,241 @@ class ContinuousExecutor:
         self._prefill_observations.append(observation)
 
 
+@final
+class PagedAttentionExecutor:
+    """Batch decode directly over Stage 13A physical block views."""
+
+    def __init__(
+        self,
+        model: GPT,
+        paged_cache_pool: PagedKVCachePool,
+        *,
+        prefill_config: PrefillBatchConfig | None = None,
+        clock: Clock = time.perf_counter,
+        telemetry_clock: Clock = time.perf_counter,
+    ) -> None:
+        """Bind one model, its physical pool, dense prefill, and overflow fallback."""
+        if (
+            paged_cache_pool.n_layer != model.config.n_layer
+            or paged_cache_pool.n_head != model.config.n_head
+            or paged_cache_pool.head_size != model.config.n_embd // model.config.n_head
+        ):
+            _invalid("paged attention pool layout must match model")
+        self._model = model
+        self.paged_cache_pool = paged_cache_pool
+        self._clock = clock
+        self._telemetry_clock = telemetry_clock
+        self._prefill = ContinuousExecutor(
+            model,
+            prefill_config=prefill_config,
+            clock=clock,
+            telemetry_clock=telemetry_clock,
+        )
+        self._fallback = ReferenceExecutor(
+            model,
+            clock=clock,
+            telemetry_clock=telemetry_clock,
+        )
+        self._decode_observations: list[DecodeBatchObservation] = []
+        self.block_size = model.config.block_size
+
+    @property
+    def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
+        """Return direct block-aware decode batch telemetry."""
+        return tuple(self._decode_observations)
+
+    @property
+    def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
+        """Return initial batched prefill plus dense overflow fallback telemetry."""
+        return (*self._prefill.prefill_observations, *self._fallback.prefill_observations)
+
+    @property
+    def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
+        """Return resequenced initial and overflow prefill boundaries."""
+        events: list[PrefillBatchEvent] = []
+        for observation in self.prefill_observations:
+            events.extend(_prefill_events(observation, starting_sequence=len(events)))
+        return tuple(events)
+
+    def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        """Reuse Stage 11B dense batched prefill before scattering into blocks."""
+        return self._prefill.prefill(requests)
+
+    def decode(self, active_requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        """Isolate invalid/overflow rows and directly batch all other block views."""
+        results: dict[str, ExecutionResult] = {}
+        batch: list[RequestState] = []
+        for state in active_requests:
+            error = self._validate_decode_state(state)
+            if error is not None:
+                results[state.request.request_id] = ExecutionResult.failure(
+                    state.request.request_id,
+                    error,
+                    0.0,
+                )
+            elif state.cached_tokens >= self.block_size:
+                results[state.request.request_id] = self._fallback.prefill_fallback(state)
+            else:
+                batch.append(state)
+        if batch:
+            for result in self._decode_batch(batch):
+                results[result.request_id] = result
+        return tuple(results[state.request.request_id] for state in active_requests)
+
+    def _decode_batch(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        request_ids = tuple(state.request.request_id for state in requests)
+        useful_tokens = sum(state.cached_tokens for state in requests)
+        assembly_seconds = 0.0
+        model_seconds = 0.0
+        scatter_seconds = 0.0
+        try:
+            assembly_start = self._telemetry_clock()
+            device = self._model.token_embedding.weight.device
+            token_ids = torch.tensor(
+                [[state.generated_tokens[-1]] for state in requests],
+                dtype=torch.long,
+                device=device,
+            )
+            cache_lengths = torch.tensor(
+                [state.cached_tokens for state in requests],
+                dtype=torch.long,
+                device=device,
+            )
+            cache_views = tuple(
+                self.paged_cache_pool.request_view(state.request.request_id) for state in requests
+            )
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
+            logits, cache_delta = self._model.decode_paged_batch(
+                token_ids,
+                cache_views,
+                cache_lengths,
+            )
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+            scatter_start = self._telemetry_clock()
+            results = self._scatter_results(requests, logits, cache_delta)
+            scatter_seconds = max(0.0, self._telemetry_clock() - scatter_start)
+        except Exception as error:  # noqa: BLE001
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            executor_seconds = max(0.0, self._telemetry_clock() - executor_start)
+            self._record_decode(
+                request_ids=request_ids,
+                useful_tokens=useful_tokens,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                executor_seconds=executor_seconds,
+                batch_failed=True,
+            )
+            message = f"{type(error).__name__}: {error}"
+            return tuple(
+                ExecutionResult.failure(state.request.request_id, message, elapsed)
+                for state in requests
+            )
+        elapsed = _logical_elapsed(self._clock, logical_start)
+        results = tuple(replace(result, latency_seconds=elapsed) for result in results)
+        self._record_decode(
+            request_ids=request_ids,
+            useful_tokens=useful_tokens,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            scatter_seconds=scatter_seconds,
+            executor_seconds=max(0.0, self._telemetry_clock() - executor_start),
+            batch_failed=False,
+        )
+        return results
+
+    def _scatter_results(
+        self,
+        requests: Sequence[RequestState],
+        logits: Tensor,
+        cache_delta: KVCache,
+    ) -> tuple[ExecutionResult, ...]:
+        results: list[ExecutionResult] = []
+        for row, state in enumerate(requests):
+            try:
+                token_id = self._sample(state, logits[row : row + 1, -1, :])
+            except Exception as error:  # noqa: BLE001
+                results.append(
+                    ExecutionResult.failure(
+                        state.request.request_id,
+                        f"{type(error).__name__}: {error}",
+                        0.0,
+                    )
+                )
+                continue
+            delta = tuple(
+                LayerKVCache(
+                    key=layer.key[row : row + 1].detach(),
+                    value=layer.value[row : row + 1].detach(),
+                )
+                for layer in cache_delta
+            )
+            results.append(
+                ExecutionResult.success(
+                    request_id=state.request.request_id,
+                    token_id=token_id,
+                    cache=delta,
+                    cache_tokens=state.cached_tokens + 1,
+                    latency_seconds=0.0,
+                    used_fallback=False,
+                    cache_is_delta=True,
+                )
+            )
+        return tuple(results)
+
+    def _validate_decode_state(self, state: RequestState) -> str | None:
+        if not state.generated_tokens or state.cached_tokens <= 0:
+            return "paged decode requires a populated cache and generated token"
+        request_id = state.request.request_id
+        if not self.paged_cache_pool.has_request(request_id):
+            return "paged decode requires an owned request block table"
+        table = self.paged_cache_pool.request_cache(request_id)
+        if table.cache_length != state.cached_tokens:
+            return "paged request block table length differs from engine cache occupancy"
+        if state.cached_tokens > self.block_size:
+            return "paged cache token length exceeds model capacity"
+        return None
+
+    def _sample(self, state: RequestState, logits: Tensor) -> int:
+        scaled = logits / state.request.temperature
+        if state.request.top_k is not None:
+            retained_count = min(state.request.top_k, self._model.config.vocab_size)
+            retained = torch.topk(scaled, retained_count, dim=-1).values
+            cutoff = retained[:, -1].unsqueeze(-1)
+            scaled = scaled.masked_fill(scaled < cutoff, -torch.inf)
+        probabilities = functional.softmax(scaled, dim=-1)
+        sampled = torch.multinomial(probabilities, 1, generator=state.generator)
+        return int(sampled.item())
+
+    def _record_decode(  # noqa: PLR0913
+        self,
+        *,
+        request_ids: tuple[str, ...],
+        useful_tokens: int,
+        assembly_seconds: float,
+        model_seconds: float,
+        scatter_seconds: float,
+        executor_seconds: float,
+        batch_failed: bool,
+    ) -> None:
+        self._decode_observations.append(
+            DecodeBatchObservation(
+                request_ids=request_ids,
+                batch_size=len(request_ids),
+                padded_cache_tokens=useful_tokens,
+                useful_cache_tokens=useful_tokens,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                executor_seconds=executor_seconds,
+                batch_failed=batch_failed,
+            )
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class EngineEvent:
     """Record one ordered transition with a scheduler snapshot."""
@@ -1274,9 +1513,13 @@ class ServingEngine:
                 _invalid("paged backend requires a paged cache pool")
             if paged_cache_pool.config != config.paged_kv_cache:
                 _invalid("paged cache pool config must equal EngineConfig.paged_kv_cache")
+        direct_paged_decode = isinstance(executor, PagedAttentionExecutor)
+        if direct_paged_decode and executor.paged_cache_pool is not paged_cache_pool:
+            _invalid("paged attention executor and engine must share one cache pool")
         self.config = config
         self._executor = executor
         self._paged_cache_pool = paged_cache_pool
+        self._direct_paged_decode = direct_paged_decode
         self._clock = clock
         self._states: dict[str, RequestState] = {}
         self._waiting: deque[str] = deque()
@@ -1653,7 +1896,7 @@ class ServingEngine:
                     timestamp=tick_time,
                 )
         try:
-            if self._paged_cache_pool is not None and not prefill:
+            if self._paged_cache_pool is not None and not prefill and not self._direct_paged_decode:
                 for state in states:
                     state.kv_cache = self._paged_cache_pool.materialize(state.request.request_id)
             results = self._executor.prefill(states) if prefill else self._executor.decode(states)
@@ -1692,6 +1935,8 @@ class ServingEngine:
                 pool.write_prefill(state.request.request_id, result.cache)
             elif result.used_fallback:
                 pool.rebuild(state.request.request_id, result.cache)
+            elif result.cache_is_delta:
+                pool.append_delta(state.request.request_id, result.cache)
             else:
                 pool.append(state.request.request_id, result.cache)
             table = pool.request_cache(state.request.request_id)

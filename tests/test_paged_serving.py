@@ -14,6 +14,7 @@ from minigpt.serving import (
     EngineConfig,
     EngineEvent,
     GenerationRequest,
+    PagedAttentionExecutor,
     ReferenceExecutor,
     RequestMetrics,
     RequestStatus,
@@ -129,6 +130,36 @@ def _engine(
     )
 
 
+def _direct_engine(
+    model: GPT,
+    *,
+    num_blocks: int = 8,
+    max_active_requests: int = 2,
+) -> ServingEngine:
+    paged_config = PagedKVCacheConfig(block_tokens=2, num_blocks=num_blocks)
+    pool = PagedKVCachePool.from_model(paged_config, model)
+    executor = PagedAttentionExecutor(
+        model,
+        pool,
+        clock=StepClock(0.001),
+        telemetry_clock=StepClock(0.0001),
+    )
+    return ServingEngine(
+        config=EngineConfig(
+            scheduler=SchedulerConfig(
+                max_active_requests=max_active_requests,
+                max_cached_tokens=model.config.block_size * max_active_requests,
+            ),
+            block_size=model.config.block_size,
+            kv_cache_backend=KVCacheBackend.PAGED,
+            paged_kv_cache=paged_config,
+        ),
+        executor=executor,
+        paged_cache_pool=pool,
+        clock=lambda: 0.0,
+    )
+
+
 def _run(engine: ServingEngine, requests: tuple[GenerationRequest, ...]) -> None:
     for request in requests:
         engine.submit(request)
@@ -176,6 +207,48 @@ def test_dense_and_paged_backends_are_logically_equivalent(
     assert metrics.peak_allocated_blocks > 0
     assert metrics.peak_reserved_blocks > 0
     paged.verify_cache_invariants()
+
+
+def test_direct_paged_attention_matches_dense_and_materialized_serving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: identical weights/workload with dense, Stage 13A, and direct block-aware decode.
+    model = _model()
+    dense = _engine(model, _continuous, backend=KVCacheBackend.DENSE)
+    materialized = _engine(model, _continuous, backend=KVCacheBackend.PAGED)
+    direct = _direct_engine(model)
+    requests = _requests()
+
+    def reject_materialize(self: PagedKVCachePool, request_id: str) -> tuple[object, ...]:
+        del self, request_id
+        message = "direct paged decode must not materialize historical KV"
+        raise AssertionError(message)
+
+    # When: references run first, then the direct path runs with materialization forbidden.
+    _run(dense, requests)
+    _run(materialized, requests)
+    monkeypatch.setattr(PagedKVCachePool, "materialize", reject_materialize)
+    _run(direct, requests)
+
+    # Then: the direct path never called materialize and preserves every logical contract.
+    for request in requests:
+        dense_state = dense.request_state(request.request_id)
+        materialized_state = materialized.request_state(request.request_id)
+        direct_state = direct.request_state(request.request_id)
+        assert direct_state.generated_tokens == materialized_state.generated_tokens
+        assert direct_state.generated_tokens == dense_state.generated_tokens
+        assert direct_state.status is RequestStatus.FINISHED
+        assert direct.request_metrics(request.request_id) == dense.request_metrics(
+            request.request_id
+        )
+    assert direct.events == materialized.events == dense.events
+    assert any(event.used_fallback for event in direct.events)
+    metrics = direct.metrics()
+    assert metrics.padding_waste_ratio == 0.0
+    assert metrics.allocated_blocks == 0
+    assert metrics.reserved_blocks == 0
+    assert metrics.free_blocks == metrics.total_blocks
+    direct.verify_cache_invariants()
 
 
 def test_paged_capacity_pressure_preserves_strict_fifo_admission() -> None:
