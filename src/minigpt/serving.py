@@ -16,12 +16,33 @@ from torch.nn import functional
 from typing_extensions import override
 
 from minigpt.layers import KVCache, LayerKVCache
+from minigpt.paged_kv_cache import (
+    KVCacheBackend,
+    PagedKVCacheConfig,
+    PagedKVCacheMetrics,
+    PagedKVCachePool,
+)
 
 if TYPE_CHECKING:
     from minigpt.model import GPT
 
 Clock = Callable[[], float]
 _LOGICAL_TIME_DECIMALS = 12
+_EMPTY_PAGED_METRICS = PagedKVCacheMetrics(
+    total_blocks=0,
+    free_blocks=0,
+    allocated_blocks=0,
+    reserved_blocks=0,
+    peak_allocated_blocks=0,
+    peak_reserved_blocks=0,
+    used_token_slots=0,
+    allocated_token_slots=0,
+    internal_fragmentation_tokens=0,
+    internal_fragmentation_ratio=0.0,
+    allocation_count=0,
+    free_count=0,
+    block_reuse_count=0,
+)
 
 
 class RequestStatus(StrEnum):
@@ -110,6 +131,12 @@ def _logical_elapsed(clock: Clock, start: float) -> float:
     return round(max(0.0, clock() - start), _LOGICAL_TIME_DECIMALS)
 
 
+def _require_paged_cache_length(actual: int, expected: int) -> None:
+    if actual != expected:
+        reason = f"paged cache length {actual} does not equal executor occupancy {expected}"
+        raise RuntimeError(reason)
+
+
 @dataclass(frozen=True, slots=True)
 class GenerationRequest:
     """Define one independently sampled autoregressive request."""
@@ -167,11 +194,17 @@ class EngineConfig:
 
     scheduler: SchedulerConfig
     block_size: int
+    kv_cache_backend: KVCacheBackend = KVCacheBackend.DENSE
+    paged_kv_cache: PagedKVCacheConfig | None = None
 
     def __post_init__(self) -> None:
         """Reject an unusable learned-position window."""
         if isinstance(self.block_size, bool) or self.block_size <= 0:
             _invalid("block_size must be a positive integer")
+        if self.kv_cache_backend is KVCacheBackend.DENSE and self.paged_kv_cache is not None:
+            _invalid("dense backend must not define paged_kv_cache")
+        if self.kv_cache_backend is KVCacheBackend.PAGED and self.paged_kv_cache is None:
+            _invalid("paged backend requires paged_kv_cache")
 
 
 @dataclass(slots=True)
@@ -184,6 +217,7 @@ class RequestState:
     generated_tokens: list[int] = field(default_factory=list)
     kv_cache: KVCache | None = field(default=None, repr=False)
     reserved_cache_tokens: int = 0
+    reserved_cache_blocks: int = 0
     cached_tokens: int = 0
     admission_time: float | None = None
     prefill_start_time: float | None = None
@@ -1175,6 +1209,20 @@ class EngineMetrics:
     waiting_requests: int
     cached_tokens: int
     reserved_cache_tokens: int
+    kv_cache_backend: KVCacheBackend
+    total_blocks: int
+    free_blocks: int
+    allocated_blocks: int
+    reserved_blocks: int
+    peak_allocated_blocks: int
+    peak_reserved_blocks: int
+    used_token_slots: int
+    allocated_token_slots: int
+    internal_fragmentation_tokens: int
+    internal_fragmentation_ratio: float
+    allocation_count: int
+    free_count: int
+    block_reuse_count: int
     peak_active_requests: int
     peak_waiting_requests: int
     peak_cached_tokens: int
@@ -1212,14 +1260,23 @@ class ServingEngine:
         *,
         config: EngineConfig,
         executor: ServingExecutor,
+        paged_cache_pool: PagedKVCachePool | None = None,
         clock: Clock = time.perf_counter,
     ) -> None:
         """Bind deterministic scheduler state to an executor."""
         if executor.block_size != config.block_size:
             reason = "executor block_size must equal EngineConfig.block_size"
             _invalid(reason)
+        if config.kv_cache_backend is KVCacheBackend.DENSE and paged_cache_pool is not None:
+            _invalid("dense backend must not receive a paged cache pool")
+        if config.kv_cache_backend is KVCacheBackend.PAGED:
+            if paged_cache_pool is None:
+                _invalid("paged backend requires a paged cache pool")
+            if paged_cache_pool.config != config.paged_kv_cache:
+                _invalid("paged cache pool config must equal EngineConfig.paged_kv_cache")
         self.config = config
         self._executor = executor
+        self._paged_cache_pool = paged_cache_pool
         self._clock = clock
         self._states: dict[str, RequestState] = {}
         self._waiting: deque[str] = deque()
@@ -1243,9 +1300,32 @@ class ServingEngine:
         return self._executor.prefill_events
 
     @property
+    def paged_cache_pool(self) -> PagedKVCachePool | None:
+        """Expose the optional storage backend for owner-thread diagnostics."""
+        return self._paged_cache_pool
+
+    @property
     def is_idle(self) -> bool:
         """Return whether no waiting or active request remains."""
         return not self._waiting and not self._active
+
+    def verify_cache_invariants(self) -> None:
+        """Verify storage ownership when the paged backend is active."""
+        if self._paged_cache_pool is not None:
+            self._paged_cache_pool.verify_invariants()
+
+    def release_all_cache_resources(self) -> None:
+        """Drop every reservation after a catastrophic owner-thread failure."""
+        if self._paged_cache_pool is not None:
+            self._paged_cache_pool.release_all()
+        for state in self._states.values():
+            state.kv_cache = None
+            state.cached_tokens = 0
+            state.reserved_cache_tokens = 0
+            state.reserved_cache_blocks = 0
+        self._active.clear()
+        self._waiting.clear()
+        self._pending_cancellations.clear()
 
     def submit(self, request: GenerationRequest) -> None:
         """Append a validated request to the FIFO waiting queue."""
@@ -1386,6 +1466,11 @@ class ServingEngine:
         prompt_padding_waste_ratio = (
             prompt_padding_waste / padded_prompt_tokens if padded_prompt_tokens > 0 else 0.0
         )
+        cache_metrics = (
+            self._paged_cache_pool.metrics()
+            if self._paged_cache_pool is not None
+            else _EMPTY_PAGED_METRICS
+        )
         return EngineMetrics(
             total_requests=len(states),
             completed_requests=completed,
@@ -1395,6 +1480,20 @@ class ServingEngine:
             waiting_requests=len(self._waiting),
             cached_tokens=self._cached_tokens(),
             reserved_cache_tokens=self._reserved_cache_tokens(),
+            kv_cache_backend=self.config.kv_cache_backend,
+            total_blocks=cache_metrics.total_blocks,
+            free_blocks=cache_metrics.free_blocks,
+            allocated_blocks=cache_metrics.allocated_blocks,
+            reserved_blocks=cache_metrics.reserved_blocks,
+            peak_allocated_blocks=cache_metrics.peak_allocated_blocks,
+            peak_reserved_blocks=cache_metrics.peak_reserved_blocks,
+            used_token_slots=cache_metrics.used_token_slots,
+            allocated_token_slots=cache_metrics.allocated_token_slots,
+            internal_fragmentation_tokens=cache_metrics.internal_fragmentation_tokens,
+            internal_fragmentation_ratio=cache_metrics.internal_fragmentation_ratio,
+            allocation_count=cache_metrics.allocation_count,
+            free_count=cache_metrics.free_count,
+            block_reuse_count=cache_metrics.block_reuse_count,
             peak_active_requests=self._peak_active,
             peak_waiting_requests=self._peak_waiting,
             peak_cached_tokens=self._peak_cached,
@@ -1477,7 +1576,29 @@ class ServingEngine:
                     detail=state.failure_reason,
                 )
                 continue
+            required_blocks = 0
+            if self._paged_cache_pool is not None:
+                required_blocks = self._paged_cache_pool.required_blocks(required)
+                if required_blocks > self._paged_cache_pool.config.num_blocks:
+                    _ = self._waiting.popleft()
+                    state.failure_reason = (
+                        f"required cache reservation {required_blocks} blocks exceeds pool "
+                        f"{self._paged_cache_pool.config.num_blocks}"
+                    )
+                    state.status = RequestStatus.FAILED
+                    state.finish_time = tick_time
+                    self._emit(
+                        event_type=EngineEventType.FAILED,
+                        state=state,
+                        timestamp=tick_time,
+                        detail=state.failure_reason,
+                    )
+                    continue
             if self._reserved_cache_tokens() + required > scheduler.max_cached_tokens:
+                break
+            if self._paged_cache_pool is not None and not self._paged_cache_pool.can_reserve(
+                required_blocks
+            ):
                 break
             _ = self._waiting.popleft()
             state.admission_time = tick_time
@@ -1497,6 +1618,9 @@ class ServingEngine:
                     timestamp=tick_time,
                 )
                 continue
+            if self._paged_cache_pool is not None:
+                self._paged_cache_pool.reserve(state.request.request_id, required_blocks)
+                state.reserved_cache_blocks = required_blocks
             state.status = RequestStatus.PREFILLING
             self._active.append(state.request.request_id)
             self._emit(
@@ -1505,7 +1629,13 @@ class ServingEngine:
                 timestamp=tick_time,
             )
 
-    def _execute(self, request_ids: tuple[str, ...], *, tick_time: float, prefill: bool) -> None:
+    def _execute(  # noqa: C901
+        self,
+        request_ids: tuple[str, ...],
+        *,
+        tick_time: float,
+        prefill: bool,
+    ) -> None:
         expected_status = RequestStatus.PREFILLING if prefill else RequestStatus.DECODING
         states = tuple(
             self._states[request_id]
@@ -1523,12 +1653,19 @@ class ServingEngine:
                     timestamp=tick_time,
                 )
         try:
+            if self._paged_cache_pool is not None and not prefill:
+                for state in states:
+                    state.kv_cache = self._paged_cache_pool.materialize(state.request.request_id)
             results = self._executor.prefill(states) if prefill else self._executor.decode(states)
         except Exception as error:  # noqa: BLE001
             message = f"{type(error).__name__}: {error}"
             results = tuple(
                 ExecutionResult.failure(state.request.request_id, message, 0.0) for state in states
             )
+        finally:
+            if self._paged_cache_pool is not None:
+                for state in states:
+                    state.kv_cache = None
         result_by_id = {result.request_id: result for result in results}
         duplicate_count = len(results) - len(result_by_id)
         for state in states:
@@ -1536,7 +1673,37 @@ class ServingEngine:
             if result is None or duplicate_count:
                 self._fail_state(state, tick_time, "executor returned malformed request results")
                 continue
+            if self._paged_cache_pool is not None:
+                result = self._commit_paged_result(state, result, prefill=prefill)
             self._apply_result(state, result, tick_time=tick_time, prefill=prefill)
+
+    def _commit_paged_result(
+        self,
+        state: RequestState,
+        result: ExecutionResult,
+        *,
+        prefill: bool,
+    ) -> ExecutionResult:
+        pool = self._paged_cache_pool
+        if pool is None or result.error is not None or result.cache is None:
+            return result
+        try:
+            if prefill:
+                pool.write_prefill(state.request.request_id, result.cache)
+            elif result.used_fallback:
+                pool.rebuild(state.request.request_id, result.cache)
+            else:
+                pool.append(state.request.request_id, result.cache)
+            table = pool.request_cache(state.request.request_id)
+            _require_paged_cache_length(table.cache_length, result.cache_tokens)
+        except Exception as error:  # noqa: BLE001
+            message = f"{type(error).__name__}: {error}"
+            return ExecutionResult.failure(
+                state.request.request_id,
+                message,
+                result.latency_seconds,
+            )
+        return replace(result, cache=())
 
     def _apply_result(
         self,
@@ -1612,9 +1779,12 @@ class ServingEngine:
             self._waiting.remove(request_id)
         if request_id in self._active:
             self._active.remove(request_id)
+        if self._paged_cache_pool is not None and self._paged_cache_pool.has_request(request_id):
+            self._paged_cache_pool.release(request_id)
         state.kv_cache = None
         state.cached_tokens = 0
         state.reserved_cache_tokens = 0
+        state.reserved_cache_blocks = 0
 
     def _reservation_for(self, request: GenerationRequest) -> int:
         if request.max_new_tokens == 0:
