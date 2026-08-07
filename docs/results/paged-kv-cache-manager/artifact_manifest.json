@@ -1,0 +1,32 @@
+{
+  "artifacts": [
+    {
+      "bytes": 785,
+      "path": "evidence/allocator_stress.json",
+      "sha256": "485cc3906bda4281f1a14bf21c7083f28aebdd6ccf951e3c96025d8eadc11d5d"
+    },
+    {
+      "bytes": 536,
+      "path": "evidence/lifecycle_tests.json",
+      "sha256": "429f0efbc2c6bb5f626823bbcef6a68bc622ad405f8118a21176d3f968aadf21"
+    },
+    {
+      "bytes": 18359,
+      "path": "evidence/scenarios.json",
+      "sha256": "e62e3df97edf5b9587daa3dfc7c655dba1166d31dd134f61d55c0042f19eaf18"
+    },
+    {
+      "bytes": 2347,
+      "path": "README.md",
+      "sha256": "6a0e57ad07e51401db478d42e8eb7ff8dc30b238691350b594e3226b2a8feacf"
+    },
+    {
+      "bytes": 524,
+      "path": "summary.json",
+      "sha256": "62a0cadbb1dfe7699707fae7a5bc9aeb7c678a28674a4a99f32c0f26511cae6a"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "f55d4dda24cdb632b05ac4ee8bee75bb4378f6a3",
+  "stage": "13A"
+}

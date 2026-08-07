@@ -1,0 +1,18 @@
+{
+  "all_equivalence_checks_passed": true,
+  "all_resources_released": true,
+  "allocator_stress_steps": 3000,
+  "allocator_trace_sha256": "368f9be5a1ba61cc7c4e4432bcfe3dfa7460d06285953f30f5e2d6c31b4ede81",
+  "cache_backends": [
+    "dense",
+    "paged"
+  ],
+  "dense_materialization_remains": true,
+  "dense_paged_equivalence_scenarios": 5,
+  "paged_attention": false,
+  "scenario_count": 7,
+  "schema_version": 1,
+  "source_commit": "f55d4dda24cdb632b05ac4ee8bee75bb4378f6a3",
+  "speedup_claim": false,
+  "stage": "13A"
+}
