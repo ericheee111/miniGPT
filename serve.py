@@ -57,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_app(arguments: argparse.Namespace) -> FastAPI:
     """Load immutable service resources once and construct the ASGI app."""
+    app, _runner = build_runtime(arguments)
+    return app
+
+
+def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]:
+    """Load immutable resources and return the app plus its observable runner."""
     checkpoint_path = cast("Path", arguments.checkpoint)
     tokenizer_path = cast("Path", arguments.tokenizer)
     tokenizer = CharTokenizer.load(tokenizer_path)
@@ -95,11 +101,14 @@ def build_app(arguments: argparse.Namespace) -> FastAPI:
             stream_buffer_size=cast("int", arguments.stream_buffer_size),
         ),
     )
-    return create_app(
-        runner=runner,
-        tokenizer=tokenizer,
-        model_id=MODEL_ID,
-        block_size=experiment.data.block_size,
+    return (
+        create_app(
+            runner=runner,
+            tokenizer=tokenizer,
+            model_id=MODEL_ID,
+            block_size=experiment.data.block_size,
+        ),
+        runner,
     )
 
 
