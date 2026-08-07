@@ -8,18 +8,20 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Never, Protocol, Self, final
+from typing import TYPE_CHECKING, Never, Protocol, Self, cast, final
 
 import torch
 from torch import Tensor
 from torch.nn import functional
 from typing_extensions import override
 
+from minigpt.layers import KVCache, LayerKVCache
+
 if TYPE_CHECKING:
-    from minigpt.layers import KVCache
     from minigpt.model import GPT
 
 Clock = Callable[[], float]
+_LOGICAL_TIME_DECIMALS = 12
 
 
 class RequestStatus(StrEnum):
@@ -101,6 +103,11 @@ def _invalid(reason: str) -> Never:
 def _finite_non_negative(value: float, name: str) -> None:
     if not math.isfinite(value) or value < 0.0:
         _invalid(f"{name} must be finite and non-negative")
+
+
+def _logical_elapsed(clock: Clock, start: float) -> float:
+    """Normalize injected logical-clock subtraction across executor call order."""
+    return round(max(0.0, clock() - start), _LOGICAL_TIME_DECIMALS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,10 +248,30 @@ class ExecutionResult:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class DecodeBatchObservation:
+    """Separate decode batch utilization and wall-clock phase timings."""
+
+    request_ids: tuple[str, ...]
+    batch_size: int
+    padded_cache_tokens: int
+    useful_cache_tokens: int
+    assembly_seconds: float
+    model_seconds: float
+    scatter_seconds: float
+    executor_seconds: float
+    batch_failed: bool
+
+
 class ServingExecutor(Protocol):
     """Advance request states without defining scheduler policy."""
 
     block_size: int
+
+    @property
+    def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
+        """Return append-only model-batch telemetry."""
+        ...
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Evaluate prompts separately and return at most one token per request."""
@@ -259,15 +286,32 @@ class ServingExecutor(Protocol):
 class ReferenceExecutor:
     """Call Stage 9 model interfaces once per request, without tensor batching."""
 
-    def __init__(self, model: GPT, *, clock: Clock = time.perf_counter) -> None:
+    def __init__(
+        self,
+        model: GPT,
+        *,
+        clock: Clock = time.perf_counter,
+        telemetry_clock: Clock = time.perf_counter,
+    ) -> None:
         """Bind a CPU model and injectable operation clock."""
         self._model = model
         self._clock = clock
+        self._telemetry_clock = telemetry_clock
+        self._decode_observations: list[DecodeBatchObservation] = []
         self.block_size = model.config.block_size
+
+    @property
+    def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
+        """Return per-request reference decode calls as size-one batches."""
+        return tuple(self._decode_observations)
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Prefill each prompt independently and sample its first token."""
         return tuple(self._prefill_one(state, used_fallback=False) for state in requests)
+
+    def prefill_fallback(self, state: RequestState) -> ExecutionResult:
+        """Rebuild one full learned-position window for overflow decode."""
+        return self._prefill_one(state, used_fallback=True)
 
     def decode(self, active_requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Decode once or rebuild a full learned-position window per request."""
@@ -307,6 +351,7 @@ class ReferenceExecutor:
 
     def _decode_one(self, state: RequestState) -> ExecutionResult:
         start = self._clock()
+        telemetry_start = self._telemetry_clock()
         if state.kv_cache is None or not state.generated_tokens:
             return ExecutionResult.failure(
                 state.request.request_id,
@@ -322,11 +367,15 @@ class ReferenceExecutor:
             logits, cache = self._model.decode(token_ids, state.kv_cache)
             token_id = self._sample(state, logits[:, -1, :])
         except Exception as error:  # noqa: BLE001
+            telemetry_elapsed = max(0.0, self._telemetry_clock() - telemetry_start)
+            self._record_decode(state, telemetry_elapsed, batch_failed=True)
             return ExecutionResult.failure(
                 state.request.request_id,
                 f"{type(error).__name__}: {error}",
                 self._elapsed(start),
             )
+        telemetry_elapsed = max(0.0, self._telemetry_clock() - telemetry_start)
+        self._record_decode(state, telemetry_elapsed, batch_failed=False)
         return ExecutionResult.success(
             request_id=state.request.request_id,
             token_id=token_id,
@@ -334,6 +383,27 @@ class ReferenceExecutor:
             cache_tokens=cache[0].length,
             latency_seconds=self._elapsed(start),
             used_fallback=False,
+        )
+
+    def _record_decode(
+        self,
+        state: RequestState,
+        elapsed_seconds: float,
+        *,
+        batch_failed: bool,
+    ) -> None:
+        self._decode_observations.append(
+            DecodeBatchObservation(
+                request_ids=(state.request.request_id,),
+                batch_size=1,
+                padded_cache_tokens=state.cached_tokens,
+                useful_cache_tokens=state.cached_tokens,
+                assembly_seconds=0.0,
+                model_seconds=elapsed_seconds,
+                scatter_seconds=0.0,
+                executor_seconds=elapsed_seconds,
+                batch_failed=batch_failed,
+            )
         )
 
     def _sample(self, state: RequestState, logits: Tensor) -> int:
@@ -348,7 +418,259 @@ class ReferenceExecutor:
         return int(sampled.item())
 
     def _elapsed(self, start: float) -> float:
-        return max(0.0, self._clock() - start)
+        return _logical_elapsed(self._clock, start)
+
+
+@final
+class ContinuousDecodeExecutor:
+    """Keep per-request prefill while batching valid single-token decode rows."""
+
+    def __init__(
+        self,
+        model: GPT,
+        *,
+        clock: Clock = time.perf_counter,
+        telemetry_clock: Clock = time.perf_counter,
+    ) -> None:
+        """Bind one model plus separate logical-result and telemetry clocks."""
+        self._model = model
+        self._clock = clock
+        self._telemetry_clock = telemetry_clock
+        self._reference = ReferenceExecutor(
+            model,
+            clock=clock,
+            telemetry_clock=telemetry_clock,
+        )
+        self._decode_observations: list[DecodeBatchObservation] = []
+        self.block_size = model.config.block_size
+
+    @property
+    def decode_observations(self) -> tuple[DecodeBatchObservation, ...]:
+        """Return one observation for every actual continuous decode model call."""
+        return tuple(self._decode_observations)
+
+    def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        """Preserve Stage 10 per-request prompt execution."""
+        return self._reference.prefill(requests)
+
+    def decode(self, active_requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        """Isolate invalid/overflow requests and batch the remaining decode rows."""
+        results: dict[str, ExecutionResult] = {}
+        batch: list[RequestState] = []
+        for state in active_requests:
+            error = self._validate_decode_state(state)
+            if error is not None:
+                results[state.request.request_id] = ExecutionResult.failure(
+                    state.request.request_id,
+                    error,
+                    0.0,
+                )
+            elif state.cached_tokens >= self.block_size:
+                results[state.request.request_id] = self._reference.prefill_fallback(state)
+            else:
+                batch.append(state)
+        if batch:
+            for result in self.decode_batch(batch):
+                results[result.request_id] = result
+        return tuple(results[state.request.request_id] for state in active_requests)
+
+    def decode_batch(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
+        """Assemble, execute, sample, and scatter one variable-length decode batch."""
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        request_ids = tuple(state.request.request_id for state in requests)
+        try:
+            assembly_start = self._telemetry_clock()
+            token_ids, dense_cache, cache_lengths = self._assemble(requests)
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
+            logits, next_dense_cache = self._model.decode_batch(
+                token_ids,
+                dense_cache,
+                cache_lengths,
+            )
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+            scatter_start = self._telemetry_clock()
+            compact_caches = self._scatter(next_dense_cache, cache_lengths)
+            scatter_seconds = max(0.0, self._telemetry_clock() - scatter_start)
+        except Exception as error:  # noqa: BLE001
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            executor_seconds = max(0.0, self._telemetry_clock() - executor_start)
+            useful = sum(state.cached_tokens for state in requests)
+            padded = len(requests) * max((state.cached_tokens for state in requests), default=0)
+            self._decode_observations.append(
+                DecodeBatchObservation(
+                    request_ids=request_ids,
+                    batch_size=len(requests),
+                    padded_cache_tokens=padded,
+                    useful_cache_tokens=useful,
+                    assembly_seconds=0.0,
+                    model_seconds=executor_seconds,
+                    scatter_seconds=0.0,
+                    executor_seconds=executor_seconds,
+                    batch_failed=True,
+                )
+            )
+            message = f"{type(error).__name__}: {error}"
+            return tuple(
+                ExecutionResult.failure(state.request.request_id, message, elapsed)
+                for state in requests
+            )
+
+        elapsed = _logical_elapsed(self._clock, logical_start)
+        results: list[ExecutionResult] = []
+        for row, (state, cache) in enumerate(zip(requests, compact_caches, strict=True)):
+            try:
+                token_id = self._sample(state, logits[row : row + 1, -1, :])
+            except Exception as error:  # noqa: BLE001
+                results.append(
+                    ExecutionResult.failure(
+                        state.request.request_id,
+                        f"{type(error).__name__}: {error}",
+                        elapsed,
+                    )
+                )
+                continue
+            results.append(
+                ExecutionResult.success(
+                    request_id=state.request.request_id,
+                    token_id=token_id,
+                    cache=cache,
+                    cache_tokens=state.cached_tokens + 1,
+                    latency_seconds=elapsed,
+                    used_fallback=False,
+                )
+            )
+        executor_seconds = max(0.0, self._telemetry_clock() - executor_start)
+        useful = int(cache_lengths.sum().item())
+        padded = len(requests) * int(cache_lengths.max().item())
+        self._decode_observations.append(
+            DecodeBatchObservation(
+                request_ids=request_ids,
+                batch_size=len(requests),
+                padded_cache_tokens=padded,
+                useful_cache_tokens=useful,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                executor_seconds=executor_seconds,
+                batch_failed=False,
+            )
+        )
+        return tuple(results)
+
+    def _validate_decode_state(  # noqa: C901, PLR0911
+        self,
+        state: RequestState,
+    ) -> str | None:
+        if state.kv_cache is None or not state.generated_tokens:
+            return "decode requires a populated cache and generated token"
+        cache = cast("tuple[object, ...]", state.kv_cache)
+        if len(cache) != self._model.config.n_layer:
+            return "invalid KV cache: layer count does not match model"
+        expected_device = self._model.token_embedding.weight.device
+        expected_dtype = self._model.token_embedding.weight.dtype
+        head_size = self._model.config.n_embd // self._model.config.n_head
+        for layer_index, layer_cache in enumerate(cache):
+            if not isinstance(layer_cache, LayerKVCache):
+                return f"invalid KV cache: layer {layer_index} is not LayerKVCache"
+            if layer_cache.key.shape != layer_cache.value.shape:
+                return f"invalid KV cache: layer {layer_index} key/value shapes differ"
+            expected_shape = (
+                1,
+                self._model.config.n_head,
+                state.cached_tokens,
+                head_size,
+            )
+            if tuple(layer_cache.key.shape) != expected_shape:
+                return (
+                    f"invalid KV cache: layer {layer_index} shape "
+                    f"{tuple(layer_cache.key.shape)} must equal {expected_shape}"
+                )
+            for tensor in (layer_cache.key, layer_cache.value):
+                if tensor.dtype != expected_dtype:
+                    return f"invalid KV cache: layer {layer_index} dtype must equal model dtype"
+                if tensor.device != expected_device:
+                    return f"invalid KV cache: layer {layer_index} device must equal model device"
+                if tensor.requires_grad:
+                    return f"invalid KV cache: layer {layer_index} cache must be detached"
+        if state.cached_tokens <= 0 or state.cached_tokens > self.block_size:
+            return "invalid KV cache: cached token length is outside model capacity"
+        return None
+
+    def _assemble(
+        self,
+        requests: Sequence[RequestState],
+    ) -> tuple[Tensor, KVCache, Tensor]:
+        batch_size = len(requests)
+        padded_length = max(state.cached_tokens for state in requests)
+        device = self._model.token_embedding.weight.device
+        dtype = self._model.token_embedding.weight.dtype
+        head_size = self._model.config.n_embd // self._model.config.n_head
+        cache_lengths = torch.tensor(
+            [state.cached_tokens for state in requests],
+            dtype=torch.long,
+            device=device,
+        )
+        token_ids = torch.tensor(
+            [[state.generated_tokens[-1]] for state in requests],
+            dtype=torch.long,
+            device=device,
+        )
+        dense_layers: list[LayerKVCache] = []
+        for layer_index in range(self._model.config.n_layer):
+            key = torch.zeros(
+                batch_size,
+                self._model.config.n_head,
+                padded_length,
+                head_size,
+                dtype=dtype,
+                device=device,
+            )
+            value = torch.zeros_like(key)
+            for row, state in enumerate(requests):
+                cache = cast("KVCache", state.kv_cache)
+                layer_cache = cache[layer_index]
+                key[row, :, : state.cached_tokens, :] = layer_cache.key[0]
+                value[row, :, : state.cached_tokens, :] = layer_cache.value[0]
+            dense_layers.append(LayerKVCache(key=key.detach(), value=value.detach()))
+        return token_ids, tuple(dense_layers), cache_lengths
+
+    @staticmethod
+    def _scatter(next_dense_cache: KVCache, cache_lengths: Tensor) -> tuple[KVCache, ...]:
+        compact: list[KVCache] = []
+        for row in range(cache_lengths.shape[0]):
+            length = int(cache_lengths[row].item())
+            layers: list[LayerKVCache] = []
+            for dense_layer in next_dense_cache:
+                key = torch.cat(
+                    (
+                        dense_layer.key[row : row + 1, :, :length, :],
+                        dense_layer.key[row : row + 1, :, -1:, :],
+                    ),
+                    dim=2,
+                ).clone()
+                value = torch.cat(
+                    (
+                        dense_layer.value[row : row + 1, :, :length, :],
+                        dense_layer.value[row : row + 1, :, -1:, :],
+                    ),
+                    dim=2,
+                ).clone()
+                layers.append(LayerKVCache(key=key.detach(), value=value.detach()))
+            compact.append(tuple(layers))
+        return tuple(compact)
+
+    def _sample(self, state: RequestState, logits: Tensor) -> int:
+        scaled = logits / state.request.temperature
+        if state.request.top_k is not None:
+            retained_count = min(state.request.top_k, self._model.config.vocab_size)
+            retained = torch.topk(scaled, retained_count, dim=-1).values
+            cutoff = retained[:, -1].unsqueeze(-1)
+            scaled = scaled.masked_fill(scaled < cutoff, -torch.inf)
+        probabilities = functional.softmax(scaled, dim=-1)
+        sampled = torch.multinomial(probabilities, 1, generator=state.generator)
+        return int(sampled.item())
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,6 +727,15 @@ class EngineMetrics:
     elapsed_seconds: float
     request_throughput_per_second: float
     token_throughput_per_second: float
+    decode_batch_sizes: tuple[int, ...]
+    average_decode_batch_size: float
+    max_decode_batch_size: int
+    padded_cache_tokens: int
+    useful_cache_tokens: int
+    padding_waste_ratio: float
+    executor_time_seconds: float
+    model_execution_time_seconds: float
+    batch_assembly_scatter_time_seconds: float
 
 
 @final
@@ -565,6 +896,14 @@ class ServingEngine:
             elapsed = 0.0
         request_throughput = completed / elapsed if elapsed > 0.0 else 0.0
         token_throughput = generated / elapsed if elapsed > 0.0 else 0.0
+        observations = self._executor.decode_observations
+        batch_sizes = tuple(observation.batch_size for observation in observations)
+        padded_cache_tokens = sum(observation.padded_cache_tokens for observation in observations)
+        useful_cache_tokens = sum(observation.useful_cache_tokens for observation in observations)
+        padding_waste = padded_cache_tokens - useful_cache_tokens
+        padding_waste_ratio = (
+            padding_waste / padded_cache_tokens if padded_cache_tokens > 0 else 0.0
+        )
         return EngineMetrics(
             total_requests=len(states),
             completed_requests=completed,
@@ -582,6 +921,20 @@ class ServingEngine:
             elapsed_seconds=elapsed,
             request_throughput_per_second=request_throughput,
             token_throughput_per_second=token_throughput,
+            decode_batch_sizes=batch_sizes,
+            average_decode_batch_size=(sum(batch_sizes) / len(batch_sizes) if batch_sizes else 0.0),
+            max_decode_batch_size=max(batch_sizes, default=0),
+            padded_cache_tokens=padded_cache_tokens,
+            useful_cache_tokens=useful_cache_tokens,
+            padding_waste_ratio=padding_waste_ratio,
+            executor_time_seconds=sum(observation.executor_seconds for observation in observations),
+            model_execution_time_seconds=sum(
+                observation.model_seconds for observation in observations
+            ),
+            batch_assembly_scatter_time_seconds=sum(
+                observation.assembly_seconds + observation.scatter_seconds
+                for observation in observations
+            ),
         )
 
     def _apply_cancellations(self, tick_time: float) -> None:
