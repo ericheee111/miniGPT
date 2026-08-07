@@ -1,0 +1,14 @@
+{
+  "command": [
+    "python",
+    "-m",
+    "pytest",
+    "tests/test_engine_runner.py",
+    "tests/test_http_lifecycle.py",
+    "tests/test_serve_subprocess.py",
+    "-q"
+  ],
+  "exit_code": 0,
+  "output": "...........                                                              [100%]\n11 passed in 3.91s\n",
+  "stderr": ""
+}

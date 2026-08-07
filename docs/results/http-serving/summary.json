@@ -1,0 +1,20 @@
+{
+  "average_decode_batch_size": 1.8436213991769548,
+  "average_prefill_batch_size": 1.2307692307692308,
+  "benchmark_cases": 16,
+  "benchmark_duration_seconds": 2.6149567998945713,
+  "benchmark_requests": 128,
+  "benchmark_scope": "http_end_to_end",
+  "bpe": false,
+  "cancellation_count": 0,
+  "chat_completions": false,
+  "gpu_or_distributed": false,
+  "http_error_count": 0,
+  "lifecycle_test_exit_code": 0,
+  "openai_compatible_subset": true,
+  "paged_attention": false,
+  "peak_active_requests": 8,
+  "schema_version": 1,
+  "source_commit": "c3e99d66837bd7e952617ace214633acc732347e",
+  "stage": 12
+}

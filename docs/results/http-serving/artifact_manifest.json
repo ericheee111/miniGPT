@@ -1,0 +1,32 @@
+{
+  "artifacts": [
+    {
+      "bytes": 3326,
+      "path": "evidence/api_examples.json",
+      "sha256": "89bf56f618a7d779a6b8e9ba4fe18de0e2807fa2d2e1d69846685cdfc7fc611c"
+    },
+    {
+      "bytes": 72848,
+      "path": "evidence/http_benchmark.json",
+      "sha256": "593f90caf4d412440dbe7021078880008440fdbfbca5e28d72298fe4eeb10670"
+    },
+    {
+      "bytes": 330,
+      "path": "evidence/lifecycle.json",
+      "sha256": "4cef59f49d7ded9e1996b6796f8e170d0b053e2c9019be7b61a3c0edd07371cf"
+    },
+    {
+      "bytes": 7545,
+      "path": "README.md",
+      "sha256": "75103d07b401e10f0477ccf5a448ef3c100453c08d2b6b0a159106458cede3fb"
+    },
+    {
+      "bytes": 607,
+      "path": "summary.json",
+      "sha256": "69e23851097563c46776f564fbb310c900849fa57b1dc944f83e831a6b3e0b89"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "c3e99d66837bd7e952617ace214633acc732347e",
+  "stage": 12
+}

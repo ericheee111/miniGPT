@@ -23,8 +23,9 @@ implements:
 - explicit per-layer KV caches, prompt prefill, incremental decode, cached generation with
   learned-position overflow re-prefill, and Stage 9 isolated inference evidence;
 - a deterministic FIFO serving control plane with per-request RNG/cache state, admission and cache
-  reservations, cancellation/backpressure, metrics, a per-request reference executor, and Stage 10
-  offline workload evidence.
+  reservations, cancellation/backpressure, metrics, three Stage 10/11 executors, batched prefill/
+  decode evidence, and an optional Stage 12 OpenAI-compatible completions HTTP/SSE boundary with a
+  single-owner engine thread.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -79,9 +80,11 @@ dataset remain gitignored.
 - `python simulate_serving.py --config configs/serving_single_request.yaml` runs the Stage 10 offline
   control-plane simulator. It advances requests at iteration level while the reference executor
   still calls the model per request; it is not tensor-level continuous batching.
-- Stage 11 may implement true continuous batching only after an explicit design decision. Do not
-  begin BPE, GPU, LoRA, distributed training, `torch.compile`, HTTP serving, or another optimization
-  without an explicit stage decision.
+- `python serve.py --checkpoint ... --tokenizer ... --executor continuous` loads one CPU model and
+  runs the Stage 12 optional HTTP service. `python benchmark_server.py ...` is an end-to-end HTTP
+  system benchmark and must remain separate from Stage 11 executor benchmarks.
+- Do not begin PagedAttention/Paged KV Cache, BPE, GPU, LoRA, distributed training, `torch.compile`,
+  or another optimization without an explicit stage decision.
 
 ## Quality gates
 
