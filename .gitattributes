@@ -28,3 +28,6 @@ docs/results/decode-continuous-batching/** text eol=lf
 
 # Stage 11B simulator and benchmark evidence binds exact UTF-8/LF checkout bytes.
 docs/results/batched-prefill/** text eol=lf
+
+# Stage 12 HTTP serving evidence binds exact UTF-8/LF checkout bytes.
+docs/results/http-serving/** text eol=lf
