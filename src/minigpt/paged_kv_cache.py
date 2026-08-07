@@ -12,7 +12,7 @@ import torch
 from torch import Tensor
 from typing_extensions import override
 
-from minigpt.layers import KVCache, LayerKVCache
+from minigpt.layers import KVCache, LayerKVCache, PagedKVCacheView, PagedLayerKVCacheView
 
 if TYPE_CHECKING:
     from minigpt.model import GPT
@@ -286,6 +286,30 @@ class PagedKVCachePool:
         self._update_peaks()
         self.verify_invariants()
 
+    def append_delta(self, request_id: str, cache_delta: KVCache) -> None:
+        """Transactionally append a one-token K/V delta from block-aware attention."""
+        delta_length = self._validate_cache(cache_delta)
+        if delta_length != 1:
+            _invalid("paged attention cache delta must contain exactly one token")
+        table = self._table(request_id)
+        needs_block = table.cache_length % self.config.block_tokens == 0
+        if needs_block:
+            self._require_within_reservation(table, len(table.block_ids) + 1)
+        new_blocks = self._acquire_blocks(1) if needs_block else []
+        block_id = new_blocks[0] if needs_block else table.block_ids[-1]
+        offset = table.cache_length % self.config.block_tokens
+        try:
+            self._write_token(cache_delta, block_id=block_id, offset=offset, token_index=0)
+        except Exception:
+            self._return_blocks(new_blocks)
+            self.verify_invariants()
+            raise
+        if new_blocks:
+            table.block_ids.extend(new_blocks)
+        table.cache_length += 1
+        self._update_peaks()
+        self.verify_invariants()
+
     def rebuild(self, request_id: str, cache: KVCache) -> None:
         """Transactionally replace an overflow window while preserving rollback state."""
         table = self._table(request_id)
@@ -339,6 +363,33 @@ class PagedKVCachePool:
             key = torch.cat(keys, dim=1).unsqueeze(0).clone().detach()
             value = torch.cat(values, dim=1).unsqueeze(0).clone().detach()
             layers.append(LayerKVCache(key=key, value=value))
+        return tuple(layers)
+
+    def request_view(self, request_id: str) -> PagedKVCacheView:
+        """Return ordered per-layer block aliases for one owner-thread decode call."""
+        table = self._table(request_id)
+        if table.cache_length <= 0 or not table.block_ids:
+            _ownership(f"request {request_id!r} has no block-aware cache view")
+        layers: list[PagedLayerKVCacheView] = []
+        for layer_index in range(self.n_layer):
+            remaining = table.cache_length
+            keys: list[Tensor] = []
+            values: list[Tensor] = []
+            for block_id in table.block_ids:
+                used = min(remaining, self.config.block_tokens)
+                keys.append(self.key_blocks[layer_index, block_id, :, :used, :])
+                values.append(self.value_blocks[layer_index, block_id, :, :used, :])
+                remaining -= used
+                if remaining == 0:
+                    break
+            layers.append(
+                PagedLayerKVCacheView(
+                    key_blocks=tuple(keys),
+                    value_blocks=tuple(values),
+                    cache_length=table.cache_length,
+                    block_tokens=self.config.block_tokens,
+                )
+            )
         return tuple(layers)
 
     def release(self, request_id: str) -> None:

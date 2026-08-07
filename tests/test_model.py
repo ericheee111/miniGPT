@@ -708,6 +708,50 @@ def test_variable_length_batched_decode_size_one_matches_decode() -> None:
         torch.testing.assert_close(actual_layer.value, expected_layer.value)
 
 
+def test_variable_length_paged_decode_matches_individual_dense_decode() -> None:
+    # Given: two compact historical caches exposed as differently blocked read-only views.
+    _ = torch.default_generator.manual_seed(67)
+    gpt = model.GPT(tiny_config()).eval()
+    _, short_cache = gpt.prefill(torch.tensor([[1, 2]], dtype=torch.long))
+    _, long_cache = gpt.prefill(torch.tensor([[3, 4, 5]], dtype=torch.long))
+
+    def cache_view(cache: model.KVCache) -> layers.PagedKVCacheView:
+        return tuple(
+            layers.PagedLayerKVCacheView(
+                key_blocks=tuple(
+                    layer.key[0, :, start : start + 2, :] for start in range(0, layer.length, 2)
+                ),
+                value_blocks=tuple(
+                    layer.value[0, :, start : start + 2, :] for start in range(0, layer.length, 2)
+                ),
+                cache_length=layer.length,
+                block_tokens=2,
+            )
+            for layer in cache
+        )
+
+    new_tokens = torch.tensor([[6], [7]], dtype=torch.long)
+
+    # When: one model call traverses block views without assembling historical K/V.
+    paged_logits, cache_delta = gpt.decode_paged_batch(
+        new_tokens,
+        (cache_view(short_cache), cache_view(long_cache)),
+        torch.tensor([2, 3], dtype=torch.long),
+    )
+    short_logits, short_next = gpt.decode(new_tokens[:1], short_cache)
+    long_logits, long_next = gpt.decode(new_tokens[1:], long_cache)
+
+    # Then: logits and only the newly projected K/V token match the dense reference.
+    torch.testing.assert_close(paged_logits[:1], short_logits, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(paged_logits[1:], long_logits, rtol=1e-5, atol=1e-6)
+    for layer_index, delta in enumerate(cache_delta):
+        assert delta.key.shape == (2, 2, 1, 4)
+        torch.testing.assert_close(delta.key[:1], short_next[layer_index].key[:, :, -1:])
+        torch.testing.assert_close(delta.value[:1], short_next[layer_index].value[:, :, -1:])
+        torch.testing.assert_close(delta.key[1:], long_next[layer_index].key[:, :, -1:])
+        torch.testing.assert_close(delta.value[1:], long_next[layer_index].value[:, :, -1:])
+
+
 @pytest.mark.parametrize(
     ("cache_lengths", "message"),
     [

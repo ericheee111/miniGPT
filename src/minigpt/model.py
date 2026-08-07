@@ -1,5 +1,6 @@
 """Define the miniGPT language model and its validation errors."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, Never, cast, final
 
@@ -14,6 +15,7 @@ from minigpt.layers import (
     KVCache,
     LayerKVCache,
     LayerNorm,
+    PagedKVCacheView,
     TransformerBlock,
     kv_cache_nbytes,
 )
@@ -493,6 +495,55 @@ class GPT(nn.Module):
             cache_lengths,
             padded_length=padded_length,
         )
+
+    @torch.no_grad()
+    def decode_paged_batch(  # noqa: C901
+        self,
+        token_ids: Tensor,
+        cache_views: Sequence[PagedKVCacheView],
+        cache_lengths: Tensor,
+    ) -> tuple[Tensor, KVCache]:
+        """Decode one token per row without materializing historical paged K/V."""
+        self._validate_token_tensor(token_ids, name=_INPUT_NAME)
+        if token_ids.shape[1] != 1:
+            raise InvalidTokenTensorError(_INPUT_NAME, "paged decode requires one token per row")
+        batch_size = token_ids.shape[0]
+        if len(cache_views) != batch_size:
+            _invalid_cache("paged cache view count must equal input batch")
+        if cache_lengths.ndim != _CACHE_LENGTH_DIMENSIONS:
+            _invalid_cache("paged cache_lengths must have shape [batch]")
+        if cache_lengths.shape[0] != batch_size or cache_lengths.dtype != torch.long:
+            _invalid_cache("paged cache_lengths batch/dtype is invalid")
+        if cache_lengths.device != token_ids.device:
+            _invalid_cache("paged cache_lengths device must equal input device")
+        minimum = int(cache_lengths.min().item())
+        maximum = int(cache_lengths.max().item())
+        if minimum <= 0 or maximum >= self.config.block_size:
+            _invalid_cache("paged cache lengths must be in [1, block_size - 1]")
+        for row, request_view in enumerate(cache_views):
+            if len(request_view) != self.config.n_layer:
+                _invalid_cache(f"paged row {row} layer count must equal model")
+            row_length = int(cache_lengths[row].item())
+            if any(layer_view.cache_length != row_length for layer_view in request_view):
+                _invalid_cache(f"paged row {row} view lengths must equal cache_lengths")
+
+        positions = cache_lengths.view(-1, 1)
+        token_embeddings = cast("Tensor", self.token_embedding(token_ids))
+        position_embeddings = cast("Tensor", self.position_embedding(positions))
+        hidden_states = cast(
+            "Tensor",
+            self.embedding_dropout(token_embeddings + position_embeddings),
+        )
+        cache_delta: list[LayerKVCache] = []
+        for layer_index, module in enumerate(self.blocks):
+            if not isinstance(module, TransformerBlock):
+                raise UnexpectedTransformerBlockError(layer_index, type(module).__name__)
+            layer_views = tuple(request_view[layer_index] for request_view in cache_views)
+            hidden_states, layer_delta = module.forward_paged_batch(hidden_states, layer_views)
+            cache_delta.append(layer_delta)
+        normalized = cast("Tensor", self.final_norm(hidden_states))
+        logits = cast("Tensor", self.lm_head(normalized))
+        return logits, tuple(cache_delta)
 
     @staticmethod
     def _validate_generation_config(

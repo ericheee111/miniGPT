@@ -183,6 +183,33 @@ def test_append_capacity_validation_happens_before_physical_allocation() -> None
     pool.verify_invariants()
 
 
+def test_block_aware_view_aliases_pool_and_delta_append_crosses_boundary() -> None:
+    # Given: a three-token cache whose ordered views span two physical blocks.
+    pool = _pool(block_tokens=2, num_blocks=4)
+    initial = _cache(3, offset=10.0)
+    pool.reserve("request", 3)
+    pool.write_prefill("request", initial)
+
+    # When: a read-only view is taken and two one-token deltas are appended.
+    view = pool.request_view("request")
+    first_delta = _cache(1, offset=100.0)
+    second_delta = _cache(1, offset=200.0)
+    pool.append_delta("request", first_delta)
+    pool.append_delta("request", second_delta)
+
+    # Then: views alias non-copied storage and the second delta allocates the next block.
+    assert view[0].key_blocks[0].data_ptr() == pool.key_blocks[0, 0].data_ptr()
+    assert tuple(block.shape[1] for block in view[0].key_blocks) == (2, 1)
+    assert pool.request_cache("request").block_ids == (0, 1, 2)
+    assert pool.request_cache("request").cache_length == 5
+    materialized = pool.materialize("request")
+    for layer_index, layer in enumerate(materialized):
+        torch.testing.assert_close(layer.key[:, :, :3], initial[layer_index].key)
+        torch.testing.assert_close(layer.key[:, :, 3:4], first_delta[layer_index].key)
+        torch.testing.assert_close(layer.key[:, :, 4:5], second_delta[layer_index].key)
+    pool.verify_invariants()
+
+
 def test_overflow_rebuild_failure_restores_old_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
