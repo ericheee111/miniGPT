@@ -1,8 +1,8 @@
 {
-  "average_decode_batch_size": 1.8436213991769548,
-  "average_prefill_batch_size": 1.2307692307692308,
+  "average_decode_batch_size": 1.8589211618257262,
+  "average_prefill_batch_size": 1.2549019607843137,
   "benchmark_cases": 16,
-  "benchmark_duration_seconds": 2.6149567998945713,
+  "benchmark_duration_seconds": 2.5814936000388116,
   "benchmark_requests": 128,
   "benchmark_scope": "http_end_to_end",
   "bpe": false,
@@ -15,6 +15,6 @@
   "paged_attention": false,
   "peak_active_requests": 8,
   "schema_version": 1,
-  "source_commit": "c3e99d66837bd7e952617ace214633acc732347e",
+  "source_commit": "8b58089b7e31fa3a4d570b12e9e9b9d0b02fe435",
   "stage": 12
 }
