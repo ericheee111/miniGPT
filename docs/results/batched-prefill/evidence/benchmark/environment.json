@@ -1,0 +1,14 @@
+{
+  "logical_cpu_count": 28,
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "profiler_timings_are_canonical": false,
+  "python": "3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)]",
+  "python_executable": "D:\\Projects\\miniGPT\\.venv\\Scripts\\python.exe",
+  "resolved_config_sha256": "a9cd67977a56c6c5c915c99ddbc923d97a4be5bb368b4352c5e8c1b6817c6736",
+  "source_commit": "e4db900d8c861575bd862712e4e579673e70e4de",
+  "timer": "time.perf_counter canonical fresh-process wall clock",
+  "torch_num_interop_threads": 1,
+  "torch_num_threads": 1,
+  "torch_version": "2.13.0+cpu"
+}

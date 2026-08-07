@@ -1,0 +1,545 @@
+{
+  "alternating_executor_order": true,
+  "records": [
+    {
+      "execution_index": 0,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 1,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 2,
+      "executor": "continuous",
+      "replicate": 0,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 3,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 4,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 5,
+      "executor": "continuous",
+      "replicate": 0,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 6,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 7,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 8,
+      "executor": "continuous",
+      "replicate": 0,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 9,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 10,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 11,
+      "executor": "continuous",
+      "replicate": 0,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 12,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 13,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 14,
+      "executor": "continuous",
+      "replicate": 0,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 15,
+      "executor": "reference",
+      "replicate": 0,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 16,
+      "executor": "continuous_decode",
+      "replicate": 0,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 17,
+      "executor": "continuous",
+      "replicate": 0,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 18,
+      "executor": "continuous",
+      "replicate": 1,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 19,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 20,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 21,
+      "executor": "continuous",
+      "replicate": 1,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 22,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 23,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 24,
+      "executor": "continuous",
+      "replicate": 1,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 25,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 26,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 27,
+      "executor": "continuous",
+      "replicate": 1,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 28,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 29,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 30,
+      "executor": "continuous",
+      "replicate": 1,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 31,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 32,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 33,
+      "executor": "continuous",
+      "replicate": 1,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 34,
+      "executor": "continuous_decode",
+      "replicate": 1,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 35,
+      "executor": "reference",
+      "replicate": 1,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 36,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 37,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 38,
+      "executor": "continuous",
+      "replicate": 2,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 39,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 40,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 41,
+      "executor": "continuous",
+      "replicate": 2,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 42,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 43,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 44,
+      "executor": "continuous",
+      "replicate": 2,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 45,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 46,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 47,
+      "executor": "continuous",
+      "replicate": 2,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 48,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 49,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 50,
+      "executor": "continuous",
+      "replicate": 2,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 51,
+      "executor": "reference",
+      "replicate": 2,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 52,
+      "executor": "continuous_decode",
+      "replicate": 2,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 53,
+      "executor": "continuous",
+      "replicate": 2,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 54,
+      "executor": "continuous",
+      "replicate": 3,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 55,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 56,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 57,
+      "executor": "continuous",
+      "replicate": 3,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 58,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 59,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 60,
+      "executor": "continuous",
+      "replicate": 3,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 61,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 62,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 63,
+      "executor": "continuous",
+      "replicate": 3,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 64,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 65,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 66,
+      "executor": "continuous",
+      "replicate": 3,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 67,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 68,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 69,
+      "executor": "continuous",
+      "replicate": 3,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 70,
+      "executor": "continuous_decode",
+      "replicate": 3,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 71,
+      "executor": "reference",
+      "replicate": 3,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 72,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 73,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 74,
+      "executor": "continuous",
+      "replicate": 4,
+      "scenario": "burst-equal-length"
+    },
+    {
+      "execution_index": 75,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 76,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 77,
+      "executor": "continuous",
+      "replicate": 4,
+      "scenario": "burst-mixed-lengths"
+    },
+    {
+      "execution_index": 78,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 79,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 80,
+      "executor": "continuous",
+      "replicate": 4,
+      "scenario": "short-prompt-heavy"
+    },
+    {
+      "execution_index": 81,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 82,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 83,
+      "executor": "continuous",
+      "replicate": 4,
+      "scenario": "long-prompt-heavy"
+    },
+    {
+      "execution_index": 84,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 85,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 86,
+      "executor": "continuous",
+      "replicate": 4,
+      "scenario": "staggered-arrivals"
+    },
+    {
+      "execution_index": 87,
+      "executor": "reference",
+      "replicate": 4,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 88,
+      "executor": "continuous_decode",
+      "replicate": 4,
+      "scenario": "high-padding-pressure"
+    },
+    {
+      "execution_index": 89,
+      "executor": "continuous",
+      "replicate": 4,
+      "scenario": "high-padding-pressure"
+    }
+  ]
+}

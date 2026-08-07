@@ -1,0 +1,42 @@
+schema_version: 1
+executor: continuous
+scenario_name: stage11b-overflow
+model_seed: 1113
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.01
+max_ticks: 24
+output_dir: reports/serving-stage11b-overflow
+vocab_size: 65
+model:
+  block_size: 8
+  n_layer: 2
+  n_head: 2
+  n_embd: 16
+  dropout: 0.0
+  bias: false
+scheduler:
+  max_active_requests: 4
+  max_cached_tokens: 32
+prefill:
+  max_batch_size: 4
+  max_batch_tokens: 32
+  max_padding_ratio: 0.25
+requests:
+  - request_id: full-window
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 8
+    max_new_tokens: 4
+    temperature: 1.0
+    top_k: 5
+    seed: 1301
+    cancellation_time: null
+  - request_id: partial-window
+    arrival_time: 0.0
+    prompt_tokens: null
+    prompt_length: 6
+    max_new_tokens: 4
+    temperature: 0.9
+    top_k: 7
+    seed: 1302
+    cancellation_time: null

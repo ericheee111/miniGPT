@@ -142,8 +142,8 @@ def _readme(summary: EvidenceDocument) -> str:
     benchmark = cast("EvidenceDocument", summary["benchmark"])
     scenarios = cast("list[EvidenceDocument]", benchmark["scenarios"])
     header = "{} {}".format(
-        "| Scenario | Verdict | Conclusion | Speedup |",
-        "Prefill batch | Prompt waste | TTFT | Req/s |",
+        "| Scenario | Verdict | Prefill batch | Prompt waste |",
+        "Decode TTFT | Full TTFT | Decode req/s | Full req/s |",
     )
     lines = [
         "# Stage 11B — Length-Bucketed Batched Prefill",
@@ -172,28 +172,36 @@ def _readme(summary: EvidenceDocument) -> str:
         f"Overall strict benchmark verdict: `{benchmark['strict_verdict']}`.",
         "",
         header,
-        "|---|---|---|---:|---:|---:|---:|---:|",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for scenario in scenarios:
+        decode_only = cast("EvidenceDocument", scenario["continuous_decode"])
         continuous = cast("EvidenceDocument", scenario["continuous"])
         row_template = "{} {}".format(
-            "| {scenario} | {verdict} | {conclusion} | {speedup} | {batch} | {waste} |",
-            "{ttft} | {throughput} |",
+            "| {scenario} | {verdict} | {batch} | {waste} | {decode_ttft} | {full_ttft} |",
+            "{decode_throughput} | {full_throughput} |",
         )
         lines.append(
             row_template.format(
                 scenario=scenario["scenario"],
                 verdict=scenario["strict_verdict"],
-                conclusion=scenario["performance_conclusion"],
-                speedup=scenario["speedup_continuous_decode_over_continuous"],
                 batch=continuous["median_average_prefill_batch_size"],
                 waste=continuous["median_prompt_padding_waste_ratio"],
-                ttft=continuous["median_median_ttft_seconds"],
-                throughput=continuous["median_request_throughput_per_second"],
+                decode_ttft=decode_only["median_median_ttft_seconds"],
+                full_ttft=continuous["median_median_ttft_seconds"],
+                decode_throughput=decode_only["median_request_throughput_per_second"],
+                full_throughput=continuous["median_request_throughput_per_second"],
             )
         )
     lines.extend(
         [
+            "",
+            "Every canonical scenario is `not_comparable` because at least one primary executor",
+            "exceeded the 10% CV threshold. Therefore the medians above are descriptive only and",
+            "do not establish a performance improvement. Equal, mixed, short-heavy, and long-heavy",
+            "bursts show higher full-continuous request/s medians, but burst TTFT is generally",
+            "higher. Staggered arrivals form smaller batches. High padding pressure is split into",
+            "size-one prefills by the FIFO policy and shows no descriptive throughput gain.",
             "",
             "Canonical timings use alternating fresh processes and `time.perf_counter`; raw",
             "replicates are unfiltered. Median, MAD, CV, queue/prefill/TTFT/E2E timing,",

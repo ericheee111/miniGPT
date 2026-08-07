@@ -1,0 +1,44 @@
+{
+  "admission_order": [
+    "full-window",
+    "partial-window"
+  ],
+  "checked_contracts": [
+    "generated_tokens",
+    "request_terminal_states_and_cancellation",
+    "fifo_admission_order",
+    "cache_accounting",
+    "logical_event_semantics",
+    "request_metrics"
+  ],
+  "equivalent": true,
+  "generated_tokens": {
+    "full-window": [
+      52,
+      24,
+      50,
+      4
+    ],
+    "partial-window": [
+      47,
+      10,
+      50,
+      8
+    ]
+  },
+  "padded_prompt_tokens": 48,
+  "prefill_batch_sizes": [
+    2,
+    1,
+    1,
+    1,
+    1
+  ],
+  "prompt_padding_waste_ratio": 0.041666666666666664,
+  "scenario": "stage11b-overflow",
+  "terminal_statuses": {
+    "full-window": "finished",
+    "partial-window": "finished"
+  },
+  "useful_prompt_tokens": 46
+}

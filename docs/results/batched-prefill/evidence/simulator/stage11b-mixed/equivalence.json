@@ -1,0 +1,61 @@
+{
+  "admission_order": [
+    "short-a",
+    "short-b",
+    "medium",
+    "long",
+    "cancelled"
+  ],
+  "checked_contracts": [
+    "generated_tokens",
+    "request_terminal_states_and_cancellation",
+    "fifo_admission_order",
+    "cache_accounting",
+    "logical_event_semantics",
+    "request_metrics"
+  ],
+  "equivalent": true,
+  "generated_tokens": {
+    "cancelled": [
+      6
+    ],
+    "long": [
+      58,
+      64,
+      12
+    ],
+    "medium": [
+      13,
+      26,
+      41,
+      23
+    ],
+    "short-a": [
+      14,
+      45,
+      9,
+      48
+    ],
+    "short-b": [
+      10,
+      52,
+      7
+    ]
+  },
+  "padded_prompt_tokens": 34,
+  "prefill_batch_sizes": [
+    2,
+    2,
+    1
+  ],
+  "prompt_padding_waste_ratio": 0.20588235294117646,
+  "scenario": "stage11b-mixed",
+  "terminal_statuses": {
+    "cancelled": "cancelled",
+    "long": "finished",
+    "medium": "finished",
+    "short-a": "finished",
+    "short-b": "finished"
+  },
+  "useful_prompt_tokens": 27
+}

@@ -33,6 +33,10 @@ def _benchmark_fixture(root: Path) -> Path:
                 "strict_verdict": "pass",
                 "performance_conclusion": "improved",
                 "speedup_continuous_decode_over_continuous": 1.2,
+                "continuous_decode": {
+                    "median_median_ttft_seconds": 0.008,
+                    "median_request_throughput_per_second": 80.0,
+                },
                 "continuous": {
                     "median_average_prefill_batch_size": 4.0,
                     "median_prompt_padding_waste_ratio": 0.0,
