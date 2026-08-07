@@ -8,7 +8,9 @@ import pytest
 
 from minigpt.serving_simulator import (
     InvalidSimulatorConfigError,
+    SimulatorExecutor,
     load_simulator_config,
+    run_executor_equivalence,
     run_simulation,
 )
 
@@ -116,7 +118,10 @@ def test_summary_and_request_rows_publish_control_plane_metrics(tmp_path: Path) 
     request_csv = (result.output_dir / "requests.csv").read_text(encoding="utf-8")
 
     # Then: aggregate capacity/throughput and request latency definitions are present.
-    assert summary["claim"] == "control-plane correctness only; no throughput improvement claim"
+    assert summary["claim"] == (
+        "logical serving correctness; wall-clock performance reported separately"
+    )
+    assert summary["executor"] == "reference"
     assert summary["completed_requests"] == 2
     assert summary["failed_requests"] == 0
     assert summary["generated_tokens"] == 5
@@ -125,6 +130,48 @@ def test_summary_and_request_rows_publish_control_plane_metrics(tmp_path: Path) 
     assert "time_to_first_token_seconds" in request_csv
     assert "time_per_output_token_seconds" in request_csv
     assert "end_to_end_latency_seconds" in request_csv
+    assert "decode_batch_sizes" in summary
+    assert "padding_waste_ratio" in summary
+    assert "model_execution_time_seconds" in summary
+
+
+def test_continuous_simulator_matches_reference_logical_contracts(tmp_path: Path) -> None:
+    # Given: one mixed-length workload with independent RNG and a scheduled cancellation.
+    document = config_document()
+    document["executor"] = "continuous_decode"
+    requests = cast("list[dict[str, object]]", document["requests"])
+    requests[1]["cancellation_time"] = 2.0
+    config_path = tmp_path / "workload.json"
+    write_config(config_path, document)
+    config = load_simulator_config(config_path)
+    assert config.executor is SimulatorExecutor.CONTINUOUS_DECODE
+
+    # When: the automatic comparison runs both executors from identical model/request seeds.
+    comparison = run_executor_equivalence(config, output_dir=tmp_path / "comparison")
+
+    # Then: every required logical contract is checked and equivalent.
+    assert comparison.equivalent
+    assert comparison.checked_contracts == (
+        "generated_tokens",
+        "request_terminal_states_and_cancellation",
+        "fifo_admission_order",
+        "logical_event_semantics",
+        "request_metrics",
+    )
+    assert comparison.reference.generated_tokens == comparison.continuous.generated_tokens
+    assert comparison.reference.request_statuses == comparison.continuous.request_statuses
+
+
+def test_invalid_executor_name_is_rejected(tmp_path: Path) -> None:
+    # Given: a strict simulator document naming an unsupported executor.
+    document = config_document()
+    document["executor"] = "paged_attention"
+    config_path = tmp_path / "invalid-executor.json"
+    write_config(config_path, document)
+
+    # When/Then: loading rejects the out-of-scope executor explicitly.
+    with pytest.raises(InvalidSimulatorConfigError, match="reference, continuous_decode"):
+        _ = load_simulator_config(config_path)
 
 
 def test_invalid_prompt_source_is_rejected(tmp_path: Path) -> None:

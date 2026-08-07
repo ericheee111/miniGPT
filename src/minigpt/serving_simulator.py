@@ -6,7 +6,8 @@ import csv
 import json
 import math
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Never, TypeAlias, cast
 
@@ -16,11 +17,14 @@ from typing_extensions import override
 
 from minigpt.model import GPT
 from minigpt.serving import (
+    ContinuousDecodeExecutor,
     EngineConfig,
     EngineEvent,
     EngineMetrics,
     GenerationRequest,
     ReferenceExecutor,
+    RequestMetrics,
+    RequestStatus,
     SchedulerConfig,
     ServingEngine,
 )
@@ -35,6 +39,7 @@ ConfigMapping: TypeAlias = dict[str, ConfigValue]
 _TOP_LEVEL_KEYS = frozenset(
     {
         "schema_version",
+        "executor",
         "scenario_name",
         "model_seed",
         "tick_seconds",
@@ -47,6 +52,7 @@ _TOP_LEVEL_KEYS = frozenset(
         "requests",
     }
 )
+_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"executor"}
 _MODEL_KEYS = frozenset({"block_size", "n_layer", "n_head", "n_embd", "dropout", "bias"})
 _SCHEDULER_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
 _REQUEST_KEYS = frozenset(
@@ -86,6 +92,7 @@ class SimulatorConfig:
     """Define one deterministic model, scheduler, clock, and arrival workload."""
 
     schema_version: int
+    executor: SimulatorExecutor
     scenario_name: str
     model_seed: int
     tick_seconds: float
@@ -105,6 +112,27 @@ class SimulationResult:
     output_paths: tuple[Path, ...]
     metrics: EngineMetrics
     generated_tokens: dict[str, tuple[int, ...]]
+    request_statuses: dict[str, RequestStatus]
+    request_metrics: dict[str, RequestMetrics]
+    admission_order: tuple[str, ...]
+    events: tuple[EngineEvent, ...]
+
+
+class SimulatorExecutor(StrEnum):
+    """Select the Stage 10 reference or Stage 11A decode executor."""
+
+    REFERENCE = "reference"
+    CONTINUOUS_DECODE = "continuous_decode"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutorEquivalenceResult:
+    """Return both simulations after complete logical-contract validation."""
+
+    reference: SimulationResult
+    continuous: SimulationResult
+    equivalent: bool
+    checked_contracts: tuple[str, ...]
 
 
 @dataclass(slots=True)
@@ -142,6 +170,26 @@ def _exact_keys(
         _invalid(source, f"{context} missing key {min(missing)!r}")
     if unexpected:
         _invalid(source, f"{context} has unexpected key {min(unexpected)!r}")
+
+
+def _top_level_keys(document: ConfigMapping, source: Path) -> None:
+    missing = _REQUIRED_TOP_LEVEL_KEYS - set(document)
+    unexpected = set(document) - _TOP_LEVEL_KEYS
+    if missing:
+        _invalid(source, f"document missing key {min(missing)!r}")
+    if unexpected:
+        _invalid(source, f"document has unexpected key {min(unexpected)!r}")
+
+
+def _executor(document: ConfigMapping, source: Path) -> SimulatorExecutor:
+    raw = document.get("executor", SimulatorExecutor.REFERENCE.value)
+    if not isinstance(raw, str):
+        _invalid(source, "executor must be a string")
+    try:
+        return SimulatorExecutor(raw)
+    except ValueError:
+        choices = ", ".join(executor.value for executor in SimulatorExecutor)
+        _invalid(source, f"executor must be one of: {choices}")
 
 
 def _integer(
@@ -301,13 +349,14 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         document = _mapping(yaml.safe_load(source.read_text(encoding="utf-8")), source, "document")
     except (OSError, UnicodeError, yaml.YAMLError) as error:
         _invalid(source, str(error))
-    _exact_keys(document, _TOP_LEVEL_KEYS, source, "document")
+    _top_level_keys(document, source)
     schema_version = _integer(document, "schema_version", source, positive=True)
     if schema_version != 1:
         _invalid(source, "schema_version must equal 1")
     vocab_size = _integer(document, "vocab_size", source, positive=True)
     return SimulatorConfig(
         schema_version=schema_version,
+        executor=_executor(document, source),
         scenario_name=_string(document, "scenario_name", source),
         model_seed=_integer(document, "model_seed", source, non_negative=True),
         tick_seconds=_number(document, "tick_seconds", source, positive=True),
@@ -385,9 +434,13 @@ def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[s
         {
             "schema_version": 1,
             "scenario_name": config.scenario_name,
-            "claim": "control-plane correctness only; no throughput improvement claim",
-            "executor": "per-request reference executor",
-            "scheduling_level": "iteration-level; not tensor-level continuous batching",
+            "claim": "logical serving correctness; wall-clock performance reported separately",
+            "executor": config.executor.value,
+            "scheduling_level": (
+                "iteration-level with tensor-level decode batching"
+                if config.executor is SimulatorExecutor.CONTINUOUS_DECODE
+                else "iteration-level with per-request model execution"
+            ),
             "max_active_requests": config.scheduler.max_active_requests,
             "max_cached_tokens": config.scheduler.max_cached_tokens,
         }
@@ -441,12 +494,22 @@ def _write_requests(
             _ = cast("object", writer.writerow(row))
 
 
-def _write_timeline(path: Path, events: tuple[EngineEvent, ...], scenario_name: str) -> None:
+def _write_timeline(
+    path: Path,
+    events: tuple[EngineEvent, ...],
+    scenario_name: str,
+    executor: SimulatorExecutor,
+) -> None:
+    execution_note = (
+        "Prefill remains per request; eligible decode rows are tensor-batched with dense padding."
+        if executor is SimulatorExecutor.CONTINUOUS_DECODE
+        else "Model prefill and decode calls both remain per request."
+    )
     lines = [
         f"# {scenario_name} timeline",
         "",
-        "This is deterministic control-plane evidence from a per-request reference executor; it is",
-        "not a tensor-level continuous-batching throughput result.",
+        "This is deterministic logical serving evidence, not canonical wall-clock benchmark data.",
+        execution_note,
         "",
         "| Seq | Time | Event | Request | Status | Token | Active | Waiting | Cache | Reserved |",
         "|---:|---:|---|---|---|---:|---:|---:|---:|---:|",
@@ -471,9 +534,20 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
     destination = config.output_dir if output_dir is None else output_dir
     destination.mkdir(parents=True, exist_ok=True)
     model = _build_model(config)
-    executor = ReferenceExecutor(
-        model,
-        clock=StepClock(config.executor_clock_step_seconds),
+    executor_clock = StepClock(config.executor_clock_step_seconds)
+    telemetry_clock = StepClock(config.executor_clock_step_seconds / 10.0)
+    executor = (
+        ContinuousDecodeExecutor(
+            model,
+            clock=executor_clock,
+            telemetry_clock=telemetry_clock,
+        )
+        if config.executor is SimulatorExecutor.CONTINUOUS_DECODE
+        else ReferenceExecutor(
+            model,
+            clock=executor_clock,
+            telemetry_clock=telemetry_clock,
+        )
     )
     engine = ServingEngine(
         config=EngineConfig(scheduler=config.scheduler, block_size=config.model.block_size),
@@ -503,14 +577,63 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
     _write_requests(requests_path, engine, config.requests)
     metrics = engine.metrics()
     _write_json(summary_path, _summary_document(config, metrics))
-    _write_timeline(timeline_path, engine.events, config.scenario_name)
+    _write_timeline(timeline_path, engine.events, config.scenario_name, config.executor)
     generated = {
         request.request_id: tuple(engine.request_state(request.request_id).generated_tokens)
         for request in config.requests
     }
+    request_statuses = {
+        request.request_id: engine.request_state(request.request_id).status
+        for request in config.requests
+    }
+    request_metrics = {
+        request.request_id: engine.request_metrics(request.request_id)
+        for request in config.requests
+    }
+    admission_order = tuple(
+        event.request_id for event in engine.events if event.event_type.value == "admitted"
+    )
     return SimulationResult(
         output_dir=destination,
         output_paths=(events_path, requests_path, summary_path, timeline_path),
         metrics=metrics,
         generated_tokens=generated,
+        request_statuses=request_statuses,
+        request_metrics=request_metrics,
+        admission_order=admission_order,
+        events=engine.events,
+    )
+
+
+def run_executor_equivalence(
+    config: SimulatorConfig,
+    *,
+    output_dir: Path,
+) -> ExecutorEquivalenceResult:
+    """Run both executors and reject any logical serving contract divergence."""
+    reference = run_simulation(
+        replace(config, executor=SimulatorExecutor.REFERENCE),
+        output_dir=output_dir / SimulatorExecutor.REFERENCE.value,
+    )
+    continuous = run_simulation(
+        replace(config, executor=SimulatorExecutor.CONTINUOUS_DECODE),
+        output_dir=output_dir / SimulatorExecutor.CONTINUOUS_DECODE.value,
+    )
+    comparisons = {
+        "generated_tokens": reference.generated_tokens == continuous.generated_tokens,
+        "request_terminal_states_and_cancellation": (
+            reference.request_statuses == continuous.request_statuses
+        ),
+        "fifo_admission_order": reference.admission_order == continuous.admission_order,
+        "logical_event_semantics": reference.events == continuous.events,
+        "request_metrics": reference.request_metrics == continuous.request_metrics,
+    }
+    failed = tuple(name for name, matches in comparisons.items() if not matches)
+    if failed:
+        _invalid(Path("<equivalence>"), f"executor contracts differ: {', '.join(failed)}")
+    return ExecutorEquivalenceResult(
+        reference=reference,
+        continuous=continuous,
+        equivalent=True,
+        checked_contracts=tuple(comparisons),
     )
