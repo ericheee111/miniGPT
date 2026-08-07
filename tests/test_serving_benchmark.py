@@ -124,6 +124,57 @@ def test_fresh_process_benchmark_writes_raw_order_statistics_and_hashes(tmp_path
         assert hashlib.sha256(artifact.read_bytes()).hexdigest() == raw_entry["sha256"]
 
 
+def test_stage11b_benchmark_compares_decode_batching_with_full_continuous(
+    tmp_path: Path,
+) -> None:
+    # Given: an explicit prefill policy and equal-length simultaneous prompts.
+    document = benchmark_document(tmp_path / "reports")
+    document["experiment_name"] = "stage11b-test"
+    document["prefill"] = {
+        "max_batch_size": 8,
+        "max_batch_tokens": 64,
+        "max_padding_ratio": 0.25,
+    }
+    scenarios = cast("list[dict[str, object]]", document["scenarios"])
+    scenarios[0]["arrival_ticks"] = [0, 0]
+    scenarios[0]["prompt_lengths"] = [3, 3]
+    config_path = tmp_path / "benchmark-stage11b.yaml"
+    write_config(config_path, document)
+
+    # When: the fresh-process matrix runs all three serving executors.
+    result = run_serving_benchmark(config_path, source_commit="fedcba9876543210")
+    summary = cast(
+        "dict[str, object]",
+        json.loads(result.summary_path.read_text(encoding="utf-8")),
+    )
+    scenario = cast("list[dict[str, object]]", summary["scenarios"])[0]
+    raw = [
+        cast("dict[str, object]", json.loads(line))
+        for line in (result.output_dir / "raw_replicates.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    # Then: strict comparison isolates continuous_decode versus continuous and records prefill data.
+    assert result.strict_verdict == "pass"
+    assert {cast("str", record["executor"]) for record in raw} == {
+        "reference",
+        "continuous_decode",
+        "continuous",
+    }
+    assert scenario["comparison_baseline"] == "continuous_decode"
+    assert scenario["comparison_candidate"] == "continuous"
+    assert scenario["correctness_matches"] is True
+    continuous = cast("dict[str, object]", scenario["continuous"])
+    assert cast("float", continuous["median_average_prefill_batch_size"]) == 2.0
+    assert cast("float", continuous["median_prompt_padding_waste_ratio"]) == 0.0
+    for record in raw:
+        for iteration in cast("list[dict[str, object]]", record["iterations"]):
+            assert cast("float", iteration["median_queue_time_seconds"]) >= 0.0
+            assert cast("float", iteration["median_prefill_latency_seconds"]) >= 0.0
+            assert cast("int", iteration["worker_peak_rss_bytes"]) > 0
+
+
 def test_strict_comparison_reports_not_comparable_for_unstable_replicates(tmp_path: Path) -> None:
     # Given: matching correctness but deliberately unstable elapsed times for both executors.
     config_path = tmp_path / "benchmark.yaml"

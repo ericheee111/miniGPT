@@ -12,6 +12,7 @@ from typing import Never, TypeAlias, cast
 import yaml
 from typing_extensions import override
 
+from minigpt.serving import PrefillBatchConfig
 from minigpt.settings import GPTConfig, InvalidModelConfigError
 
 JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
@@ -36,10 +37,13 @@ _TOP_LEVEL_KEYS = frozenset(
         "torch_num_interop_threads",
         "vocab_size",
         "model",
+        "prefill",
         "scenarios",
     }
 )
+_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"prefill"}
 _MODEL_KEYS = frozenset({"block_size", "n_layer", "n_head", "n_embd", "dropout", "bias"})
+_PREFILL_KEYS = frozenset({"max_batch_size", "max_batch_tokens", "max_padding_ratio"})
 _SCENARIO_KEYS = frozenset(
     {"name", "arrival_ticks", "prompt_lengths", "generated_lengths", "cancellation_ticks"}
 )
@@ -74,6 +78,7 @@ class ServingBenchmarkConfig:
     torch_num_interop_threads: int
     vocab_size: int
     model: GPTConfig
+    prefill: PrefillBatchConfig | None
     scenarios: tuple[ServingBenchmarkScenario, ...]
 
 
@@ -111,6 +116,15 @@ def _exact_keys(
         _invalid(source, f"{context} missing key {min(missing)!r}")
     if unexpected:
         _invalid(source, f"{context} has unexpected key {min(unexpected)!r}")
+
+
+def _top_level_keys(document: ConfigMapping, source: Path) -> None:
+    missing = _REQUIRED_TOP_LEVEL_KEYS - set(document)
+    unexpected = set(document) - _TOP_LEVEL_KEYS
+    if missing:
+        _invalid(source, f"document missing key {min(missing)!r}")
+    if unexpected:
+        _invalid(source, f"document has unexpected key {min(unexpected)!r}")
 
 
 def _integer(
@@ -202,6 +216,18 @@ def _model(document: ConfigMapping, source: Path, vocab_size: int) -> GPTConfig:
         _invalid(source, str(error))
 
 
+def _prefill(document: ConfigMapping, source: Path) -> PrefillBatchConfig | None:
+    if "prefill" not in document:
+        return None
+    raw = _mapping(document["prefill"], source, "prefill")
+    _exact_keys(raw, _PREFILL_KEYS, source, "prefill")
+    return PrefillBatchConfig(
+        max_batch_size=_integer(raw, "max_batch_size", source, positive=True),
+        max_batch_tokens=_integer(raw, "max_batch_tokens", source, positive=True),
+        max_padding_ratio=_number(raw, "max_padding_ratio", source),
+    )
+
+
 def _scenarios(
     document: ConfigMapping,
     source: Path,
@@ -255,7 +281,7 @@ def load_serving_benchmark_config(path: Path) -> ServingBenchmarkConfig:
         document = _mapping(yaml.safe_load(path.read_text(encoding="utf-8")), path, "document")
     except (OSError, UnicodeError, yaml.YAMLError) as error:
         _invalid(path, str(error))
-    _exact_keys(document, _TOP_LEVEL_KEYS, path, "document")
+    _top_level_keys(document, path)
     schema_version = _integer(document, "schema_version", path, positive=True)
     if schema_version != 1:
         _invalid(path, "schema_version must equal 1")
@@ -282,6 +308,7 @@ def load_serving_benchmark_config(path: Path) -> ServingBenchmarkConfig:
         ),
         vocab_size=vocab_size,
         model=model,
+        prefill=_prefill(document, path),
         scenarios=_scenarios(document, path, block_size=model.block_size),
     )
 
@@ -303,6 +330,9 @@ def resolved_config_document(config: ServingBenchmarkConfig) -> dict[str, JsonVa
         "torch_num_interop_threads": config.torch_num_interop_threads,
         "vocab_size": config.vocab_size,
         "model": cast("dict[str, JsonValue]", asdict(config.model)),
+        "prefill": (
+            None if config.prefill is None else cast("dict[str, JsonValue]", asdict(config.prefill))
+        ),
         "scenarios": [
             cast("dict[str, JsonValue]", asdict(scenario)) for scenario in config.scenarios
         ],

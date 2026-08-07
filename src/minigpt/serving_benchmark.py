@@ -177,6 +177,10 @@ def _worker_record(  # noqa: PLR0913
             "median_ttft_seconds": _median_number(iterations, "median_ttft_seconds"),
             "median_tpot_seconds": _median_number(iterations, "median_tpot_seconds"),
             "median_e2e_seconds": _median_number(iterations, "median_e2e_seconds"),
+            "median_queue_time_seconds": _median_number(iterations, "median_queue_time_seconds"),
+            "median_prefill_latency_seconds": _median_number(
+                iterations, "median_prefill_latency_seconds"
+            ),
             "average_decode_batch_size": _median_number(iterations, "average_decode_batch_size"),
             "max_decode_batch_size": _median_number(iterations, "max_decode_batch_size"),
             "padded_cache_tokens": _median_number(iterations, "padded_cache_tokens"),
@@ -189,6 +193,21 @@ def _worker_record(  # noqa: PLR0913
             "batch_assembly_scatter_time_seconds": _median_number(
                 iterations, "batch_assembly_scatter_time_seconds"
             ),
+            "average_prefill_batch_size": _median_number(iterations, "average_prefill_batch_size"),
+            "max_prefill_batch_size": _median_number(iterations, "max_prefill_batch_size"),
+            "padded_prompt_tokens": _median_number(iterations, "padded_prompt_tokens"),
+            "useful_prompt_tokens": _median_number(iterations, "useful_prompt_tokens"),
+            "prompt_padding_waste_ratio": _median_number(iterations, "prompt_padding_waste_ratio"),
+            "prefill_executor_time_seconds": _median_number(
+                iterations, "prefill_executor_time_seconds"
+            ),
+            "prefill_model_execution_time_seconds": _median_number(
+                iterations, "prefill_model_execution_time_seconds"
+            ),
+            "prefill_batch_assembly_scatter_time_seconds": _median_number(
+                iterations, "prefill_batch_assembly_scatter_time_seconds"
+            ),
+            "worker_peak_rss_bytes": _median_number(iterations, "worker_peak_rss_bytes"),
             "correctness_sha256": (
                 next(iter(correctness_hashes))
                 if len(correctness_hashes) == 1
@@ -230,6 +249,8 @@ def _executor_summary(
         "median_ttft_seconds",
         "median_tpot_seconds",
         "median_e2e_seconds",
+        "median_queue_time_seconds",
+        "median_prefill_latency_seconds",
         "average_decode_batch_size",
         "max_decode_batch_size",
         "padded_cache_tokens",
@@ -238,11 +259,20 @@ def _executor_summary(
         "executor_time_seconds",
         "model_execution_time_seconds",
         "batch_assembly_scatter_time_seconds",
+        "average_prefill_batch_size",
+        "max_prefill_batch_size",
+        "padded_prompt_tokens",
+        "useful_prompt_tokens",
+        "prompt_padding_waste_ratio",
+        "prefill_executor_time_seconds",
+        "prefill_model_execution_time_seconds",
+        "prefill_batch_assembly_scatter_time_seconds",
+        "worker_peak_rss_bytes",
     )
     medians: BenchmarkDocument = {
         f"median_{key}": (
             statistics.median(_numeric(record, key) for record in successful)
-            if successful
+            if successful and all(key in record for record in successful)
             else None
         )
         for key in metric_keys
@@ -263,6 +293,16 @@ def _executor_summary(
     }
 
 
+def _benchmark_executors(config: ServingBenchmarkConfig) -> tuple[SimulatorExecutor, ...]:
+    if config.prefill is None:
+        return (SimulatorExecutor.REFERENCE, SimulatorExecutor.CONTINUOUS_DECODE)
+    return (
+        SimulatorExecutor.REFERENCE,
+        SimulatorExecutor.CONTINUOUS_DECODE,
+        SimulatorExecutor.CONTINUOUS,
+    )
+
+
 def summarize_serving_records(
     records: list[BenchmarkDocument],
     config: ServingBenchmarkConfig,
@@ -270,9 +310,20 @@ def summarize_serving_records(
     """Apply strict stability and correctness comparison without filtering outliers."""
     scenarios: list[JsonValue] = []
     overall_pass = True
+    executors = _benchmark_executors(config)
+    baseline_name = (
+        SimulatorExecutor.REFERENCE
+        if config.prefill is None
+        else SimulatorExecutor.CONTINUOUS_DECODE
+    )
+    candidate_name = (
+        SimulatorExecutor.CONTINUOUS_DECODE
+        if config.prefill is None
+        else SimulatorExecutor.CONTINUOUS
+    )
     for scenario in config.scenarios:
         by_executor: dict[SimulatorExecutor, BenchmarkDocument] = {}
-        for executor in SimulatorExecutor:
+        for executor in executors:
             selected = [
                 record
                 for record in records
@@ -283,38 +334,47 @@ def summarize_serving_records(
                 minimum_replicates=config.minimum_replicates,
                 max_cv_percent=config.max_cv_percent,
             )
-        reference = by_executor[SimulatorExecutor.REFERENCE]
-        continuous = by_executor[SimulatorExecutor.CONTINUOUS_DECODE]
-        correctness_matches = (
-            reference["correctness_sha256"] is not None
-            and reference["correctness_sha256"] == continuous["correctness_sha256"]
+        baseline = by_executor[baseline_name]
+        candidate = by_executor[candidate_name]
+        correctness_hashes = {
+            cast("str", summary["correctness_sha256"])
+            for summary in by_executor.values()
+            if summary["correctness_sha256"] is not None
+        }
+        correctness_matches = len(correctness_hashes) == 1 and all(
+            summary["correctness_sha256"] is not None for summary in by_executor.values()
         )
-        stable = reference["stability"] == "stable" and continuous["stability"] == "stable"
+        stable = baseline["stability"] == "stable" and candidate["stability"] == "stable"
         strict_verdict = "pass" if stable and correctness_matches else "not_comparable"
         overall_pass = overall_pass and strict_verdict == "pass"
-        reference_elapsed = reference["median_elapsed_seconds"]
-        continuous_elapsed = continuous["median_elapsed_seconds"]
+        baseline_elapsed = baseline["median_elapsed_seconds"]
+        candidate_elapsed = candidate["median_elapsed_seconds"]
         speedup: float | None = None
         conclusion = "not_comparable"
         if (
             strict_verdict == "pass"
-            and isinstance(reference_elapsed, (int, float))
-            and isinstance(continuous_elapsed, (int, float))
-            and float(continuous_elapsed) > 0.0
+            and isinstance(baseline_elapsed, (int, float))
+            and isinstance(candidate_elapsed, (int, float))
+            and float(candidate_elapsed) > 0.0
         ):
-            speedup = float(reference_elapsed) / float(continuous_elapsed)
+            speedup = float(baseline_elapsed) / float(candidate_elapsed)
             conclusion = "improved" if speedup > 1.0 else "no_improvement"
-        scenarios.append(
-            {
-                "scenario": scenario.name,
-                "strict_verdict": strict_verdict,
-                "correctness_matches": correctness_matches,
-                "speedup_reference_over_continuous": speedup,
-                "performance_conclusion": conclusion,
-                "reference": reference,
-                "continuous_decode": continuous,
-            }
-        )
+        scenario_document: BenchmarkDocument = {
+            "scenario": scenario.name,
+            "strict_verdict": strict_verdict,
+            "correctness_matches": correctness_matches,
+            "comparison_baseline": baseline_name.value,
+            "comparison_candidate": candidate_name.value,
+            "speedup_baseline_over_candidate": speedup,
+            "speedup_reference_over_continuous": (speedup if config.prefill is None else None),
+            "speedup_continuous_decode_over_continuous": (
+                speedup if config.prefill is not None else None
+            ),
+            "performance_conclusion": conclusion,
+        }
+        for executor, executor_summary in by_executor.items():
+            scenario_document[executor.value] = executor_summary
+        scenarios.append(scenario_document)
     return {
         "schema_version": 1,
         "strict_verdict": "pass" if overall_pass else "not_comparable",
@@ -328,21 +388,21 @@ def summarize_serving_records(
 
 def _summary_markdown(summary: BenchmarkDocument) -> str:
     scenarios = cast("list[BenchmarkDocument]", summary["scenarios"])
-    header = "| Scenario | Verdict | Conclusion | Speedup | Reference CV | Continuous CV | Avg batch | Waste |"  # noqa: E501
+    header = "| Scenario | Verdict | Conclusion | Baseline | Candidate | Speedup | Candidate CV | Prefill batch | Prompt waste |"  # noqa: E501
     lines = [
-        "# Stage 11A fresh-process serving benchmark",
+        "# Fresh-process serving benchmark",
         "",
         f"Overall strict verdict: `{summary['strict_verdict']}`.",
         "",
         "Profiler timings are excluded from this canonical comparison.",
         "",
         header,
-        "|---|---|---|---:|---:|---:|---:|---:|",
+        "|---|---|---|---|---|---:|---:|---:|---:|",
     ]
     for scenario in scenarios:
-        reference = cast("BenchmarkDocument", scenario["reference"])
-        continuous = cast("BenchmarkDocument", scenario["continuous_decode"])
-        speedup = scenario["speedup_reference_over_continuous"]
+        candidate_name = cast("str", scenario["comparison_candidate"])
+        candidate = cast("BenchmarkDocument", scenario[candidate_name])
+        speedup = scenario["speedup_baseline_over_candidate"]
         speedup_text = "" if speedup is None else f"{float(cast('float', speedup)):.3f}x"
         row = (
             "| "
@@ -352,11 +412,12 @@ def _summary_markdown(summary: BenchmarkDocument) -> str:
                     scenario["scenario"],
                     scenario["strict_verdict"],
                     scenario["performance_conclusion"],
+                    scenario["comparison_baseline"],
+                    candidate_name,
                     speedup_text,
-                    reference["coefficient_of_variation_percent"],
-                    continuous["coefficient_of_variation_percent"],
-                    continuous["median_average_decode_batch_size"],
-                    continuous["median_padding_waste_ratio"],
+                    candidate["coefficient_of_variation_percent"],
+                    candidate["median_average_prefill_batch_size"],
+                    candidate["median_prompt_padding_waste_ratio"],
                 )
             )
             + " |"
@@ -388,10 +449,9 @@ def run_serving_benchmark(
     records: list[BenchmarkDocument] = []
     execution_index = 0
     for replicate in range(config.replicates):
+        configured_executors = _benchmark_executors(config)
         executor_order = (
-            (SimulatorExecutor.REFERENCE, SimulatorExecutor.CONTINUOUS_DECODE)
-            if replicate % 2 == 0
-            else (SimulatorExecutor.CONTINUOUS_DECODE, SimulatorExecutor.REFERENCE)
+            configured_executors if replicate % 2 == 0 else tuple(reversed(configured_executors))
         )
         for scenario in config.scenarios:
             for executor in executor_order:

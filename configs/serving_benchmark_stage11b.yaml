@@ -1,0 +1,55 @@
+schema_version: 1
+experiment_name: stage11b-length-bucketed-batched-prefill
+benchmark_seed: 1112
+output_root: reports/serving-benchmark-stage11b
+worker_timeout_seconds: 120.0
+warmup_iterations: 1
+measurement_iterations: 3
+replicates: 5
+minimum_replicates: 5
+max_cv_percent: 10.0
+torch_num_threads: 1
+torch_num_interop_threads: 1
+vocab_size: 65
+model:
+  block_size: 32
+  n_layer: 2
+  n_head: 2
+  n_embd: 32
+  dropout: 0.0
+  bias: false
+prefill:
+  max_batch_size: 8
+  max_batch_tokens: 256
+  max_padding_ratio: 0.25
+scenarios:
+  - name: burst-equal-length
+    arrival_ticks: [0, 0, 0, 0, 0, 0, 0, 0]
+    prompt_lengths: [8, 8, 8, 8, 8, 8, 8, 8]
+    generated_lengths: [4, 4, 4, 4, 4, 4, 4, 4]
+    cancellation_ticks: [null, null, null, null, null, null, null, null]
+  - name: burst-mixed-lengths
+    arrival_ticks: [0, 0, 0, 0, 0, 0, 0, 0]
+    prompt_lengths: [4, 6, 8, 10, 12, 14, 16, 18]
+    generated_lengths: [4, 4, 4, 4, 4, 4, 4, 4]
+    cancellation_ticks: [null, null, null, null, null, null, null, null]
+  - name: short-prompt-heavy
+    arrival_ticks: [0, 0, 0, 0, 0, 0, 0, 0]
+    prompt_lengths: [2, 2, 3, 3, 4, 4, 5, 5]
+    generated_lengths: [4, 4, 4, 4, 4, 4, 4, 4]
+    cancellation_ticks: [null, null, null, null, null, null, null, null]
+  - name: long-prompt-heavy
+    arrival_ticks: [0, 0, 0, 0, 0, 0, 0, 0]
+    prompt_lengths: [20, 20, 24, 24, 28, 28, 32, 32]
+    generated_lengths: [3, 3, 3, 3, 3, 3, 3, 3]
+    cancellation_ticks: [null, null, null, null, null, null, null, null]
+  - name: staggered-arrivals
+    arrival_ticks: [0, 1, 1, 2, 2, 3, 3, 4]
+    prompt_lengths: [8, 8, 12, 12, 16, 16, 20, 20]
+    generated_lengths: [4, 4, 4, 4, 4, 4, 4, 4]
+    cancellation_ticks: [null, null, null, null, null, null, null, null]
+  - name: high-padding-pressure
+    arrival_ticks: [0, 0, 0, 0, 0, 0, 0, 0]
+    prompt_lengths: [1, 16, 2, 24, 3, 32, 4, 28]
+    generated_lengths: [3, 3, 3, 3, 3, 3, 3, 3]
+    cancellation_ticks: [null, null, null, null, null, null, null, null]
