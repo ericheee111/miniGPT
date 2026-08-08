@@ -12,6 +12,9 @@ interfaces. Only single-token decode against an existing paged cache becomes blo
 sharing, copy-on-write, variable block sizes, GPU kernels, BPE, distributed serving, and checkpoint
 storage remain outside scope.
 
+This stage is a Python/PyTorch reference implementation. It does not provide a high-performance
+fused PagedAttention kernel, and its descriptive benchmark does not support a speedup claim.
+
 ## Read-only block views
 
 `PagedKVCachePool` exposes a read-only request view for each model layer. A view contains the ordered

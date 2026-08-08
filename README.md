@@ -486,6 +486,8 @@ Stage 13B 的 `paged_attention` executor 在正常单 token decode 中直接遍�
 views：只拼接 attention score 做全序列 softmax，再逐 block 累加 value context；历史 K/V 不再
 compact materialize 或 dense padding。模型只返回当前 token 的 per-layer K/V delta，由 pool
 事务化 append。初始 prefill 和 learned-position overflow re-prefill 仍保持 dense reference 语义。
+Stage 13A/13B 当前均为 Python/PyTorch reference implementation；这里没有高性能 fused
+PagedAttention kernel，也不据此宣称性能提升。
 
 ```powershell
 python serve.py `

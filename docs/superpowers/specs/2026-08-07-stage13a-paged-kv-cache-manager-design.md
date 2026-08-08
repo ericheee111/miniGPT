@@ -12,6 +12,9 @@ block table, calls the Stage 11 executor, and commits only the newly appended to
 overflow rebuilds the most recent full model window transactionally. Dense materialization can make
 this backend slower; Stage 13A makes no throughput claim.
 
+This stage is a Python/PyTorch reference implementation, not a high-performance fused
+PagedAttention kernel.
+
 Prefix sharing, copy-on-write, variable blocks, an HTTP API change, BPE, GPU storage, distributed
 execution, and checkpoint persistence are outside this stage.
 
