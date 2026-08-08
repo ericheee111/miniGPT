@@ -346,6 +346,51 @@ def test_real_localhost_disconnect_cancels_engine_request(
     assert runner.state is RunnerState.STOPPED
 
 
+def test_prefix_cache_localhost_disconnect_decrefs_shared_blocks() -> None:
+    # Given: a real APC service with one canonical two-token prompt block.
+    app, runner = _app(
+        stream_buffer_size=32,
+        delay_seconds=0.01,
+        kv_cache_backend=KVCacheBackend.PAGED,
+        prefix_cache_mode="enabled",
+    )
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    server_thread = threading.Thread(target=server.run, name="uvicorn-apc-test")
+    server_thread.start()
+    _wait_for_server(server, port)
+
+    try:
+        with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=5.0) as client:
+            prime = client.post(
+                "/v1/completions",
+                json=_payload(seed=3, stream=False, max_tokens=1, prompt="AB"),
+            )
+            assert prime.status_code == 200
+
+            # When: an exact-prefix-hit stream closes after its first token.
+            with client.stream(
+                "POST",
+                "/v1/completions",
+                json=_payload(seed=21, stream=True, max_tokens=1000, prompt="AB"),
+            ) as response:
+                assert response.status_code == 200
+                _ = next(line for line in response.iter_lines() if line.startswith("data: {"))
+
+        # Then: disconnect cancellation decrefs the shared prefix without evicting its cache entry.
+        _wait_for_runner_event(runner, RunnerEventType.CANCELLED)
+        metrics = runner.metrics()
+        assert metrics.prefix_hit_requests == 1
+        assert metrics.active_shared_references == 0
+        assert metrics.allocated_blocks == metrics.prefix_cache_blocks
+        assert metrics.reserved_blocks == 0
+    finally:
+        server.should_exit = True
+        server_thread.join(timeout=5.0)
+    assert not server_thread.is_alive()
+    assert runner.state is RunnerState.STOPPED
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
