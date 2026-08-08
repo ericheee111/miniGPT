@@ -28,7 +28,9 @@ implements:
   single-owner engine thread;
 - an optional fixed-block paged KV-cache manager with transactional ownership, block reservations,
   lifecycle cleanup, invariant stress evidence, and a Stage 13B block-aware decode executor that
-  avoids normal-path dense historical K/V materialization.
+  avoids normal-path dense historical K/V materialization;
+- namespace-bound Automatic Prefix Caching for immutable complete prompt blocks, longest-prefix
+  suffix prefill, active refcounts, deterministic zero-ref LRU eviction, and Stage 14 evidence.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -89,7 +91,12 @@ dataset remain gitignored.
 - `python serve.py ... --executor paged_attention --kv-cache-backend paged` selects the Stage 13B
   block-aware decode path. Initial/overflow prefill remains dense; do not describe it as an all-path
   paged kernel or claim speedup from descriptive single-machine evidence.
-- Do not begin prefix caching, shared/COW blocks, BPE, GPU, LoRA, distributed training,
+- `--prefix-cache` additionally enables Stage 14 full-block APC. Partial tails remain private and
+  there is no partial-block COW. Prefix-hit suffix prefill is block-aware, but overflow rebuild stays
+  dense. The committed fresh-process benchmark has strict verdict `fail`; avoided prefill work is
+  evidence of skipped computation, not a wall-clock speedup claim.
+- Do not begin partial-block sharing/COW, chunked prefill, speculative decoding, BPE, GPU, LoRA,
+  distributed training,
   `torch.compile`, or another optimization without an explicit stage decision.
 
 ## Quality gates

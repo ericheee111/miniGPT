@@ -1,0 +1,815 @@
+{
+  "benchmark": "automatic_prefix_caching_cpu_fresh_process",
+  "claim_policy": "wall-clock improvement is claimed only when strict_verdict is pass",
+  "comparison": "paged direct vs paged direct + APC",
+  "config": {
+    "cv_limit": 0.1,
+    "repeats": 3,
+    "warmups": 0
+  },
+  "correctness_equivalent": true,
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.6",
+    "torch": "2.13.0+cpu",
+    "torch_num_threads_per_worker": 1
+  },
+  "implementation": "Python/PyTorch reference implementation; no fused PagedAttention kernel",
+  "schema_version": 1,
+  "strict_verdict": "fail",
+  "wall_clock_performance_improvement": false,
+  "workloads": {
+    "common_prefix_different_suffix": {
+      "correctness_equivalent": true,
+      "strategies": {
+        "paged_direct": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 0,
+          "e2e_seconds": {
+            "cv": 0.05988263272388782,
+            "mad": 0.0004117002245038748,
+            "median": 0.007010099943727255,
+            "samples": [
+              0.007010099943727255,
+              0.00742180016823113,
+              0.006582900183275342
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.005977872091453288,
+            "mad": 139264.0,
+            "median": 222720000.0,
+            "samples": [
+              222720000.0,
+              224960512.0,
+              222580736.0
+            ]
+          },
+          "prefill_tokens_computed": 21,
+          "prefix_hit_request_ratio": 0.0,
+          "prefix_hit_requests": 0,
+          "prefix_hit_token_ratio": 0.0,
+          "prefix_hit_tokens": 0,
+          "prefix_lookup_requests": 0,
+          "prefix_miss_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.060056360969695716,
+            "mad": 23.73935374168883,
+            "median": 427.9539555900977,
+            "samples": [
+              427.9539555900977,
+              404.21460184840885,
+              455.72618701129096
+            ]
+          },
+          "reused_blocks": 0,
+          "token_throughput_per_second": {
+            "cv": 0.060056360969695716,
+            "mad": 47.47870748337766,
+            "median": 855.9079111801954,
+            "samples": [
+              855.9079111801954,
+              808.4292036968177,
+              911.4523740225819
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.05091715179021876,
+            "mad": 0.00011019967525019436,
+            "median": 0.0038096997887438564,
+            "samples": [
+              0.004081699997583408,
+              0.003699500113493662,
+              0.0038096997887438564
+            ]
+          }
+        },
+        "paged_direct_apc": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 12,
+          "e2e_seconds": {
+            "cv": 0.04882818083507433,
+            "mad": 8.999998681247234e-05,
+            "median": 0.007527400040999055,
+            "samples": [
+              0.007617400027811527,
+              0.006954299984499812,
+              0.007527400040999055
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.001717687567016154,
+            "mad": 36864.0,
+            "median": 222806016.0,
+            "samples": [
+              222842880.0,
+              222162944.0,
+              222806016.0
+            ]
+          },
+          "prefill_tokens_computed": 9,
+          "prefix_hit_request_ratio": 0.6666666666666666,
+          "prefix_hit_requests": 2,
+          "prefix_hit_token_ratio": 0.5714285714285714,
+          "prefix_hit_tokens": 12,
+          "prefix_lookup_requests": 3,
+          "prefix_miss_tokens": 9,
+          "request_throughput_per_second": {
+            "cv": 0.05015078365955314,
+            "mad": 4.708818383605717,
+            "median": 398.5439838005252,
+            "samples": [
+              393.8351654169195,
+              431.38777543197614,
+              398.5439838005252
+            ]
+          },
+          "reused_blocks": 6,
+          "token_throughput_per_second": {
+            "cv": 0.05015078365955314,
+            "mad": 9.417636767211434,
+            "median": 797.0879676010504,
+            "samples": [
+              787.670330833839,
+              862.7755508639523,
+              797.0879676010504
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.06955491368615864,
+            "mad": 5.490030198222664e-05,
+            "median": 0.004621699917942959,
+            "samples": [
+              0.004676600219925185,
+              0.004112700000310167,
+              0.004621699917942959
+            ]
+          }
+        }
+      },
+      "strict_verdict": "fail"
+    },
+    "concurrent_same_prefix": {
+      "correctness_equivalent": true,
+      "strategies": {
+        "paged_direct": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 0,
+          "e2e_seconds": {
+            "cv": 0.04567486121973732,
+            "mad": 0.00021030008792877197,
+            "median": 0.006171900080516934,
+            "samples": [
+              0.006523800082504749,
+              0.005961599992588162,
+              0.006171900080516934
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0020944063486476594,
+            "mad": 286720.0,
+            "median": 223150080.0,
+            "samples": [
+              222523392.0,
+              223436800.0,
+              223150080.0
+            ]
+          },
+          "prefill_tokens_computed": 16,
+          "prefix_hit_request_ratio": 0.0,
+          "prefix_hit_requests": 0,
+          "prefix_hit_token_ratio": 0.0,
+          "prefix_hit_tokens": 0,
+          "prefix_lookup_requests": 0,
+          "prefix_miss_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.04521391138192087,
+            "mad": 22.86218456435074,
+            "median": 648.0986321581822,
+            "samples": [
+              613.1395734714542,
+              670.960816722533,
+              648.0986321581822
+            ]
+          },
+          "reused_blocks": 0,
+          "token_throughput_per_second": {
+            "cv": 0.04521391138192087,
+            "mad": 45.72436912870148,
+            "median": 1296.1972643163645,
+            "samples": [
+              1226.2791469429085,
+              1341.921633445066,
+              1296.1972643163645
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.020780364410074737,
+            "mad": 4.9199909436062686e-05,
+            "median": 0.004067400005047275,
+            "samples": [
+              0.004067400005047275,
+              0.004183700075470311,
+              0.004018200095611212
+            ]
+          }
+        },
+        "paged_direct_apc": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 12,
+          "e2e_seconds": {
+            "cv": 0.054168186759671305,
+            "mad": 0.00010199984535574913,
+            "median": 0.00539320008829236,
+            "samples": [
+              0.0054951999336481094,
+              0.00539320008829236,
+              0.004956600023433566
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0014625537941636898,
+            "mad": 323584.0,
+            "median": 222646272.0,
+            "samples": [
+              222646272.0,
+              222973952.0,
+              222322688.0
+            ]
+          },
+          "prefill_tokens_computed": 4,
+          "prefix_hit_request_ratio": 0.75,
+          "prefix_hit_requests": 3,
+          "prefix_hit_token_ratio": 0.75,
+          "prefix_hit_tokens": 12,
+          "prefix_lookup_requests": 4,
+          "prefix_miss_tokens": 4,
+          "request_throughput_per_second": {
+            "cv": 0.05568446167893028,
+            "mad": 13.76668811504237,
+            "median": 741.6746893339374,
+            "samples": [
+              727.908001218895,
+              741.6746893339374,
+              807.004797863253
+            ]
+          },
+          "reused_blocks": 6,
+          "token_throughput_per_second": {
+            "cv": 0.05568446167893028,
+            "mad": 27.53337623008474,
+            "median": 1483.3493786678748,
+            "samples": [
+              1455.81600243779,
+              1483.3493786678748,
+              1614.009595726506
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.04191632713696016,
+            "mad": 0.00010515004421570969,
+            "median": 0.0032858001071824285,
+            "samples": [
+              0.0032858001071824285,
+              0.0034554001172629727,
+              0.003180650062966719
+            ]
+          }
+        }
+      },
+      "strict_verdict": "pass"
+    },
+    "eviction_pressure": {
+      "correctness_equivalent": true,
+      "strategies": {
+        "paged_direct": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 0,
+          "e2e_seconds": {
+            "cv": 0.018635247531730615,
+            "mad": 0.00014280015602707863,
+            "median": 0.010319900000467896,
+            "samples": [
+              0.010083100060001016,
+              0.010462700156494975,
+              0.010319900000467896
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0017402417061481372,
+            "mad": 73728.0,
+            "median": 222326784.0,
+            "samples": [
+              222957568.0,
+              222253056.0,
+              222326784.0
+            ]
+          },
+          "prefill_tokens_computed": 24,
+          "prefix_hit_request_ratio": 0.0,
+          "prefix_hit_requests": 0,
+          "prefix_hit_token_ratio": 0.0,
+          "prefix_hit_tokens": 0,
+          "prefix_lookup_requests": 0,
+          "prefix_miss_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.018721160411686318,
+            "mad": 7.9352509179625486,
+            "median": 581.4009825413002,
+            "samples": [
+              595.0550886429858,
+              573.4657316233377,
+              581.4009825413002
+            ]
+          },
+          "reused_blocks": 0,
+          "token_throughput_per_second": {
+            "cv": 0.018721160411686318,
+            "mad": 15.870501835925097,
+            "median": 1162.8019650826004,
+            "samples": [
+              1190.1101772859715,
+              1146.9314632466753,
+              1162.8019650826004
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.03823775171768989,
+            "mad": 0.00018580036703518162,
+            "median": 0.0058737001381752255,
+            "samples": [
+              0.005687899771140044,
+              0.0061368501044075305,
+              0.0058737001381752255
+            ]
+          }
+        },
+        "paged_direct_apc": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 0,
+          "e2e_seconds": {
+            "cv": 0.05142731147344571,
+            "mad": 0.0003708999138325453,
+            "median": 0.010658100014552474,
+            "samples": [
+              0.011377000017091632,
+              0.010658100014552474,
+              0.010287200100719929
+            ]
+          },
+          "evictions": 7,
+          "peak_rss_bytes": {
+            "cv": 0.0018220977076480638,
+            "mad": 180224.0,
+            "median": 222175232.0,
+            "samples": [
+              222769152.0,
+              221995008.0,
+              222175232.0
+            ]
+          },
+          "prefill_tokens_computed": 24,
+          "prefix_hit_request_ratio": 0.0,
+          "prefix_hit_requests": 0,
+          "prefix_hit_token_ratio": 0.0,
+          "prefix_hit_tokens": 0,
+          "prefix_lookup_requests": 6,
+          "prefix_miss_tokens": 24,
+          "request_throughput_per_second": {
+            "cv": 0.05069465645138996,
+            "mad": 20.296960379156758,
+            "median": 562.9521201534658,
+            "samples": [
+              527.3798005613271,
+              562.9521201534658,
+              583.2490805326225
+            ]
+          },
+          "reused_blocks": 0,
+          "token_throughput_per_second": {
+            "cv": 0.05069465645138996,
+            "mad": 40.593920758313516,
+            "median": 1125.9042403069316,
+            "samples": [
+              1054.7596011226542,
+              1125.9042403069316,
+              1166.498161065245
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.06254884858581342,
+            "mad": 0.00023919960966682467,
+            "median": 0.0058508499060725225,
+            "samples": [
+              0.006339850137185939,
+              0.0058508499060725225,
+              0.005611650296405698
+            ]
+          }
+        }
+      },
+      "strict_verdict": "fail"
+    },
+    "exact_repeated_prompt": {
+      "correctness_equivalent": true,
+      "strategies": {
+        "paged_direct": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 0,
+          "e2e_seconds": {
+            "cv": 0.13730579924197883,
+            "mad": 8.999998681247234e-05,
+            "median": 0.00442839995957911,
+            "samples": [
+              0.00442839995957911,
+              0.004338399972766638,
+              0.005512699950486422
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0021713447294057185,
+            "mad": 245760.0,
+            "median": 222797824.0,
+            "samples": [
+              222552064.0,
+              223485952.0,
+              222797824.0
+            ]
+          },
+          "prefill_tokens_computed": 8,
+          "prefix_hit_request_ratio": 0.0,
+          "prefix_hit_requests": 0,
+          "prefix_hit_token_ratio": 0.0,
+          "prefix_hit_tokens": 0,
+          "prefix_lookup_requests": 0,
+          "prefix_miss_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.12747362557880718,
+            "mad": 9.36905987981362,
+            "median": 451.630389814674,
+            "samples": [
+              451.630389814674,
+              460.9994496944876,
+              362.79863187974286
+            ]
+          },
+          "reused_blocks": 0,
+          "token_throughput_per_second": {
+            "cv": 0.12747362557880718,
+            "mad": 18.73811975962724,
+            "median": 903.260779629348,
+            "samples": [
+              903.260779629348,
+              921.9988993889752,
+              725.5972637594857
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.17375109592774265,
+            "mad": 2.3950008180043895e-05,
+            "median": 0.0026682999453838717,
+            "samples": [
+              0.0026682999453838717,
+              0.002644349937203828,
+              0.0035445999820190514
+            ]
+          }
+        },
+        "paged_direct_apc": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 4,
+          "e2e_seconds": {
+            "cv": 0.05849642968109074,
+            "mad": 8.800067007541656e-06,
+            "median": 0.004238300025463104,
+            "samples": [
+              0.004229499958455563,
+              0.004238300025463104,
+              0.004677799995988607
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0011501852809938891,
+            "mad": 237568.0,
+            "median": 222777344.0,
+            "samples": [
+              223014912.0,
+              222777344.0,
+              222502912.0
+            ]
+          },
+          "prefill_tokens_computed": 4,
+          "prefix_hit_request_ratio": 0.5,
+          "prefix_hit_requests": 1,
+          "prefix_hit_token_ratio": 0.5,
+          "prefix_hit_tokens": 4,
+          "prefix_lookup_requests": 2,
+          "prefix_miss_tokens": 4,
+          "request_throughput_per_second": {
+            "cv": 0.05658808970601528,
+            "mad": 0.981827637539709,
+            "median": 471.88731047454974,
+            "samples": [
+              472.86913811208944,
+              471.88731047454974,
+              427.5514134240619
+            ]
+          },
+          "reused_blocks": 2,
+          "token_throughput_per_second": {
+            "cv": 0.05658808970601528,
+            "mad": 1.963655275079418,
+            "median": 943.7746209490995,
+            "samples": [
+              945.7382762241789,
+              943.7746209490995,
+              855.1028268481238
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.015078307739738048,
+            "mad": 1.4450168202668427e-05,
+            "median": 0.0026553500210930105,
+            "samples": [
+              0.002640899852890342,
+              0.0026553500210930105,
+              0.002716750139211894
+            ]
+          }
+        }
+      },
+      "strict_verdict": "not_comparable"
+    },
+    "low_reuse_random_prompts": {
+      "correctness_equivalent": true,
+      "strategies": {
+        "paged_direct": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 0,
+          "e2e_seconds": {
+            "cv": 0.0014822075300385822,
+            "mad": 8.599832653999329e-06,
+            "median": 0.007586099905893207,
+            "samples": [
+              0.007577500073239207,
+              0.007599799893796444,
+              0.007586099905893207
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0019231747759457308,
+            "mad": 319488.0,
+            "median": 222584832.0,
+            "samples": [
+              222265344.0,
+              223113216.0,
+              222584832.0
+            ]
+          },
+          "prefill_tokens_computed": 16,
+          "prefix_hit_request_ratio": 0.0,
+          "prefix_hit_requests": 0,
+          "prefix_hit_token_ratio": 0.0,
+          "prefix_hit_tokens": 0,
+          "prefix_lookup_requests": 0,
+          "prefix_miss_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.0014817223257255266,
+            "mad": 0.5984191521625917,
+            "median": 527.2801636704822,
+            "samples": [
+              527.8785828226448,
+              526.329647608895,
+              527.2801636704822
+            ]
+          },
+          "reused_blocks": 0,
+          "token_throughput_per_second": {
+            "cv": 0.0014817223257255266,
+            "mad": 1.1968383043251833,
+            "median": 1054.5603273409645,
+            "samples": [
+              1055.7571656452897,
+              1052.65929521779,
+              1054.5603273409645
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.011619003173357931,
+            "mad": 2.2549764672291812e-05,
+            "median": 0.004513050196262426,
+            "samples": [
+              0.004436000017095161,
+              0.004535599960934718,
+              0.004513050196262426
+            ]
+          }
+        },
+        "paged_direct_apc": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 0,
+          "e2e_seconds": {
+            "cv": 0.05140912978537189,
+            "mad": 0.0002883998677134514,
+            "median": 0.008297599852085114,
+            "samples": [
+              0.008297599852085114,
+              0.008009199984371662,
+              0.008857299806550145
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0013912736449006279,
+            "mad": 192512.0,
+            "median": 222568448.0,
+            "samples": [
+              222568448.0,
+              222982144.0,
+              222375936.0
+            ]
+          },
+          "prefill_tokens_computed": 16,
+          "prefix_hit_request_ratio": 0.0,
+          "prefix_hit_requests": 0,
+          "prefix_hit_token_ratio": 0.0,
+          "prefix_hit_tokens": 0,
+          "prefix_lookup_requests": 4,
+          "prefix_miss_tokens": 16,
+          "request_throughput_per_second": {
+            "cv": 0.050675713731805724,
+            "mad": 17.35854913068681,
+            "median": 482.0671123342776,
+            "samples": [
+              482.0671123342776,
+              499.42566146496443,
+              451.60490074434676
+            ]
+          },
+          "reused_blocks": 0,
+          "token_throughput_per_second": {
+            "cv": 0.050675713731805724,
+            "mad": 34.71709826137362,
+            "median": 964.1342246685552,
+            "samples": [
+              964.1342246685552,
+              998.8513229299289,
+              903.2098014886935
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.03441028286002562,
+            "mad": 4.205002915028035e-05,
+            "median": 0.004473299952110365,
+            "samples": [
+              0.004431249922960085,
+              0.004473299952110365,
+              0.004720500088016181
+            ]
+          }
+        }
+      },
+      "strict_verdict": "fail"
+    },
+    "partial_block_prefix": {
+      "correctness_equivalent": true,
+      "strategies": {
+        "paged_direct": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 0,
+          "e2e_seconds": {
+            "cv": 0.10872702652484503,
+            "mad": 0.00021030008792877197,
+            "median": 0.004949100082740188,
+            "samples": [
+              0.004738799994811416,
+              0.0057988998014479876,
+              0.004949100082740188
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0008521335352168803,
+            "mad": 122880.0,
+            "median": 222855168.0,
+            "samples": [
+              223105024.0,
+              222855168.0,
+              222732288.0
+            ]
+          },
+          "prefill_tokens_computed": 9,
+          "prefix_hit_request_ratio": 0.0,
+          "prefix_hit_requests": 0,
+          "prefix_hit_token_ratio": 0.0,
+          "prefix_hit_tokens": 0,
+          "prefix_lookup_requests": 0,
+          "prefix_miss_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.10343637092692676,
+            "mad": 17.933903735212084,
+            "median": 404.11387253511595,
+            "samples": [
+              422.04777627032803,
+              344.8930087566954,
+              404.11387253511595
+            ]
+          },
+          "reused_blocks": 0,
+          "token_throughput_per_second": {
+            "cv": 0.10343637092692676,
+            "mad": 35.86780747042417,
+            "median": 808.2277450702319,
+            "samples": [
+              844.0955525406561,
+              689.7860175133908,
+              808.2277450702319
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.03392057660156438,
+            "mad": 5.41498884215931e-05,
+            "median": 0.0028112500437968138,
+            "samples": [
+              0.0028112500437968138,
+              0.002681499928909916,
+              0.002865399932218407
+            ]
+          }
+        },
+        "paged_direct_apc": {
+          "all_resources_released": true,
+          "avoided_prefill_tokens": 4,
+          "e2e_seconds": {
+            "cv": 0.12311237959780424,
+            "mad": 7.6000578701496124e-06,
+            "median": 0.00486420001834631,
+            "samples": [
+              0.0059760999865829945,
+              0.00485659996047616,
+              0.00486420001834631
+            ]
+          },
+          "evictions": 0,
+          "peak_rss_bytes": {
+            "cv": 0.0016308978824025357,
+            "mad": 147456.0,
+            "median": 222019584.0,
+            "samples": [
+              222019584.0,
+              221872128.0,
+              222560256.0
+            ]
+          },
+          "prefill_tokens_computed": 5,
+          "prefix_hit_request_ratio": 0.5,
+          "prefix_hit_requests": 1,
+          "prefix_hit_token_ratio": 0.4444444444444444,
+          "prefix_hit_tokens": 4,
+          "prefix_lookup_requests": 2,
+          "prefix_miss_tokens": 5,
+          "request_throughput_per_second": {
+            "cv": 0.11494387589352119,
+            "mad": 0.64343271386889,
+            "median": 411.1673024251876,
+            "samples": [
+              334.66642199598755,
+              411.8107351390565,
+              411.1673024251876
+            ]
+          },
+          "reused_blocks": 2,
+          "token_throughput_per_second": {
+            "cv": 0.11494387589352119,
+            "mad": 1.28686542773778,
+            "median": 822.3346048503752,
+            "samples": [
+              669.3328439919751,
+              823.621470278113,
+              822.3346048503752
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.11473338727583764,
+            "mad": 6.0450169091946695e-05,
+            "median": 0.0028987500117279657,
+            "samples": [
+              0.003476600162624811,
+              0.002838299842636019,
+              0.0028987500117279657
+            ]
+          }
+        }
+      },
+      "strict_verdict": "not_comparable"
+    }
+  }
+}

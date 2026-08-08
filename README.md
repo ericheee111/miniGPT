@@ -507,6 +507,32 @@ dense、Stage 13A materialized paged 和 Stage 13B direct paged 在固定 worklo
 明确标记 `descriptive_only`，不宣称 speedup。完整 correctness hashes、timings 与 caveat 见
 [Stage 13B 证据包](docs/results/paged-attention/README.md)。
 
+### Stage 14 Automatic Prefix Caching
+
+Stage 14 在 Stage 13 paged block pool 上增加 namespace-bound Automatic Prefix Caching。
+cache identity 绑定 checkpoint、model config、dtype/device、block size、schema version 与
+learned absolute-position semantics；full token blocks 使用包含 parent hash 的 SHA-256 chain，
+因此 block 身份同时绑定全部历史 prefix 与绝对逻辑位置，并保留 token metadata 做 collision 防御。
+
+admission 查找 longest contiguous full-block prefix，把 canonical immutable SHARED block ID
+附到 request block table 并增加 active refcount。suffix prefill 只计算未命中 tokens，从真实绝对
+position 开始，直接 attention 到 shared prefix 与 earlier suffix K/V；不会重新执行命中 prefix 的
+Transformer work。partial tail 始终 PRIVATE，本阶段没有 partial-block sharing/COW。zero-ref cache
+按 deterministic LRU 在 pool pressure 下 eviction，active shared block 永不 eviction。
+
+```powershell
+python simulate_serving.py --config configs/serving_automatic_prefix_cache.yaml
+python benchmark_prefix_cache.py --output reports/automatic-prefix-caching/benchmark.json
+```
+
+dense、materialized paged、direct paged 与 direct paged + APC 的 generated tokens、RNG、终态、
+admission 和逻辑 request events 等价。5000 次 deterministic allocator/refcount stress 每次 mutation
+都验证 invariant。fresh-process benchmark 覆盖六类 workload，并记录 hit ratios、reused blocks、
+evictions、实际 prefill tokens、avoided prefill tokens、TTFT、E2E、req/s、tokens/s 与 peak RSS。
+当前 strict verdict 为 `fail`，所以不宣称 wall-clock performance improvement；avoided prefill tokens
+只证明计算工作被跳过。实现仍是 Python/PyTorch reference，不是 fused PagedAttention kernel。
+完整 hash-bound 证据见 [Stage 14 证据包](docs/results/automatic-prefix-caching/README.md)。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
