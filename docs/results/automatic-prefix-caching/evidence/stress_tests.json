@@ -3,5 +3,5 @@
   "exit_code": 0,
   "schema_version": 1,
   "stderr": "",
-  "stdout": ".......                                                                  [100%]\n7 passed in 1.68s\n"
+  "stdout": "........                                                                 [100%]\n8 passed in 1.64s\n"
 }
