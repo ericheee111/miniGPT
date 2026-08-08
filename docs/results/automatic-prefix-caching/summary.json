@@ -17,7 +17,7 @@
   "prefix_hit_tokens": 32,
   "schema_version": 1,
   "shared_blocks_immutable": true,
-  "source_commit": "5c95ec822a760bdda01cabf958b544555402d393",
+  "source_commit": "b248bff1166c4d57a3268140215d8d76c6b7575e",
   "stage": "14",
   "stress_mutations": 5000,
   "stress_passed": true,
