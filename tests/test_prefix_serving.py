@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import final
+from typing import TYPE_CHECKING, Never, final
 
 import torch
 
@@ -22,6 +22,9 @@ from minigpt.serving import (
     ServingEngine,
 )
 from minigpt.settings import GPTConfig
+
+if TYPE_CHECKING:
+    import pytest
 
 
 @final
@@ -117,7 +120,9 @@ def _request(
     )
 
 
-def test_exact_repeated_prompt_skips_all_prefill_and_preserves_tokens_and_rng() -> None:
+def test_exact_repeated_prompt_skips_all_prefill_and_preserves_tokens_and_rng(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Given: identical direct-paged engines with APC disabled/enabled.
     model = _model()
     reference = _engine(model, prefix_cache=False)
@@ -127,6 +132,12 @@ def test_exact_repeated_prompt_skips_all_prefill_and_preserves_tokens_and_rng() 
     _run(reference)
     cached.submit(_request("prime", prompt, seed=3, max_new_tokens=2))
     _run(cached)
+
+    def forbid_full_prefix_recompute(_token_ids: torch.Tensor) -> Never:
+        reason = "exact prefix hit reran dense full prefill"
+        raise AssertionError(reason)
+
+    monkeypatch.setattr(model, "prefill_with_all_logits", forbid_full_prefix_recompute)
 
     # When: the same prompt and seed run after its full blocks are resident.
     cached.submit(_request("hit", prompt))

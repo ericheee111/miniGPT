@@ -10,6 +10,7 @@ from minigpt.layers import KVCache, LayerKVCache
 from minigpt.paged_kv_cache import (
     PagedKVCacheCapacityError,
     PagedKVCacheConfig,
+    PagedKVCacheOwnershipError,
     PagedKVCachePool,
     PhysicalBlockState,
     PrefixCacheNamespace,
@@ -86,6 +87,28 @@ def test_hash_chain_binds_namespace_history_and_exact_token_metadata() -> None:
     assert chain_a != chain_b
     assert chain_a[1] != different_parent[1]
     assert first.prefix_block_tokens(chain_a[0]) is None
+
+
+def test_hash_collision_defense_rejects_mismatched_exact_token_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: one canonical block and an injected hash collision for different tokens.
+    pool = _pool()
+    _populate(pool, "canonical", (1, 2))
+    pool.release("canonical")
+    forced_hash = pool.prefix_hash_chain((1, 2))[0]
+
+    def collide(_tokens: tuple[int, ...]) -> tuple[str, ...]:
+        return (forced_hash,)
+
+    monkeypatch.setattr(pool, "prefix_hash_chain", collide)
+
+    # When/Then: exact token metadata rejects the collision before refs/tables mutate.
+    with pytest.raises(PagedKVCacheOwnershipError, match="collision"):
+        _ = pool.reserve_with_prefix("collision", reserved_blocks=1, prompt_tokens=(9, 10))
+    assert not pool.has_request("collision")
+    assert pool.metrics().active_shared_references == 0
+    pool.verify_invariants()
 
 
 def test_exact_and_partial_hits_share_only_complete_immutable_blocks() -> None:
