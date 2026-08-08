@@ -12,6 +12,8 @@ from torch.nn import functional
 from typing_extensions import override
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from minigpt.settings import GPTConfig
 
 
@@ -36,6 +38,19 @@ class LayerKVCache:
 
 
 KVCache: TypeAlias = tuple[LayerKVCache, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PagedLayerKVCacheView:
+    """Expose one layer's ordered historical block slices without copying K/V."""
+
+    key_blocks: tuple[Tensor, ...]
+    value_blocks: tuple[Tensor, ...]
+    cache_length: int
+    block_tokens: int
+
+
+PagedKVCacheView: TypeAlias = tuple[PagedLayerKVCacheView, ...]
 
 
 def kv_cache_nbytes(cache: KVCache) -> int:
@@ -160,6 +175,101 @@ class CausalSelfAttention(nn.Module):
         )
         cache = LayerKVCache(key=key.detach(), value=value.detach())
         return output, cache
+
+    def forward_paged_batch(
+        self,
+        hidden_states: Tensor,
+        cache_views: Sequence[PagedLayerKVCacheView],
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Decode one token per row by attending directly over ordered physical blocks."""
+        query, key, value = self._project_qkv(hidden_states)
+        if query.shape[2] != 1:
+            reason = "paged attention requires exactly one current token per row"
+            raise ValueError(reason)
+        if len(cache_views) != query.shape[0]:
+            reason = "paged cache view count must equal batch size"
+            raise ValueError(reason)
+        contexts = [
+            self._attend_paged_row(
+                query[row : row + 1],
+                key[row : row + 1],
+                value[row : row + 1],
+                cache_views[row],
+            )
+            for row in range(query.shape[0])
+        ]
+        context = torch.cat(contexts, dim=0)
+        context = (
+            context.transpose(1, 2)
+            .contiguous()
+            .view(
+                query.shape[0],
+                1,
+                self.n_embd,
+            )
+        )
+        projected = cast("Tensor", self.output_projection(context))
+        output = cast("Tensor", self.residual_dropout(projected))
+        return output, LayerKVCache(key=key.detach(), value=value.detach())
+
+    def _attend_paged_row(
+        self,
+        query: Tensor,
+        current_key: Tensor,
+        current_value: Tensor,
+        view: PagedLayerKVCacheView,
+    ) -> Tensor:
+        """Normalize scores globally while accumulating values block by block."""
+        blocks = self._validate_paged_view(query, view)
+        score_chunks = [query @ key_block.unsqueeze(0).transpose(-2, -1) for key_block, _ in blocks]
+        score_chunks.append(query @ current_key.transpose(-2, -1))
+        scores = torch.cat(score_chunks, dim=-1) / math.sqrt(self.head_size)
+        weights = functional.softmax(scores, dim=-1)
+        weights = cast("Tensor", self.attention_dropout(weights))
+        context = torch.zeros_like(query)
+        position = 0
+        for _, value_block in blocks:
+            block_length = value_block.shape[1]
+            context = context + weights[
+                ..., position : position + block_length
+            ] @ value_block.unsqueeze(0)
+            position += block_length
+        return context + weights[..., position:] @ current_value
+
+    def _validate_paged_view(
+        self,
+        query: Tensor,
+        view: PagedLayerKVCacheView,
+    ) -> tuple[tuple[Tensor, Tensor], ...]:
+        if view.cache_length <= 0 or view.block_tokens <= 0:
+            reason = "paged cache length and block_tokens must be positive"
+            raise ValueError(reason)
+        if len(view.key_blocks) != len(view.value_blocks) or not view.key_blocks:
+            reason = "paged key/value block counts must be equal and non-zero"
+            raise ValueError(reason)
+        remaining = view.cache_length
+        pairs: list[tuple[Tensor, Tensor]] = []
+        for block_index, (key_block, value_block) in enumerate(
+            zip(view.key_blocks, view.value_blocks, strict=True)
+        ):
+            used = min(remaining, view.block_tokens)
+            expected = (self.n_head, used, self.head_size)
+            if tuple(key_block.shape) != expected or tuple(value_block.shape) != expected:
+                reason = f"paged block {block_index} shape must equal {expected}"
+                raise ValueError(reason)
+            for tensor in (key_block, value_block):
+                if tensor.dtype != query.dtype or tensor.device != query.device:
+                    reason = f"paged block {block_index} dtype/device must equal query"
+                    raise ValueError(reason)
+                if tensor.requires_grad:
+                    reason = f"paged block {block_index} must be detached"
+                    raise ValueError(reason)
+            pairs.append((key_block, value_block))
+            remaining -= used
+        if remaining != 0:
+            reason = "paged blocks do not cover cache_length exactly"
+            raise ValueError(reason)
+        return tuple(pairs)
 
     def _project_qkv(
         self,
@@ -304,3 +414,19 @@ class TransformerBlock(nn.Module):
         mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
         output = hidden_states + cast("Tensor", self.mlp(mlp_input))
         return output, cache
+
+    def forward_paged_batch(
+        self,
+        hidden_states: Tensor,
+        cache_views: Sequence[PagedLayerKVCacheView],
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Apply one block-aware decode step to every request row."""
+        attention_input = cast("Tensor", self.attention_norm(hidden_states))
+        attention_output, cache_delta = self.attention.forward_paged_batch(
+            attention_input,
+            cache_views,
+        )
+        hidden_states = hidden_states + attention_output
+        mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
+        output = hidden_states + cast("Tensor", self.mlp(mlp_input))
+        return output, cache_delta

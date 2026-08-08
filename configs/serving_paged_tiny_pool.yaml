@@ -1,0 +1,17 @@
+schema_version: 1
+executor: continuous
+kv_cache_backend: paged
+kv_cache: {block_tokens: 2, num_blocks: 2}
+scenario_name: paged-tiny-pool
+model_seed: 1302
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.001
+max_ticks: 64
+output_dir: reports/paged-kv-cache-manager/tiny-pool
+vocab_size: 17
+model: {block_size: 8, n_layer: 1, n_head: 1, n_embd: 8, dropout: 0.0, bias: false}
+scheduler: {max_active_requests: 3, max_cached_tokens: 24}
+requests:
+  - {request_id: fits-1, arrival_time: 0.0, prompt_tokens: [1, 2], prompt_length: null, max_new_tokens: 3, temperature: 1.0, top_k: null, seed: 201, cancellation_time: null}
+  - {request_id: fits-2, arrival_time: 0.0, prompt_tokens: [3, 4], prompt_length: null, max_new_tokens: 3, temperature: 1.0, top_k: null, seed: 202, cancellation_time: null}
+  - {request_id: impossible, arrival_time: 0.0, prompt_tokens: [5, 6, 7], prompt_length: null, max_new_tokens: 4, temperature: 1.0, top_k: null, seed: 203, cancellation_time: null}

@@ -1,0 +1,18 @@
+schema_version: 1
+executor: continuous
+kv_cache_backend: paged
+kv_cache: {block_tokens: 2, num_blocks: 8}
+scenario_name: paged-cancellation-churn
+model_seed: 1304
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.001
+max_ticks: 64
+output_dir: reports/paged-kv-cache-manager/cancellation-churn
+vocab_size: 17
+model: {block_size: 8, n_layer: 1, n_head: 1, n_embd: 8, dropout: 0.0, bias: false}
+scheduler: {max_active_requests: 2, max_cached_tokens: 16}
+requests:
+  - {request_id: cancel-active-1, arrival_time: 0.0, prompt_tokens: [1, 2], prompt_length: null, max_new_tokens: 7, temperature: 1.0, top_k: null, seed: 401, cancellation_time: 2.0}
+  - {request_id: finish-peer, arrival_time: 0.0, prompt_tokens: [3, 4], prompt_length: null, max_new_tokens: 4, temperature: 1.0, top_k: null, seed: 402, cancellation_time: null}
+  - {request_id: cancel-waiting, arrival_time: 0.0, prompt_tokens: [5, 6], prompt_length: null, max_new_tokens: 6, temperature: 1.0, top_k: null, seed: 403, cancellation_time: 1.0}
+  - {request_id: cancel-active-2, arrival_time: 1.0, prompt_tokens: [7], prompt_length: null, max_new_tokens: 6, temperature: 1.0, top_k: null, seed: 404, cancellation_time: 4.0}

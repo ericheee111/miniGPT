@@ -1,0 +1,19 @@
+schema_version: 1
+executor: continuous
+kv_cache_backend: paged
+kv_cache: {block_tokens: 2, num_blocks: 4}
+scenario_name: paged-repeated-reuse
+model_seed: 1303
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.001
+max_ticks: 96
+output_dir: reports/paged-kv-cache-manager/repeated-reuse
+vocab_size: 17
+model: {block_size: 8, n_layer: 1, n_head: 1, n_embd: 8, dropout: 0.0, bias: false}
+scheduler: {max_active_requests: 1, max_cached_tokens: 8}
+requests:
+  - {request_id: reuse-1, arrival_time: 0.0, prompt_tokens: [1], prompt_length: null, max_new_tokens: 3, temperature: 1.0, top_k: null, seed: 301, cancellation_time: null}
+  - {request_id: reuse-2, arrival_time: 0.0, prompt_tokens: [2], prompt_length: null, max_new_tokens: 3, temperature: 1.0, top_k: null, seed: 302, cancellation_time: null}
+  - {request_id: reuse-3, arrival_time: 0.0, prompt_tokens: [3], prompt_length: null, max_new_tokens: 3, temperature: 1.0, top_k: null, seed: 303, cancellation_time: null}
+  - {request_id: reuse-4, arrival_time: 0.0, prompt_tokens: [4], prompt_length: null, max_new_tokens: 3, temperature: 1.0, top_k: null, seed: 304, cancellation_time: null}
+  - {request_id: reuse-5, arrival_time: 0.0, prompt_tokens: [5], prompt_length: null, max_new_tokens: 3, temperature: 1.0, top_k: null, seed: 305, cancellation_time: null}

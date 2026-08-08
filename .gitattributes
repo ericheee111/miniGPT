@@ -31,3 +31,9 @@ docs/results/batched-prefill/** text eol=lf
 
 # Stage 12 HTTP serving evidence binds exact UTF-8/LF checkout bytes.
 docs/results/http-serving/** text eol=lf
+
+# Stage 13A paged KV-cache evidence binds exact UTF-8/LF checkout bytes.
+docs/results/paged-kv-cache-manager/** text eol=lf
+
+# Stage 13B block-aware paged-attention evidence binds exact UTF-8/LF checkout bytes.
+docs/results/paged-attention/** text eol=lf

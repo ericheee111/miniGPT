@@ -1,0 +1,32 @@
+{
+  "artifacts": [
+    {
+      "bytes": 4330,
+      "path": "evidence/benchmark.json",
+      "sha256": "c8f41fc2fba2a5cfcb286cd1227b5718cd5434461b1fa22baecb79b86322c628"
+    },
+    {
+      "bytes": 1768,
+      "path": "evidence/correctness.json",
+      "sha256": "94016ecb00296948a0d9a4e0c60716de0370a6878d03febaad41b49647ff9e49"
+    },
+    {
+      "bytes": 562,
+      "path": "evidence/lifecycle_tests.json",
+      "sha256": "01685b20a5765d8589590e01ed5c98f24d38ef55c95e361c6c95c44b0eae79ba"
+    },
+    {
+      "bytes": 1679,
+      "path": "README.md",
+      "sha256": "8dd6b96d77b746322e5829fb960dd9854a316ff7a7ad55afb645a3c2c1363b46"
+    },
+    {
+      "bytes": 373,
+      "path": "summary.json",
+      "sha256": "8abf4bd7233ff3316d75d5c545c1ca2c9277895c9ddb274a72839283c5c7b35c"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "598e90dcc405e1bdf66f37edd5da5e1838984c3a",
+  "stage": "13B"
+}

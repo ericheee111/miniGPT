@@ -1,0 +1,12 @@
+{
+  "all_correctness_checks_passed": true,
+  "all_resources_released": true,
+  "benchmark_verdict": "descriptive_only",
+  "correctness_scenarios": 2,
+  "normal_decode_dense_materialization": false,
+  "overflow_reprefill_remains_dense": true,
+  "schema_version": 1,
+  "source_commit": "598e90dcc405e1bdf66f37edd5da5e1838984c3a",
+  "speedup_claim": false,
+  "stage": "13B"
+}

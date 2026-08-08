@@ -6,11 +6,14 @@ from typing import cast
 
 import pytest
 
+from minigpt.paged_kv_cache import KVCacheBackend
 from minigpt.serving_simulator import (
     InvalidSimulatorConfigError,
     SimulatorExecutor,
     load_simulator_config,
+    run_cache_backend_equivalence,
     run_executor_equivalence,
+    run_paged_attention_equivalence,
     run_simulation,
 )
 
@@ -122,6 +125,7 @@ def test_summary_and_request_rows_publish_control_plane_metrics(tmp_path: Path) 
         "logical serving correctness; wall-clock performance reported separately"
     )
     assert summary["executor"] == "reference"
+    assert summary["kv_cache_backend"] == "dense"
     assert summary["completed_requests"] == 2
     assert summary["failed_requests"] == 0
     assert summary["generated_tokens"] == 5
@@ -215,19 +219,100 @@ def test_continuous_simulator_writes_prefill_batch_events_and_metrics(tmp_path: 
     assert result.metrics.prompt_padding_waste_ratio == 0.0
 
 
+def test_paged_backend_matches_dense_logical_contracts(tmp_path: Path) -> None:
+    # Given: one fixed workload with a small, explicitly configured page pool.
+    document = config_document()
+    document["executor"] = "continuous"
+    document["kv_cache_backend"] = "paged"
+    document["kv_cache"] = {"block_tokens": 2, "num_blocks": 4}
+    config_path = tmp_path / "paged.json"
+    write_config(config_path, document)
+    config = load_simulator_config(config_path)
+    assert config.kv_cache_backend is KVCacheBackend.PAGED
+
+    # When: dense and paged storage execute identical model and request seeds.
+    comparison = run_cache_backend_equivalence(config, output_dir=tmp_path / "comparison")
+
+    # Then: logical serving is identical and every physical block returns to the pool.
+    assert comparison.equivalent
+    assert comparison.checked_contracts == (
+        "generated_tokens",
+        "request_terminal_states_and_cancellation",
+        "fifo_admission_order",
+        "logical_event_semantics",
+        "request_metrics",
+        "logical_cache_accounting",
+    )
+    assert comparison.dense.generated_tokens == comparison.paged.generated_tokens
+    assert comparison.dense.request_statuses == comparison.paged.request_statuses
+    assert comparison.paged.metrics.total_blocks == 4
+    assert comparison.paged.metrics.free_blocks == 4
+    assert comparison.paged.metrics.allocated_blocks == 0
+    assert comparison.paged.metrics.reserved_blocks == 0
+    assert comparison.paged.metrics.peak_allocated_blocks > 0
+
+
+def test_paged_backend_requires_explicit_pool_config(tmp_path: Path) -> None:
+    # Given: paged storage is requested without a physical pool definition.
+    document = config_document()
+    document["kv_cache_backend"] = "paged"
+    config_path = tmp_path / "missing-pool.json"
+    write_config(config_path, document)
+
+    # When/Then: strict loading rejects the incomplete storage contract.
+    with pytest.raises(InvalidSimulatorConfigError, match="requires kv_cache"):
+        _ = load_simulator_config(config_path)
+
+
 def test_invalid_executor_name_is_rejected(tmp_path: Path) -> None:
     # Given: a strict simulator document naming an unsupported executor.
     document = config_document()
-    document["executor"] = "paged_attention"
+    document["executor"] = "unsupported"
     config_path = tmp_path / "invalid-executor.json"
     write_config(config_path, document)
 
     # When/Then: loading rejects the out-of-scope executor explicitly.
     with pytest.raises(
         InvalidSimulatorConfigError,
-        match="reference, continuous_decode, continuous",
+        match="reference, continuous_decode, continuous, paged_attention",
     ):
         _ = load_simulator_config(config_path)
+
+
+def test_direct_paged_attention_matches_dense_and_materialized_simulation(tmp_path: Path) -> None:
+    # Given: a block-size overflow workload configured for direct paged attention.
+    config = load_simulator_config(Path("configs") / "serving_paged_overflow.yaml")
+
+    # When: all three storage/decode strategies run from identical weights and request seeds.
+    comparison = run_paged_attention_equivalence(config, output_dir=tmp_path / "comparison")
+
+    # Then: logical contracts match and direct traversal removes dense cache padding.
+    assert comparison.equivalent
+    assert comparison.dense.generated_tokens == comparison.direct.generated_tokens
+    assert comparison.materialized.events == comparison.direct.events
+    assert "direct_decode_has_no_cache_padding" in comparison.checked_contracts
+    assert comparison.direct.metrics.padding_waste_ratio == 0.0
+
+
+def test_committed_direct_paged_attention_scenario_finishes_without_leaks(tmp_path: Path) -> None:
+    # Given: the fixed Stage 13B mixed-length and cancellation workload.
+    config = load_simulator_config(Path("configs") / "serving_paged_attention.yaml")
+    assert config.executor is SimulatorExecutor.PAGED_ATTENTION
+
+    # When: block-aware decode runs through the simulator entrypoint.
+    result = run_simulation(config, output_dir=tmp_path / "direct")
+
+    # Then: all requests are terminal and every physical block is released.
+    terminal = (
+        result.metrics.completed_requests
+        + result.metrics.cancelled_requests
+        + result.metrics.failed_requests
+    )
+    assert terminal == result.metrics.total_requests
+    assert result.metrics.cancelled_requests == 1
+    assert result.metrics.allocated_blocks == 0
+    assert result.metrics.reserved_blocks == 0
+    assert result.metrics.free_blocks == result.metrics.total_blocks
 
 
 def test_invalid_prompt_source_is_rejected(tmp_path: Path) -> None:
@@ -270,3 +355,63 @@ def test_committed_scenarios_complete_with_expected_terminal_accounting(
     assert terminal_count == result.metrics.total_requests
     assert result.metrics.active_requests == 0
     assert result.metrics.waiting_requests == 0
+
+
+@pytest.mark.parametrize(
+    ("config_name", "minimum_failed"),
+    [
+        ("serving_paged_normal_burst.yaml", 0),
+        ("serving_paged_tiny_pool.yaml", 1),
+        ("serving_paged_reuse.yaml", 0),
+        ("serving_paged_cancellation_churn.yaml", 0),
+        ("serving_paged_failure_rollback.yaml", 1),
+        ("serving_paged_overflow.yaml", 0),
+        ("serving_paged_fragmentation.yaml", 0),
+    ],
+)
+def test_committed_paged_scenarios_release_all_physical_blocks(
+    config_name: str,
+    minimum_failed: int,
+    tmp_path: Path,
+) -> None:
+    # Given: one fixed Stage 13A capacity, churn, overflow, or fragmentation scenario.
+    config = load_simulator_config(Path("configs") / config_name)
+
+    # When: the paged simulator reaches a terminal state for every request.
+    result = run_simulation(config, output_dir=tmp_path / config.scenario_name)
+
+    # Then: expected deterministic failures are isolated and the pool is fully released.
+    terminal_count = (
+        result.metrics.completed_requests
+        + result.metrics.cancelled_requests
+        + result.metrics.failed_requests
+    )
+    assert terminal_count == result.metrics.total_requests
+    assert result.metrics.failed_requests >= minimum_failed
+    assert result.metrics.allocated_blocks == 0
+    assert result.metrics.reserved_blocks == 0
+    assert result.metrics.free_blocks == result.metrics.total_blocks
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    [
+        "serving_paged_normal_burst.yaml",
+        "serving_paged_reuse.yaml",
+        "serving_paged_cancellation_churn.yaml",
+        "serving_paged_overflow.yaml",
+        "serving_paged_fragmentation.yaml",
+    ],
+)
+def test_committed_paged_scenarios_match_dense_correctness_contracts(
+    config_name: str,
+    tmp_path: Path,
+) -> None:
+    # Given: a fixed workload whose maximum reservations fit both storage backends.
+    config = load_simulator_config(Path("configs") / config_name)
+
+    # When: identical model and request seeds run through both backends.
+    comparison = run_cache_backend_equivalence(config, output_dir=tmp_path / config.scenario_name)
+
+    # Then: all logical correctness contracts remain identical.
+    assert comparison.equivalent

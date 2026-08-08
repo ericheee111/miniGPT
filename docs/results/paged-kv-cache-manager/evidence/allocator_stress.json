@@ -1,0 +1,30 @@
+{
+  "final_metrics": {
+    "allocated_blocks": 0,
+    "allocated_token_slots": 0,
+    "allocation_count": 1800,
+    "block_reuse_count": 1772,
+    "free_blocks": 32,
+    "free_count": 1800,
+    "internal_fragmentation_ratio": 0.0,
+    "internal_fragmentation_tokens": 0,
+    "peak_allocated_blocks": 28,
+    "peak_reserved_blocks": 32,
+    "reserved_blocks": 0,
+    "total_blocks": 32,
+    "used_token_slots": 0
+  },
+  "invariant_checks": 3001,
+  "maximum_fragmentation_ratio": 0.75,
+  "maximum_fragmentation_tokens": 28,
+  "operation_counts": {
+    "append": 619,
+    "free": 847,
+    "rebuild": 688,
+    "reserve_prefill": 847
+  },
+  "requests_created": 847,
+  "seed": 20260807,
+  "steps": 3000,
+  "trace_sha256": "368f9be5a1ba61cc7c4e4432bcfe3dfa7460d06285953f30f5e2d6c31b4ede81"
+}

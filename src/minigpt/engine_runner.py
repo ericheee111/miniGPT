@@ -524,6 +524,10 @@ class EngineRunner:
 
     def _fail_worker(self, error: BaseException) -> None:
         detail = f"{type(error).__name__}: {error}"
+        try:
+            self._engine.release_all_cache_resources()
+        except Exception as cleanup_error:  # noqa: BLE001
+            detail += f"; cache cleanup failed: {type(cleanup_error).__name__}: {cleanup_error}"
         self._emit(RunnerEventType.WORKER_FAILED, None, detail)
         failure = RunnerWorkerError(detail)
         for channel in self._channels.values():

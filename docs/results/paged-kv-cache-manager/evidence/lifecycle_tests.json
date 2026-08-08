@@ -1,0 +1,20 @@
+{
+  "covered_contracts": [
+    "allocator_ownership_and_rollback",
+    "dense_paged_equivalence",
+    "fifo_capacity_pressure",
+    "cancellation_and_failure_isolation",
+    "http_disconnect_and_backpressure",
+    "graceful_shutdown_zero_leaks",
+    "deterministic_allocator_stress"
+  ],
+  "exit_code": 0,
+  "schema_version": 1,
+  "test_files": [
+    "tests/test_paged_kv_cache.py",
+    "tests/test_paged_serving.py",
+    "tests/test_serving_simulator.py",
+    "tests/test_http_lifecycle.py",
+    "tests/test_serve_subprocess.py"
+  ]
+}

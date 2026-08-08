@@ -1,0 +1,50 @@
+{
+  "scenarios": [
+    {
+      "all_resources_released": true,
+      "checked_contracts": [
+        "generated_tokens",
+        "request_terminal_states_and_cancellation",
+        "fifo_admission_order",
+        "logical_event_semantics",
+        "request_metrics",
+        "logical_cache_accounting",
+        "direct_decode_has_no_cache_padding"
+      ],
+      "config": "serving_paged_overflow.yaml",
+      "correctness_sha256": {
+        "dense": "af29e19ddd4b6f484a3988e7682a38abbe03f638cc837dc21627fc44775c7b7f",
+        "direct": "af29e19ddd4b6f484a3988e7682a38abbe03f638cc837dc21627fc44775c7b7f",
+        "materialized": "af29e19ddd4b6f484a3988e7682a38abbe03f638cc837dc21627fc44775c7b7f"
+      },
+      "direct_padding_waste_ratio": 0.0,
+      "equivalent": true,
+      "overflow_fallback_observed": true,
+      "scenario_name": "paged-block-size-overflow"
+    },
+    {
+      "all_resources_released": true,
+      "checked_contracts": [
+        "generated_tokens",
+        "request_terminal_states_and_cancellation",
+        "fifo_admission_order",
+        "logical_event_semantics",
+        "request_metrics",
+        "logical_cache_accounting",
+        "direct_decode_has_no_cache_padding"
+      ],
+      "config": "serving_paged_attention.yaml",
+      "correctness_sha256": {
+        "dense": "b874c7576f1f26e0226564895ad03f0734700d2ffa95576d7980366a9f2b1523",
+        "direct": "b874c7576f1f26e0226564895ad03f0734700d2ffa95576d7980366a9f2b1523",
+        "materialized": "b874c7576f1f26e0226564895ad03f0734700d2ffa95576d7980366a9f2b1523"
+      },
+      "direct_padding_waste_ratio": 0.0,
+      "equivalent": true,
+      "overflow_fallback_observed": false,
+      "scenario_name": "direct-paged-attention"
+    }
+  ],
+  "schema_version": 1,
+  "stage": "13B"
+}
