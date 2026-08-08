@@ -7,7 +7,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import httpx
 import pytest
@@ -19,7 +19,12 @@ from minigpt.data import CharTokenizer, JsonValue
 from minigpt.engine_runner import EngineRunner, RunnerConfig, RunnerEventType, RunnerState
 from minigpt.http_server import MODEL_ID, create_app
 from minigpt.layers import LayerKVCache
-from minigpt.paged_kv_cache import KVCacheBackend, PagedKVCacheConfig, PagedKVCachePool
+from minigpt.paged_kv_cache import (
+    KVCacheBackend,
+    PagedKVCacheConfig,
+    PagedKVCachePool,
+    PrefixCacheNamespace,
+)
 from minigpt.serving import (
     DecodeBatchObservation,
     EngineConfig,
@@ -58,7 +63,7 @@ class SlowExecutor:
         return ()
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
-        return tuple(self._result(state, used_fallback=False) for state in requests)
+        return tuple(self._prefill_result(state) for state in requests)
 
     def decode(self, active_requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         return tuple(
@@ -84,6 +89,29 @@ class SlowExecutor:
             used_fallback=used_fallback,
         )
 
+    def _prefill_result(self, state: RequestState) -> ExecutionResult:
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
+        request_id = state.request.request_id
+        if state.request.seed in self.failing_seeds:
+            return ExecutionResult.failure(request_id, "injected HTTP failure", 0.0)
+        prompt_tokens = len(state.request.prompt_tokens)
+        suffix_tokens = prompt_tokens - state.prefix_hit_tokens
+        cache_tensor = torch.full((1, 1, suffix_tokens, 1), float(state.request.seed))
+        cache = (
+            (LayerKVCache(key=cache_tensor, value=cache_tensor.clone()),) if suffix_tokens else ()
+        )
+        return ExecutionResult.success(
+            request_id=request_id,
+            token_id=state.request.seed % 2,
+            cache=cache,
+            cache_tokens=prompt_tokens,
+            latency_seconds=0.0,
+            used_fallback=False,
+            prefill_prefix_tokens=state.prefix_hit_tokens,
+            prefill_logits=torch.zeros((suffix_tokens, 2)),
+        )
+
 
 def _app(
     *,
@@ -91,6 +119,7 @@ def _app(
     delay_seconds: float = 0.01,
     failing_seeds: set[int] | None = None,
     kv_cache_backend: KVCacheBackend = KVCacheBackend.DENSE,
+    prefix_cache_mode: Literal["disabled", "enabled"] = "disabled",
 ) -> tuple[FastAPI, EngineRunner]:
     executor = SlowExecutor(
         delay_seconds=delay_seconds,
@@ -109,6 +138,19 @@ def _app(
             head_size=1,
             dtype=torch.float32,
             device=torch.device("cpu"),
+            prefix_cache_namespace=(
+                PrefixCacheNamespace(
+                    model_checkpoint_identity="http-lifecycle-checkpoint",
+                    model_config_identity="http-lifecycle-model",
+                    dtype="torch.float32",
+                    device="cpu",
+                    block_tokens=2,
+                    cache_schema_version=1,
+                    position_embedding_semantics="learned_absolute_v1",
+                )
+                if prefix_cache_mode == "enabled"
+                else None
+            ),
         )
         if paged_config is not None
         else None
@@ -147,10 +189,10 @@ async def _client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient, None]:
         yield client
 
 
-def _payload(*, seed: int, stream: bool, max_tokens: int) -> dict[str, object]:
+def _payload(*, seed: int, stream: bool, max_tokens: int, prompt: str = "A") -> dict[str, object]:
     return {
         "model": MODEL_ID,
-        "prompt": "A",
+        "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": 1.0,
         "stream": stream,
@@ -188,6 +230,48 @@ async def _check_http_backpressure() -> None:
     assert metrics.allocated_blocks == 0
     assert metrics.reserved_blocks == 0
     assert metrics.free_blocks == metrics.total_blocks
+
+
+def test_prefix_cache_http_completion_and_failure_release_active_refs() -> None:
+    asyncio.run(_check_prefix_cache_http_cleanup())
+
+
+async def _check_prefix_cache_http_cleanup() -> None:
+    # Given: an APC service primed with one immutable two-token prompt block.
+    app, runner = _app(
+        stream_buffer_size=1,
+        delay_seconds=0.0,
+        failing_seeds={13},
+        kv_cache_backend=KVCacheBackend.PAGED,
+        prefix_cache_mode="enabled",
+    )
+
+    async with _client(app) as client:
+        prime = await client.post(
+            "/v1/completions",
+            json=_payload(seed=3, stream=False, max_tokens=1, prompt="AB"),
+        )
+        assert prime.status_code == 200
+
+        # When: an exact-hit stream completes and another exact-hit request fails.
+        streamed = await client.post(
+            "/v1/completions",
+            json=_payload(seed=5, stream=True, max_tokens=100, prompt="AB"),
+        )
+        failed = await client.post(
+            "/v1/completions",
+            json=_payload(seed=13, stream=False, max_tokens=3, prompt="AB"),
+        )
+        metrics = runner.metrics()
+
+        # Then: both terminal paths decref without freeing the resident canonical block.
+        assert "data: [DONE]" in streamed.text
+        assert failed.status_code == 500
+        assert metrics.prefix_hit_requests == 2
+        assert metrics.active_shared_references == 0
+        assert metrics.allocated_blocks == metrics.prefix_cache_blocks
+        assert metrics.reserved_blocks == 0
+        assert metrics.prefix_cache_blocks == 1
 
 
 def test_http_generation_failure_does_not_affect_concurrent_peer() -> None:

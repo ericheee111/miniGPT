@@ -428,6 +428,7 @@ class EngineRunner:
         while not self._engine.is_idle:
             self._engine.tick()
             self._publish_engine_events()
+        self._engine.release_all_cache_resources()
         self._reject_remaining_commands()
         command.acknowledged.set_result(None)
 

@@ -32,13 +32,19 @@ from minigpt.settings import (
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows is the canonical subprocess runtime")
 @pytest.mark.parametrize(
-    ("executor", "kv_cache_backend"),
-    [("continuous", "dense"), ("continuous", "paged"), ("paged_attention", "paged")],
+    ("executor", "kv_cache_backend", "prefix_cache_mode"),
+    [
+        ("continuous", "dense", "disabled"),
+        ("continuous", "paged", "disabled"),
+        ("paged_attention", "paged", "disabled"),
+        ("paged_attention", "paged", "enabled"),
+    ],
 )
 def test_serve_cli_starts_uvicorn_and_exits_on_localhost(
     tmp_path: Path,
     executor: str,
     kv_cache_backend: str,
+    prefix_cache_mode: str,
 ) -> None:
     # Given: a complete tiny checkpoint/tokenizer pair and a loopback-only free port.
     checkpoint_path, tokenizer_path = _write_service_checkpoint(tmp_path)
@@ -62,6 +68,8 @@ def test_serve_cli_starts_uvicorn_and_exits_on_localhost(
         "--log-level",
         "warning",
     ]
+    if prefix_cache_mode == "enabled":
+        command.append("--prefix-cache")
 
     # When: Uvicorn starts in a separate process and serves real localhost requests.
     process = subprocess.Popen(  # noqa: S603

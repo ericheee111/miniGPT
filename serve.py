@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -15,7 +18,12 @@ from minigpt.data import CharTokenizer
 from minigpt.engine_runner import EngineRunner, RunnerConfig
 from minigpt.http_server import MODEL_ID, create_app
 from minigpt.model import GPT
-from minigpt.paged_kv_cache import KVCacheBackend, PagedKVCacheConfig, PagedKVCachePool
+from minigpt.paged_kv_cache import (
+    KVCacheBackend,
+    PagedKVCacheConfig,
+    PagedKVCachePool,
+    PrefixCacheNamespace,
+)
 from minigpt.serving import (
     ContinuousDecodeExecutor,
     ContinuousExecutor,
@@ -58,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--kv-block-tokens", type=int, default=16)
     parser.add_argument("--kv-num-blocks", type=int)
+    parser.add_argument("--prefix-cache", action="store_true")
     parser.add_argument("--command-queue-size", type=int, default=256)
     parser.add_argument("--stream-buffer-size", type=int, default=64)
     parser.add_argument(
@@ -94,6 +103,13 @@ def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]
         else configured_cached_tokens
     )
     kv_cache_backend = KVCacheBackend(cast("str", arguments.kv_cache_backend))
+    executor_name = cast("ExecutorName", arguments.executor)
+    prefix_cache_enabled = cast("bool", arguments.prefix_cache)
+    if prefix_cache_enabled and (
+        kv_cache_backend is not KVCacheBackend.PAGED or executor_name != "paged_attention"
+    ):
+        reason = "--prefix-cache requires --executor paged_attention --kv-cache-backend paged"
+        raise ValueError(reason)
     paged_kv_cache: PagedKVCacheConfig | None = None
     paged_cache_pool: PagedKVCachePool | None = None
     if kv_cache_backend is KVCacheBackend.PAGED:
@@ -111,8 +127,24 @@ def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]
             block_tokens=block_tokens,
             num_blocks=num_blocks,
         )
-        paged_cache_pool = PagedKVCachePool.from_model(paged_kv_cache, model)
-    executor_name = cast("ExecutorName", arguments.executor)
+        namespace = (
+            PrefixCacheNamespace(
+                model_checkpoint_identity=_file_sha256(checkpoint_path),
+                model_config_identity=_document_sha256(asdict(model.config)),
+                dtype=str(model.token_embedding.weight.dtype),
+                device=str(model.token_embedding.weight.device),
+                block_tokens=block_tokens,
+                cache_schema_version=1,
+                position_embedding_semantics="learned_absolute_v1",
+            )
+            if prefix_cache_enabled
+            else None
+        )
+        paged_cache_pool = PagedKVCachePool.from_model(
+            paged_kv_cache,
+            model,
+            prefix_cache_namespace=namespace,
+        )
     executor = _executor(executor_name, model, paged_cache_pool=paged_cache_pool)
     engine = ServingEngine(
         config=EngineConfig(
@@ -174,6 +206,16 @@ def _executor(
         reason = "--executor paged_attention requires --kv-cache-backend paged"
         raise ValueError(reason)
     return PagedAttentionExecutor(model, paged_cache_pool)
+
+
+def _file_sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _document_sha256(document: object) -> str:
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 if __name__ == "__main__":
