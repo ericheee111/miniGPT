@@ -685,6 +685,9 @@ class PagedKVCachePool:
         table = self._table(request_id)
         cache_length = self._validate_cache(cache)
         required = self.required_blocks(cache_length)
+        if not self.prefix_cache_enabled:
+            self._rebuild_private_cache(table, cache, cache_length=cache_length, required=required)
+            return
         if required > table.max_blocks:
             _capacity(
                 f"overflow rebuild requires {required} blocks but request max is {table.max_blocks}"
@@ -716,6 +719,43 @@ class PagedKVCachePool:
             self._prefix_index = prefix_snapshot
             self.verify_invariants()
             raise
+        self._update_peaks()
+        self.verify_invariants()
+
+    def _rebuild_private_cache(
+        self,
+        table: _MutableRequestCache,
+        cache: KVCache,
+        *,
+        cache_length: int,
+        required: int,
+    ) -> None:
+        """Preserve the Stage 13 in-place rebuild and allocator-counter contract."""
+        self._require_within_reservation(table, required)
+        old_ids = list(table.block_ids)
+        old_length = table.cache_length
+        old_key = self.key_blocks[:, old_ids].clone() if old_ids else None
+        old_value = self.value_blocks[:, old_ids].clone() if old_ids else None
+        extra = max(0, required - len(old_ids))
+        new_blocks = self._acquire_blocks(extra, owner_request_id=table.request_id)
+        candidate = [*old_ids, *new_blocks][:required]
+        try:
+            self._write_cache(cache, candidate, cache_length)
+        except Exception:
+            if old_ids:
+                if old_key is None or old_value is None:
+                    _ownership("overflow rollback snapshot is missing")
+                self.key_blocks[:, old_ids] = old_key
+                self.value_blocks[:, old_ids] = old_value
+            self._return_blocks(new_blocks, expected_owner=table.request_id)
+            table.block_ids = old_ids
+            table.cache_length = old_length
+            self.verify_invariants()
+            raise
+        released = old_ids[required:]
+        self._return_blocks(released, expected_owner=table.request_id)
+        table.block_ids = candidate
+        table.cache_length = cache_length
         self._update_peaks()
         self.verify_invariants()
 

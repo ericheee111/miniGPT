@@ -385,12 +385,31 @@ def verify_stage13a_evidence(package_root: Path) -> EvidenceDocument:  # noqa: C
         _invalid("scenario resource release is not fully verified")
     recorded_stress = _read_json(package_root / "evidence" / "allocator_stress.json")
     fresh_stress = run_allocator_stress()
-    if recorded_stress != fresh_stress:
+    if recorded_stress != _project_recorded_shape(recorded_stress, fresh_stress):
         _invalid("allocator stress result differs from fresh invariant run")
     lifecycle = _read_json(package_root / "evidence" / "lifecycle_tests.json")
     if lifecycle.get("exit_code") != 0:
         _invalid("lifecycle evidence did not pass")
     return manifest
+
+
+def _project_recorded_shape(recorded: JsonValue, fresh: JsonValue) -> JsonValue:
+    """Compare published fields while permitting additive future diagnostics."""
+    if isinstance(recorded, dict):
+        if not isinstance(fresh, dict):
+            _invalid("fresh allocator stress changed a published object shape")
+        missing = set(recorded) - set(fresh)
+        if missing:
+            _invalid(f"fresh allocator stress omitted published field {min(missing)!r}")
+        return {key: _project_recorded_shape(value, fresh[key]) for key, value in recorded.items()}
+    if isinstance(recorded, list):
+        if not isinstance(fresh, list) or len(recorded) != len(fresh):
+            _invalid("fresh allocator stress changed a published list shape")
+        return [
+            _project_recorded_shape(recorded_value, fresh_value)
+            for recorded_value, fresh_value in zip(recorded, fresh, strict=True)
+        ]
+    return fresh
 
 
 def _manifest_entries(entries: list[object]) -> dict[str, tuple[int, str]]:

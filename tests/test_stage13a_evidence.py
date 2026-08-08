@@ -96,3 +96,12 @@ def test_evidence_generation_verification_and_tamper_detection(tmp_path: Path) -
     )
     with pytest.raises(Stage13AEvidenceVerificationError, match="hash mismatch"):
         _ = verify_stage13a_evidence(package)
+
+
+def test_committed_stage13a_evidence_accepts_additive_stage14_metrics() -> None:
+    # Given: immutable Stage 13A stress evidence predating APC diagnostic fields.
+    package = Path("docs/results/paged-kv-cache-manager")
+
+    # When/Then: every published field still matches a fresh invariant run.
+    manifest = verify_stage13a_evidence(package)
+    assert manifest["stage"] == "13A"
