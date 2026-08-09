@@ -81,7 +81,15 @@ _REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {
     "apc_prefill_strategy",
 }
 _MODEL_KEYS = frozenset({"block_size", "n_layer", "n_head", "n_embd", "dropout", "bias"})
-_SCHEDULER_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
+_SCHEDULER_KEYS = frozenset(
+    {
+        "max_active_requests",
+        "max_cached_tokens",
+        "max_scheduled_tokens",
+        "prefill_chunk_tokens",
+    }
+)
+_SCHEDULER_REQUIRED_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
 _PREFILL_KEYS = frozenset({"max_batch_size", "max_batch_tokens", "max_padding_ratio"})
 _KV_CACHE_KEYS = frozenset({"block_tokens", "num_blocks"})
 _PREFIX_CACHE_KEYS = frozenset({"enabled"})
@@ -353,10 +361,27 @@ def _model(document: ConfigMapping, source: Path, *, vocab_size: int) -> GPTConf
 
 def _scheduler(document: ConfigMapping, source: Path) -> SchedulerConfig:
     raw = _mapping(document["scheduler"], source, "scheduler")
-    _exact_keys(raw, _SCHEDULER_KEYS, source, "scheduler")
+    missing = _SCHEDULER_REQUIRED_KEYS - set(raw)
+    unexpected = set(raw) - _SCHEDULER_KEYS
+    if missing:
+        _invalid(source, f"scheduler missing key {min(missing)!r}")
+    if unexpected:
+        _invalid(source, f"scheduler has unexpected key {min(unexpected)!r}")
+    max_scheduled = (
+        _integer(raw, "max_scheduled_tokens", source, positive=True)
+        if "max_scheduled_tokens" in raw
+        else None
+    )
+    chunk_size = (
+        _integer(raw, "prefill_chunk_tokens", source, positive=True)
+        if "prefill_chunk_tokens" in raw
+        else None
+    )
     return SchedulerConfig(
         max_active_requests=_integer(raw, "max_active_requests", source, positive=True),
         max_cached_tokens=_integer(raw, "max_cached_tokens", source, positive=True),
+        max_scheduled_tokens=max_scheduled,
+        prefill_chunk_tokens=chunk_size,
     )
 
 
@@ -519,11 +544,28 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         backend=backend,
         executor=executor,
     )
+    paged_kv_cache = _paged_kv_cache(document, source, backend=backend)
+    scheduler = _scheduler(document, source)
+    if scheduler.prefill_chunk_tokens is not None:
+        if (
+            executor is not SimulatorExecutor.PAGED_ATTENTION
+            or backend is not KVCacheBackend.PAGED
+            or paged_kv_cache is None
+        ):
+            _invalid(source, "chunked prefill requires paged_attention with paged KV cache")
+        if scheduler.prefill_chunk_tokens % paged_kv_cache.block_tokens:
+            _invalid(source, "prefill_chunk_tokens must align to kv_cache.block_tokens")
+        minimum_budget = scheduler.max_active_requests - 1 + paged_kv_cache.block_tokens
+        if (
+            scheduler.max_scheduled_tokens is None
+            or scheduler.max_scheduled_tokens < minimum_budget
+        ):
+            _invalid(source, "max_scheduled_tokens is too small for chunked prefill")
     return SimulatorConfig(
         schema_version=schema_version,
         executor=executor,
         kv_cache_backend=backend,
-        paged_kv_cache=_paged_kv_cache(document, source, backend=backend),
+        paged_kv_cache=paged_kv_cache,
         prefix_cache_enabled=prefix_cache_enabled,
         apc_prefill_strategy=_apc_prefill_strategy(document, source),
         scenario_name=_string(document, "scenario_name", source),
@@ -538,7 +580,7 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         max_ticks=_integer(document, "max_ticks", source, positive=True),
         output_dir=Path(_string(document, "output_dir", source)),
         model=_model(document, source, vocab_size=vocab_size),
-        scheduler=_scheduler(document, source),
+        scheduler=scheduler,
         prefill=_prefill(document, source),
         requests=_requests(document, source, vocab_size=vocab_size),
     )

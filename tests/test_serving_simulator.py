@@ -91,6 +91,77 @@ def test_json_and_yaml_inputs_resolve_to_the_same_strict_config(tmp_path: Path) 
     assert json_config.requests[1].prompt_tokens == (15, 16, 0)
 
 
+def test_chunked_scheduler_config_runs_through_simulator(tmp_path: Path) -> None:
+    # Given: direct paged simulation opts into Stage 16 scheduling fields.
+    config_path = tmp_path / "chunked.json"
+    document = config_document()
+    document.update(
+        {
+            "executor": "paged_attention",
+            "kv_cache_backend": "paged",
+            "kv_cache": {"block_tokens": 2, "num_blocks": 12},
+            "max_ticks": 50,
+            "scheduler": {
+                "max_active_requests": 2,
+                "max_cached_tokens": 16,
+                "max_scheduled_tokens": 4,
+                "prefill_chunk_tokens": 2,
+            },
+        }
+    )
+    requests = cast("list[dict[str, object]]", document["requests"])
+    requests[0]["prompt_tokens"] = [1, 2, 3, 4]
+    requests[0]["max_new_tokens"] = 2
+    write_config(config_path, document)
+
+    # When: strict parsing and the deterministic simulator execute the workload.
+    config = load_simulator_config(config_path)
+    result = run_simulation(config, output_dir=tmp_path / "chunked")
+
+    # Then: the optional fields survive parsing and chunk events are observable.
+    assert config.scheduler.max_scheduled_tokens == 4
+    assert config.scheduler.prefill_chunk_tokens == 2
+    assert any(
+        event.event_type.value == "PREFILL_CHUNK_STARTED" for event in result.events
+    )
+
+
+@pytest.mark.parametrize(
+    ("budget", "chunk_size", "match"),
+    [
+        (4, 3, "align"),
+        (2, 2, "too small"),
+    ],
+)
+def test_chunked_scheduler_rejects_invalid_alignment_or_budget(
+    tmp_path: Path,
+    budget: int,
+    chunk_size: int,
+    match: str,
+) -> None:
+    # Given: Stage 16 is requested with an invalid block alignment or token budget.
+    config_path = tmp_path / f"invalid-chunk-{budget}-{chunk_size}.json"
+    document = config_document()
+    document.update(
+        {
+            "executor": "paged_attention",
+            "kv_cache_backend": "paged",
+            "kv_cache": {"block_tokens": 2, "num_blocks": 12},
+            "scheduler": {
+                "max_active_requests": 2,
+                "max_cached_tokens": 16,
+                "max_scheduled_tokens": budget,
+                "prefill_chunk_tokens": chunk_size,
+            },
+        }
+    )
+    write_config(config_path, document)
+
+    # When/Then: strict simulator parsing rejects the ambiguous schedule.
+    with pytest.raises(InvalidSimulatorConfigError, match=match):
+        _ = load_simulator_config(config_path)
+
+
 def test_prefix_cache_requires_direct_paged_executor(tmp_path: Path) -> None:
     # Given: APC is enabled without the direct paged executor/storage pair.
     config_path = tmp_path / "invalid-prefix-cache.json"
