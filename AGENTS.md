@@ -30,7 +30,10 @@ implements:
   lifecycle cleanup, invariant stress evidence, and a Stage 13B block-aware decode executor that
   avoids normal-path dense historical K/V materialization;
 - namespace-bound Automatic Prefix Caching for immutable complete prompt blocks, longest-prefix
-  suffix prefill, active refcounts, deterministic zero-ref LRU eviction, and Stage 14 evidence.
+  suffix prefill, active refcounts, deterministic zero-ref LRU eviction, and Stage 14 evidence;
+- cache-aware batched paged suffix prefill with variable per-row history/suffix lengths, absolute
+  learned positions, exact-hit zero-compute scatter, explicit sequential-reference mode, and Stage
+  15 structural/performance evidence.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -92,12 +95,14 @@ dataset remain gitignored.
   block-aware decode path. Initial/overflow prefill remains dense; do not describe it as an all-path
   paged kernel or claim speedup from descriptive single-machine evidence.
 - `--prefix-cache` additionally enables Stage 14 full-block APC. Partial tails remain private and
-  there is no partial-block COW. Prefix-hit suffix prefill is block-aware, but overflow rebuild stays
-  dense. The committed fresh-process benchmark has strict verdict `fail`; avoided prefill work is
-  evidence of skipped computation, not a wall-clock speedup claim.
-- Do not begin partial-block sharing/COW, chunked prefill, speculative decoding, BPE, GPU, LoRA,
-  distributed training,
-  `torch.compile`, or another optimization without an explicit stage decision.
+  there is no partial-block COW. Stage 15 batches paged-history suffix rows by computed suffix tokens
+  while retaining a sequential APC reference mode; exact hits still use boundary logits and overflow
+  rebuild stays dense. Historical K/V is not materialized on the normal suffix path. The Stage 15
+  fresh-process benchmark has strict verdict `fail`, so model-call reduction and avoided work do not
+  imply a wall-clock performance improvement claim.
+- Do not begin chunked prefill, token-budget scheduling, partial-block sharing/COW, KV-pressure
+  preemption, speculative decoding, BPE, GPU, LoRA, distributed training, `torch.compile`, or another
+  optimization without an explicit stage decision.
 
 ## Quality gates
 

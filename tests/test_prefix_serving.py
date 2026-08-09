@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     import pytest
 
     from minigpt.layers import KVCache, PagedKVCacheView
+    from minigpt.paged_kv_cache import PrefixCachePromotion
 
 
 @final
@@ -352,6 +353,96 @@ def test_concurrent_batched_misses_canonicalize_duplicate_prompt_blocks() -> Non
     assert metrics.active_shared_references == 0
     assert metrics.private_blocks == 0
     assert metrics.reserved_blocks == 0
+    pool.verify_invariants()
+
+
+def test_batched_apc_isolates_one_row_sampling_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: two prefix-hit rows and a sampler that fails only its first row.
+    model = _model()
+    engine = _engine(model, prefix_cache=True)
+    engine.submit(_request("prime", (1, 2, 3, 4), max_new_tokens=1))
+    _run(engine)
+    original = torch.multinomial
+    calls = 0
+
+    def fail_first_sample(
+        probabilities: torch.Tensor,
+        num_samples: int,
+        *,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            reason = "injected first-row sample failure"
+            raise RuntimeError(reason)
+        return original(probabilities, num_samples, generator=generator)
+
+    monkeypatch.setattr(torch, "multinomial", fail_first_sample)
+    engine.submit(_request("bad", (1, 2, 3, 4, 5), max_new_tokens=1))
+    engine.submit(_request("good", (1, 2, 3, 4, 6), max_new_tokens=1))
+
+    # When: both suffixes share one successful model call and scatter samples per row.
+    engine.tick(now=1.0)
+    engine.tick(now=1.01)
+
+    # Then: only the injected row fails; its peer and all pool ownership remain valid.
+    assert engine.request_state("bad").status is RequestStatus.FAILED
+    assert engine.request_state("good").status is RequestStatus.FINISHED
+    assert engine.prefill_observations[-1].model_calls == 1
+    pool = engine.paged_cache_pool
+    assert pool is not None
+    metrics = pool.metrics()
+    assert metrics.active_shared_references == 0
+    assert metrics.private_blocks == 0
+    assert metrics.reserved_blocks == 0
+    pool.verify_invariants()
+
+
+def test_batched_apc_promotion_failure_isolates_request_and_rolls_back_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: two concurrent batched misses and an injected first-request promotion failure.
+    engine = _engine(_model(), prefix_cache=True)
+    pool = engine.paged_cache_pool
+    assert pool is not None
+    original = pool.promote_prompt_blocks
+
+    def fail_first_promotion(
+        request_id: str,
+        *,
+        prompt_tokens: tuple[int, ...],
+        prefix_hit_tokens: int,
+        suffix_logits: torch.Tensor,
+    ) -> PrefixCachePromotion:
+        if request_id == "bad":
+            reason = "injected Stage 15 promotion failure"
+            raise RuntimeError(reason)
+        return original(
+            request_id,
+            prompt_tokens=prompt_tokens,
+            prefix_hit_tokens=prefix_hit_tokens,
+            suffix_logits=suffix_logits,
+        )
+
+    monkeypatch.setattr(pool, "promote_prompt_blocks", fail_first_promotion)
+    engine.submit(_request("bad", (1, 2, 3, 4), max_new_tokens=1))
+    engine.submit(_request("good", (5, 6, 7, 8), max_new_tokens=1))
+
+    # When: prefill succeeds for both rows but owner-thread promotion fails for only the first.
+    engine.tick(now=0.0)
+    engine.tick(now=0.01)
+
+    # Then: the failed request is released and the peer's canonical blocks stay valid.
+    assert engine.request_state("bad").status is RequestStatus.FAILED
+    assert engine.request_state("good").status is RequestStatus.FINISHED
+    metrics = pool.metrics()
+    assert metrics.active_shared_references == 0
+    assert metrics.private_blocks == 0
+    assert metrics.reserved_blocks == 0
+    assert metrics.allocated_blocks == metrics.prefix_cache_blocks == 2
     pool.verify_invariants()
 
 
