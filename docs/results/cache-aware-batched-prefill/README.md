@@ -18,13 +18,13 @@ GPU/CUDA path, custom fused kernel, or new HTTP API.
 
 | Workload | Sequential calls | Batched calls | Avg batch | Max batch | Verdict |
 |---|---:|---:|---:|---:|---|
-| concurrent_same_prefix | 4 | 1 | 4.0 | 4 | pass |
+| concurrent_same_prefix | 4 | 1 | 4.0 | 4 | fail |
 | exact_hits_mixed_with_suffix_hits | 4 | 2 | 2.0 | 3 | pass |
-| low_reuse_random_prompts | 6 | 1 | 6.0 | 6 | pass |
+| low_reuse_random_prompts | 6 | 1 | 6.0 | 6 | not_comparable |
 | mixed_prefix_lengths | 6 | 2 | 3.0 | 3 | pass |
 | padding_pressure | 5 | 3 | 1.6666666666666667 | 2 | fail |
 | repeated_prefix_short_suffix | 5 | 2 | 2.5 | 4 | pass |
-| repeated_prefix_variable_suffix | 4 | 2 | 2.0 | 3 | fail |
+| repeated_prefix_variable_suffix | 4 | 2 | 2.0 | 3 | pass |
 
 Every raw timing sample runs in a fresh Python process and retains median, MAD, and CV
 for TTFT, E2E, req/s, tokens/s, and peak RSS. Avoided prefix work and model-call
