@@ -1,0 +1,1058 @@
+{
+  "benchmark": "cache_aware_batched_paged_prefill_cpu_fresh_process",
+  "claim_policy": "wall-clock improvement is claimed only when strict_verdict is pass",
+  "comparison": "Stage 14 sequential APC vs Stage 15 batched APC",
+  "config": {
+    "cv_limit": 0.1,
+    "repeats": 3,
+    "warmups": 1
+  },
+  "correctness_equivalent": true,
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.6",
+    "torch": "2.13.0+cpu",
+    "torch_num_threads_per_worker": 1
+  },
+  "implementation": "Python/PyTorch reference implementation; no fused kernel",
+  "model_call_reduction": true,
+  "schema_version": 1,
+  "strict_verdict": "fail",
+  "wall_clock_performance_improvement": false,
+  "workloads": {
+    "concurrent_same_prefix": {
+      "correctness_equivalent": true,
+      "model_call_reduction": true,
+      "strategies": {
+        "apc_batched": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 4.0,
+          "avoided_prefill_tokens": 0,
+          "batched_suffix_requests": 4,
+          "cache_aware_prefill_batches": 1,
+          "cache_aware_prefill_model_calls": 1,
+          "e2e_seconds": {
+            "cv": 0.0402705280228257,
+            "mad": 0.00024710013531148434,
+            "median": 0.006628700066357851,
+            "samples": [
+              0.006628700066357851,
+              0.006875800201669335,
+              0.006343399873003364
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 4,
+          "peak_rss_bytes": {
+            "cv": 0.00015424766723775985,
+            "mad": 4096.0,
+            "median": 222683136.0,
+            "samples": [
+              222683136.0,
+              222740480.0,
+              222679040.0
+            ]
+          },
+          "prefill_tokens_computed": 32,
+          "prefix_hit_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.040419056570193936,
+            "mad": 21.686095079474285,
+            "median": 603.4365652325865,
+            "samples": [
+              603.4365652325865,
+              581.7504701531122,
+              630.5766749820469
+            ]
+          },
+          "suffix_padded_tokens": 32,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            4
+          ],
+          "suffix_useful_tokens": 32,
+          "token_throughput_per_second": {
+            "cv": 0.040419056570193936,
+            "mad": 43.37219015894857,
+            "median": 1206.873130465173,
+            "samples": [
+              1206.873130465173,
+              1163.5009403062245,
+              1261.1533499640939
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.04292003199694786,
+            "mad": 1.680012824281955e-05,
+            "median": 0.0028681999542101936,
+            "samples": [
+              0.0030773000330011646,
+              0.002851399825967374,
+              0.0028681999542101936
+            ]
+          }
+        },
+        "apc_sequential": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 1.0,
+          "avoided_prefill_tokens": 0,
+          "batched_suffix_requests": 0,
+          "cache_aware_prefill_batches": 0,
+          "cache_aware_prefill_model_calls": 4,
+          "e2e_seconds": {
+            "cv": 0.023031544137004648,
+            "mad": 0.00012270011939108372,
+            "median": 0.0070344998966902494,
+            "samples": [
+              0.006837200140580535,
+              0.007157200016081333,
+              0.0070344998966902494
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 1,
+          "peak_rss_bytes": {
+            "cv": 0.0013700470850981313,
+            "mad": 45056.0,
+            "median": 222564352.0,
+            "samples": [
+              222060544.0,
+              222564352.0,
+              222609408.0
+            ]
+          },
+          "prefill_tokens_computed": 32,
+          "prefix_hit_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.023157003528577434,
+            "mad": 9.748293464783046,
+            "median": 568.6260656400052,
+            "samples": [
+              585.034797542195,
+              558.8777721752222,
+              568.6260656400052
+            ]
+          },
+          "suffix_padded_tokens": 32,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "suffix_useful_tokens": 32,
+          "token_throughput_per_second": {
+            "cv": 0.023157003528577434,
+            "mad": 19.496586929566092,
+            "median": 1137.2521312800104,
+            "samples": [
+              1170.06959508439,
+              1117.7555443504443,
+              1137.2521312800104
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.03502544662251729,
+            "mad": 3.769970504704763e-05,
+            "median": 0.001215400174273575,
+            "samples": [
+              0.001215400174273575,
+              0.0012530998793206225,
+              0.0011683501072395105
+            ]
+          }
+        }
+      },
+      "strict_verdict": "pass"
+    },
+    "exact_hits_mixed_with_suffix_hits": {
+      "correctness_equivalent": true,
+      "model_call_reduction": true,
+      "strategies": {
+        "apc_batched": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 2.0,
+          "avoided_prefill_tokens": 32,
+          "batched_suffix_requests": 4,
+          "cache_aware_prefill_batches": 2,
+          "cache_aware_prefill_model_calls": 2,
+          "e2e_seconds": {
+            "cv": 0.030436759933441533,
+            "mad": 1.6998965293169022e-06,
+            "median": 0.008173499954864383,
+            "samples": [
+              0.008611199911683798,
+              0.008171800058335066,
+              0.008173499954864383
+            ]
+          },
+          "exact_cache_hit_requests": 1,
+          "max_suffix_prefill_batch_size": 3,
+          "peak_rss_bytes": {
+            "cv": 0.0022805451111382945,
+            "mad": 323584.0,
+            "median": 222511104.0,
+            "samples": [
+              223182848.0,
+              222511104.0,
+              222187520.0
+            ]
+          },
+          "prefill_tokens_computed": 11,
+          "prefix_hit_tokens": 32,
+          "request_throughput_per_second": {
+            "cv": 0.0299111688873498,
+            "mad": 0.12725260889601486,
+            "median": 611.7330430795802,
+            "samples": [
+              580.6391735507068,
+              611.8602956884762,
+              611.7330430795802
+            ]
+          },
+          "suffix_padded_tokens": 11,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            3
+          ],
+          "suffix_useful_tokens": 11,
+          "token_throughput_per_second": {
+            "cv": 0.0299111688873498,
+            "mad": 0.2545052177920297,
+            "median": 1223.4660861591603,
+            "samples": [
+              1161.2783471014136,
+              1223.7205913769524,
+              1223.4660861591603
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.04346574152220384,
+            "mad": 3.869994529111763e-05,
+            "median": 0.004924300127058355,
+            "samples": [
+              0.0052821999417590965,
+              0.004885600181767237,
+              0.004924300127058355
+            ]
+          }
+        },
+        "apc_sequential": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 1.0,
+          "avoided_prefill_tokens": 32,
+          "batched_suffix_requests": 0,
+          "cache_aware_prefill_batches": 0,
+          "cache_aware_prefill_model_calls": 4,
+          "e2e_seconds": {
+            "cv": 0.013199771081954763,
+            "mad": 6.949994713068008e-05,
+            "median": 0.008496799971908331,
+            "samples": [
+              0.008647399954497814,
+              0.008496799971908331,
+              0.00842730002477765
+            ]
+          },
+          "exact_cache_hit_requests": 1,
+          "max_suffix_prefill_batch_size": 1,
+          "peak_rss_bytes": {
+            "cv": 0.0014824061861715308,
+            "mad": 319488.0,
+            "median": 222470144.0,
+            "samples": [
+              222470144.0,
+              222789632.0,
+              222130176.0
+            ]
+          },
+          "prefill_tokens_computed": 11,
+          "prefix_hit_tokens": 32,
+          "request_throughput_per_second": {
+            "cv": 0.01314161660365937,
+            "mad": 4.853003766892698,
+            "median": 588.4568327524167,
+            "samples": [
+              578.2084818916379,
+              588.4568327524167,
+              593.3098365193094
+            ]
+          },
+          "suffix_padded_tokens": 11,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "suffix_useful_tokens": 11,
+          "token_throughput_per_second": {
+            "cv": 0.01314161660365937,
+            "mad": 9.706007533785396,
+            "median": 1176.9136655048335,
+            "samples": [
+              1156.4169637832758,
+              1176.9136655048335,
+              1186.6196730386189
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.0303396617865329,
+            "mad": 8.900021233649441e-05,
+            "median": 0.004302399931191419,
+            "samples": [
+              0.004391400143527914,
+              0.004302399931191419,
+              0.004135799826600686
+            ]
+          }
+        }
+      },
+      "strict_verdict": "pass"
+    },
+    "low_reuse_random_prompts": {
+      "correctness_equivalent": true,
+      "model_call_reduction": true,
+      "strategies": {
+        "apc_batched": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 6.0,
+          "avoided_prefill_tokens": 0,
+          "batched_suffix_requests": 6,
+          "cache_aware_prefill_batches": 1,
+          "cache_aware_prefill_model_calls": 1,
+          "e2e_seconds": {
+            "cv": 0.09854028042835526,
+            "mad": 0.00030080019496381283,
+            "median": 0.008560700109228492,
+            "samples": [
+              0.008560700109228492,
+              0.008259899914264679,
+              0.009908500127494335
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 6,
+          "peak_rss_bytes": {
+            "cv": 0.002262210445599123,
+            "mad": 344064.0,
+            "median": 222371840.0,
+            "samples": [
+              222027776.0,
+              223019008.0,
+              222371840.0
+            ]
+          },
+          "prefill_tokens_computed": 48,
+          "prefix_hit_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.09401049931496594,
+            "mad": 25.523797790372214,
+            "median": 700.8772557669623,
+            "samples": [
+              700.8772557669623,
+              726.4010535573345,
+              605.5406895894426
+            ]
+          },
+          "suffix_padded_tokens": 48,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            6
+          ],
+          "suffix_useful_tokens": 48,
+          "token_throughput_per_second": {
+            "cv": 0.09401049931496594,
+            "mad": 51.04759558074443,
+            "median": 1401.7545115339246,
+            "samples": [
+              1401.7545115339246,
+              1452.802107114669,
+              1211.0813791788853
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.027722334691430844,
+            "mad": 2.3099826652748807e-05,
+            "median": 0.0034983998631510876,
+            "samples": [
+              0.0036558001301693743,
+              0.003475300036498339,
+              0.0034983998631510876
+            ]
+          }
+        },
+        "apc_sequential": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 1.0,
+          "avoided_prefill_tokens": 0,
+          "batched_suffix_requests": 0,
+          "cache_aware_prefill_batches": 0,
+          "cache_aware_prefill_model_calls": 6,
+          "e2e_seconds": {
+            "cv": 0.017816525335038667,
+            "mad": 9.849993512034416e-05,
+            "median": 0.009467200143262744,
+            "samples": [
+              0.0093687002081424,
+              0.009467200143262744,
+              0.009698799811303616
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 1,
+          "peak_rss_bytes": {
+            "cv": 0.0014553712417614537,
+            "mad": 294912.0,
+            "median": 222609408.0,
+            "samples": [
+              222314496.0,
+              222961664.0,
+              222609408.0
+            ]
+          },
+          "prefill_tokens_computed": 48,
+          "prefix_hit_tokens": 0,
+          "request_throughput_per_second": {
+            "cv": 0.017702853318144304,
+            "mad": 6.663252858291116,
+            "median": 633.7671021215128,
+            "samples": [
+              640.430354979804,
+              633.7671021215128,
+              618.6332450131828
+            ]
+          },
+          "suffix_padded_tokens": 48,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "suffix_useful_tokens": 48,
+          "token_throughput_per_second": {
+            "cv": 0.017702853318144304,
+            "mad": 13.326505716582233,
+            "median": 1267.5342042430257,
+            "samples": [
+              1280.860709959608,
+              1267.5342042430257,
+              1237.2664900263655
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.09579106426920647,
+            "mad": 3.645010246928603e-05,
+            "median": 0.0015244000820096512,
+            "samples": [
+              0.0014879499795403652,
+              0.0017686999635769187,
+              0.0015244000820096512
+            ]
+          }
+        }
+      },
+      "strict_verdict": "pass"
+    },
+    "mixed_prefix_lengths": {
+      "correctness_equivalent": true,
+      "model_call_reduction": true,
+      "strategies": {
+        "apc_batched": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 3.0,
+          "avoided_prefill_tokens": 24,
+          "batched_suffix_requests": 6,
+          "cache_aware_prefill_batches": 2,
+          "cache_aware_prefill_model_calls": 2,
+          "e2e_seconds": {
+            "cv": 0.024550624814844893,
+            "mad": 2.9100105166435242e-05,
+            "median": 0.009606200037524104,
+            "samples": [
+              0.010004600044339895,
+              0.009577099932357669,
+              0.009606200037524104
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 3,
+          "peak_rss_bytes": {
+            "cv": 0.000615063477804539,
+            "mad": 49152.0,
+            "median": 222822400.0,
+            "samples": [
+              222871552.0,
+              222613504.0,
+              222822400.0
+            ]
+          },
+          "prefill_tokens_computed": 36,
+          "prefix_hit_tokens": 24,
+          "request_throughput_per_second": {
+            "cv": 0.024213385655454396,
+            "mad": 1.8978424816853021,
+            "median": 624.5966122465253,
+            "samples": [
+              599.7241242436775,
+              626.4944547282106,
+              624.5966122465253
+            ]
+          },
+          "suffix_padded_tokens": 48,
+          "suffix_padding_waste_ratio": 0.25,
+          "suffix_prefill_batch_sizes": [
+            3,
+            3
+          ],
+          "suffix_useful_tokens": 36,
+          "token_throughput_per_second": {
+            "cv": 0.024213385655454396,
+            "mad": 3.7956849633706042,
+            "median": 1249.1932244930506,
+            "samples": [
+              1199.448248487355,
+              1252.9889094564212,
+              1249.1932244930506
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.01974402790354376,
+            "mad": 1.140008650837767e-05,
+            "median": 0.0048794499598663645,
+            "samples": [
+              0.005042049917441531,
+              0.004868049873357987,
+              0.0048794499598663645
+            ]
+          }
+        },
+        "apc_sequential": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 1.0,
+          "avoided_prefill_tokens": 24,
+          "batched_suffix_requests": 0,
+          "cache_aware_prefill_batches": 0,
+          "cache_aware_prefill_model_calls": 6,
+          "e2e_seconds": {
+            "cv": 0.03739617649074426,
+            "mad": 0.0002066998276859522,
+            "median": 0.010553300147876143,
+            "samples": [
+              0.010759999975562096,
+              0.010553300147876143,
+              0.010004600044339895
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 1,
+          "peak_rss_bytes": {
+            "cv": 0.0013743416506942073,
+            "mad": 32768.0,
+            "median": 222130176.0,
+            "samples": [
+              222097408.0,
+              222130176.0,
+              222642176.0
+            ]
+          },
+          "prefill_tokens_computed": 36,
+          "prefix_hit_tokens": 24,
+          "request_throughput_per_second": {
+            "cv": 0.03797866163975607,
+            "mad": 10.921714118725163,
+            "median": 568.542533229049,
+            "samples": [
+              557.6208191103239,
+              568.542533229049,
+              599.7241242436775
+            ]
+          },
+          "suffix_padded_tokens": 36,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "suffix_useful_tokens": 36,
+          "token_throughput_per_second": {
+            "cv": 0.03797866163975607,
+            "mad": 21.843428237450325,
+            "median": 1137.085066458098,
+            "samples": [
+              1115.2416382206477,
+              1137.085066458098,
+              1199.448248487355
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.06460291672193398,
+            "mad": 1.63998917517387e-05,
+            "median": 0.0043083499182413245,
+            "samples": [
+              0.004291950026489586,
+              0.004799750051328901,
+              0.0043083499182413245
+            ]
+          }
+        }
+      },
+      "strict_verdict": "pass"
+    },
+    "padding_pressure": {
+      "correctness_equivalent": true,
+      "model_call_reduction": true,
+      "strategies": {
+        "apc_batched": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 1.6666666666666667,
+          "avoided_prefill_tokens": 32,
+          "batched_suffix_requests": 5,
+          "cache_aware_prefill_batches": 3,
+          "cache_aware_prefill_model_calls": 3,
+          "e2e_seconds": {
+            "cv": 0.03233309607258376,
+            "mad": 0.00022849999368190765,
+            "median": 0.009223200147971511,
+            "samples": [
+              0.00886299996636808,
+              0.009451700141653419,
+              0.009223200147971511
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 2,
+          "peak_rss_bytes": {
+            "cv": 0.0029143123321630194,
+            "mad": 442368.0,
+            "median": 222818304.0,
+            "samples": [
+              222818304.0,
+              223260672.0,
+              221982720.0
+            ]
+          },
+          "prefill_tokens_computed": 23,
+          "prefix_hit_tokens": 32,
+          "request_throughput_per_second": {
+            "cv": 0.03257612687131468,
+            "mad": 13.105832965450077,
+            "median": 542.1111891515947,
+            "samples": [
+              564.143068822432,
+              529.0053561861446,
+              542.1111891515947
+            ]
+          },
+          "suffix_padded_tokens": 28,
+          "suffix_padding_waste_ratio": 0.17857142857142858,
+          "suffix_prefill_batch_sizes": [
+            1,
+            2,
+            2
+          ],
+          "suffix_useful_tokens": 23,
+          "token_throughput_per_second": {
+            "cv": 0.03257612687131468,
+            "mad": 26.211665930900153,
+            "median": 1084.2223783031893,
+            "samples": [
+              1128.286137644864,
+              1058.0107123722892,
+              1084.2223783031893
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.021006468372822346,
+            "mad": 8.680019545209087e-05,
+            "median": 0.004819300025583333,
+            "samples": [
+              0.004732499830131242,
+              0.004819300025583333,
+              0.0049347002057230985
+            ]
+          }
+        },
+        "apc_sequential": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 1.0,
+          "avoided_prefill_tokens": 32,
+          "batched_suffix_requests": 0,
+          "cache_aware_prefill_batches": 0,
+          "cache_aware_prefill_model_calls": 5,
+          "e2e_seconds": {
+            "cv": 0.04036101406812383,
+            "mad": 0.00028010038658976555,
+            "median": 0.009213900193572044,
+            "samples": [
+              0.009675099980086088,
+              0.009213900193572044,
+              0.008933799806982279
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 1,
+          "peak_rss_bytes": {
+            "cv": 0.001500087970212442,
+            "mad": 151552.0,
+            "median": 222683136.0,
+            "samples": [
+              222834688.0,
+              222195712.0,
+              222683136.0
+            ]
+          },
+          "prefill_tokens_computed": 23,
+          "prefix_hit_tokens": 32,
+          "request_throughput_per_second": {
+            "cv": 0.04000814079932445,
+            "mad": 17.013904572681554,
+            "median": 542.6583634461532,
+            "samples": [
+              516.790525192641,
+              542.6583634461532,
+              559.6722680188348
+            ]
+          },
+          "suffix_padded_tokens": 23,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "suffix_useful_tokens": 23,
+          "token_throughput_per_second": {
+            "cv": 0.04000814079932445,
+            "mad": 34.02780914536311,
+            "median": 1085.3167268923064,
+            "samples": [
+              1033.581050385282,
+              1085.3167268923064,
+              1119.3445360376695
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.05472913223420063,
+            "mad": 7.580011186860552e-05,
+            "median": 0.004244200186714612,
+            "samples": [
+              0.004612599964798066,
+              0.004168400074846006,
+              0.004244200186714612
+            ]
+          }
+        }
+      },
+      "strict_verdict": "fail"
+    },
+    "repeated_prefix_short_suffix": {
+      "correctness_equivalent": true,
+      "model_call_reduction": true,
+      "strategies": {
+        "apc_batched": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 2.5,
+          "avoided_prefill_tokens": 32,
+          "batched_suffix_requests": 5,
+          "cache_aware_prefill_batches": 2,
+          "cache_aware_prefill_model_calls": 2,
+          "e2e_seconds": {
+            "cv": 0.028126768296494378,
+            "mad": 3.8400059565901756e-05,
+            "median": 0.008974900003522635,
+            "samples": [
+              0.008974900003522635,
+              0.008564200019463897,
+              0.009013300063088536
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 4,
+          "peak_rss_bytes": {
+            "cv": 0.00029592643798309056,
+            "mad": 20480.0,
+            "median": 222494720.0,
+            "samples": [
+              222515200.0,
+              222392320.0,
+              222494720.0
+            ]
+          },
+          "prefill_tokens_computed": 12,
+          "prefix_hit_tokens": 32,
+          "request_throughput_per_second": {
+            "cv": 0.028579051781101993,
+            "mad": 2.373495728403441,
+            "median": 557.1092711938303,
+            "samples": [
+              557.1092711938303,
+              583.8256916742342,
+              554.7357754654269
+            ]
+          },
+          "suffix_padded_tokens": 12,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            4
+          ],
+          "suffix_useful_tokens": 12,
+          "token_throughput_per_second": {
+            "cv": 0.028579051781101993,
+            "mad": 4.746991456806882,
+            "median": 1114.2185423876606,
+            "samples": [
+              1114.2185423876606,
+              1167.6513833484685,
+              1109.4715509308537
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.028503456449678333,
+            "mad": 9.019975560274011e-05,
+            "median": 0.00552870007183589,
+            "samples": [
+              0.00552870007183589,
+              0.005314399953704801,
+              0.00561889982743863
+            ]
+          }
+        },
+        "apc_sequential": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 1.0,
+          "avoided_prefill_tokens": 32,
+          "batched_suffix_requests": 0,
+          "cache_aware_prefill_batches": 0,
+          "cache_aware_prefill_model_calls": 5,
+          "e2e_seconds": {
+            "cv": 0.07474600976258679,
+            "mad": 0.0004634000360965729,
+            "median": 0.00990439997985959,
+            "samples": [
+              0.00990439997985959,
+              0.010915399994701147,
+              0.009440999943763018
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 1,
+          "peak_rss_bytes": {
+            "cv": 0.00026564633368064607,
+            "mad": 32768.0,
+            "median": 222392320.0,
+            "samples": [
+              222310400.0,
+              222392320.0,
+              222425088.0
+            ]
+          },
+          "prefill_tokens_computed": 12,
+          "prefix_hit_tokens": 32,
+          "request_throughput_per_second": {
+            "cv": 0.07301837308828828,
+            "mad": 24.778778983624647,
+            "median": 504.82613890466916,
+            "samples": [
+              504.82613890466916,
+              458.068417321146,
+              529.6049178882938
+            ]
+          },
+          "suffix_padded_tokens": 12,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "suffix_useful_tokens": 12,
+          "token_throughput_per_second": {
+            "cv": 0.07301837308828828,
+            "mad": 49.557557967249295,
+            "median": 1009.6522778093383,
+            "samples": [
+              1009.6522778093383,
+              916.136834642292,
+              1059.2098357765876
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.07601233966169352,
+            "mad": 6.709992916851485e-05,
+            "median": 0.004802200011869398,
+            "samples": [
+              0.004802200011869398,
+              0.0054225996134922,
+              0.004735100082700883
+            ]
+          }
+        }
+      },
+      "strict_verdict": "pass"
+    },
+    "repeated_prefix_variable_suffix": {
+      "correctness_equivalent": true,
+      "model_call_reduction": true,
+      "strategies": {
+        "apc_batched": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 2.0,
+          "avoided_prefill_tokens": 24,
+          "batched_suffix_requests": 4,
+          "cache_aware_prefill_batches": 2,
+          "cache_aware_prefill_model_calls": 2,
+          "e2e_seconds": {
+            "cv": 0.022834095927567508,
+            "mad": 6.680004298686981e-05,
+            "median": 0.008542699972167611,
+            "samples": [
+              0.008246300043538213,
+              0.008542699972167611,
+              0.008609500015154481
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 3,
+          "peak_rss_bytes": {
+            "cv": 0.0001570588923771605,
+            "mad": 28672.0,
+            "median": 222818304.0,
+            "samples": [
+              222859264.0,
+              222789632.0,
+              222818304.0
+            ]
+          },
+          "prefill_tokens_computed": 15,
+          "prefix_hit_tokens": 24,
+          "request_throughput_per_second": {
+            "cv": 0.023099694798217326,
+            "mad": 3.6329853648875314,
+            "median": 468.2360393121762,
+            "samples": [
+              485.06602705226493,
+              468.2360393121762,
+              464.6030539472887
+            ]
+          },
+          "suffix_padded_tokens": 20,
+          "suffix_padding_waste_ratio": 0.25,
+          "suffix_prefill_batch_sizes": [
+            1,
+            3
+          ],
+          "suffix_useful_tokens": 15,
+          "token_throughput_per_second": {
+            "cv": 0.023099694798217326,
+            "mad": 7.265970729775063,
+            "median": 936.4720786243524,
+            "samples": [
+              970.1320541045299,
+              936.4720786243524,
+              929.2061078945774
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.056176570574092845,
+            "mad": 0.00011679995835770212,
+            "median": 0.005726200062565265,
+            "samples": [
+              0.005248599918077598,
+              0.0058430000209229675,
+              0.005726200062565265
+            ]
+          }
+        },
+        "apc_sequential": {
+          "all_resources_released": true,
+          "average_suffix_prefill_batch_size": 1.0,
+          "avoided_prefill_tokens": 24,
+          "batched_suffix_requests": 0,
+          "cache_aware_prefill_batches": 0,
+          "cache_aware_prefill_model_calls": 4,
+          "e2e_seconds": {
+            "cv": 0.0391981763245645,
+            "mad": 0.00024010008201003075,
+            "median": 0.00778559991158545,
+            "samples": [
+              0.008025699993595481,
+              0.00778559991158545,
+              0.007422700058668852
+            ]
+          },
+          "exact_cache_hit_requests": 0,
+          "max_suffix_prefill_batch_size": 1,
+          "peak_rss_bytes": {
+            "cv": 0.0009374926116887472,
+            "mad": 53248.0,
+            "median": 222445568.0,
+            "samples": [
+              222445568.0,
+              222392320.0,
+              222777344.0
+            ]
+          },
+          "prefill_tokens_computed": 15,
+          "prefix_hit_tokens": 24,
+          "request_throughput_per_second": {
+            "cv": 0.03953231860408199,
+            "mad": 15.370121335615636,
+            "median": 513.7690152877949,
+            "samples": [
+              498.39889395217926,
+              513.7690152877949,
+              538.887462565386
+            ]
+          },
+          "suffix_padded_tokens": 15,
+          "suffix_padding_waste_ratio": 0.0,
+          "suffix_prefill_batch_sizes": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "suffix_useful_tokens": 15,
+          "token_throughput_per_second": {
+            "cv": 0.03953231860408199,
+            "mad": 30.74024267123127,
+            "median": 1027.5380305755898,
+            "samples": [
+              996.7977879043585,
+              1027.5380305755898,
+              1077.774925130772
+            ]
+          },
+          "ttft_seconds": {
+            "cv": 0.05056346918116602,
+            "mad": 2.985005256590182e-05,
+            "median": 0.004039050079747584,
+            "samples": [
+              0.0043862002204977674,
+              0.004009200027181682,
+              0.004039050079747584
+            ]
+          }
+        }
+      },
+      "strict_verdict": "fail"
+    }
+  }
+}

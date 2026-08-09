@@ -40,3 +40,6 @@ docs/results/paged-attention/** text eol=lf
 
 # Stage 14 Automatic Prefix Caching evidence binds exact UTF-8/LF checkout bytes.
 docs/results/automatic-prefix-caching/** text eol=lf
+
+# Stage 15 cache-aware batched prefill evidence binds exact UTF-8/LF checkout bytes.
+docs/results/cache-aware-batched-prefill/** text eol=lf

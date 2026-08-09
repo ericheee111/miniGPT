@@ -1,0 +1,19 @@
+{
+  "average_suffix_prefill_batch_size": 3.0,
+  "avoided_prefill_tokens": 28,
+  "batched_model_calls": 2,
+  "exact_cache_hit_requests": 1,
+  "fake_batching_guard_passed": true,
+  "max_suffix_prefill_batch_size": 4,
+  "model_call_reduction": 4,
+  "schema_version": 1,
+  "sequential_model_calls": 6,
+  "stage": "15",
+  "suffix_padded_tokens": 28,
+  "suffix_padding_waste_ratio": 0.25,
+  "suffix_prefill_batch_sizes": [
+    2,
+    4
+  ],
+  "suffix_useful_tokens": 21
+}

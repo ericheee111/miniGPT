@@ -1,0 +1,7 @@
+{
+  "command": "python -m pytest -q tests/test_prefix_serving.py tests/test_paged_serving.py tests/test_http_lifecycle.py tests/test_engine_runner.py tests/test_cache_aware_prefill_benchmark.py",
+  "exit_code": 0,
+  "schema_version": 1,
+  "stderr": "",
+  "stdout": "....................................                                     [100%]\n36 passed in 2.33s\n"
+}

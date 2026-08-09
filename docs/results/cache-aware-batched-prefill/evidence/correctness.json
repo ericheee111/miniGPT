@@ -1,0 +1,66 @@
+{
+  "active_resources_released": true,
+  "cached_prefix_transformer_work_skipped": true,
+  "checked_contracts": [
+    "generated_tokens",
+    "rng_state",
+    "request_terminal_states_and_cancellation",
+    "fifo_admission_order",
+    "prefix_identity_and_logical_events",
+    "terminal_cache_ownership"
+  ],
+  "config": "serving_cache_aware_prefill.yaml",
+  "correctness_sha256": {
+    "apc_batched": "c19d40d1af0ab5231ef3d821dda655e950aee878d1fd5bf102003d73c58d5cc8",
+    "apc_sequential": "c19d40d1af0ab5231ef3d821dda655e950aee878d1fd5bf102003d73c58d5cc8"
+  },
+  "equivalent": true,
+  "exact_hits_zero_model_calls": true,
+  "historical_kv_materialized": false,
+  "model_call_reduction": 4,
+  "overflow_fallback_observed": true,
+  "schema_version": 1,
+  "stage": "15",
+  "strategies": {
+    "apc_batched": {
+      "average_suffix_prefill_batch_size": 3.0,
+      "avoided_prefill_tokens": 28,
+      "batched_suffix_requests": 6,
+      "cache_aware_prefill_batches": 2,
+      "exact_cache_hit_requests": 1,
+      "max_suffix_prefill_batch_size": 4,
+      "model_calls": 2,
+      "prefill_tokens_computed": 21,
+      "prefix_hit_tokens": 28,
+      "suffix_padded_tokens": 28,
+      "suffix_padding_waste_ratio": 0.25,
+      "suffix_prefill_batch_sizes": [
+        2,
+        4
+      ],
+      "suffix_useful_tokens": 21
+    },
+    "apc_sequential": {
+      "average_suffix_prefill_batch_size": 1.0,
+      "avoided_prefill_tokens": 28,
+      "batched_suffix_requests": 0,
+      "cache_aware_prefill_batches": 0,
+      "exact_cache_hit_requests": 1,
+      "max_suffix_prefill_batch_size": 1,
+      "model_calls": 6,
+      "prefill_tokens_computed": 21,
+      "prefix_hit_tokens": 28,
+      "suffix_padded_tokens": 21,
+      "suffix_padding_waste_ratio": 0.0,
+      "suffix_prefill_batch_sizes": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "suffix_useful_tokens": 21
+    }
+  }
+}
