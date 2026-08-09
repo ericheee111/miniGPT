@@ -11,6 +11,7 @@ from minigpt.serving_simulator import (
     InvalidSimulatorConfigError,
     SimulatorExecutor,
     load_simulator_config,
+    run_cache_aware_prefill_equivalence,
     run_cache_backend_equivalence,
     run_executor_equivalence,
     run_paged_attention_equivalence,
@@ -256,6 +257,7 @@ def test_continuous_simulator_writes_prefill_batch_events_and_metrics(tmp_path: 
     assert {path.name for path in result.output_paths} == {
         "events.jsonl",
         "prefill_events.jsonl",
+        "prefill_observations.jsonl",
         "requests.csv",
         "summary.json",
         "timeline.md",
@@ -270,6 +272,100 @@ def test_continuous_simulator_writes_prefill_batch_events_and_metrics(tmp_path: 
     assert event_lines[1]["padded_prompt_tokens"] == 4
     assert result.metrics.max_prefill_batch_size == 2
     assert result.metrics.prompt_padding_waste_ratio == 0.0
+
+
+def test_cache_aware_prefill_simulator_reports_real_suffix_batch_structure(
+    tmp_path: Path,
+) -> None:
+    # Given: one prefix primer followed by four same-length cache-hit suffix requests.
+    document = config_document()
+    document.update(
+        {
+            "executor": "paged_attention",
+            "kv_cache_backend": "paged",
+            "kv_cache": {"block_tokens": 2, "num_blocks": 24},
+            "prefix_cache": {"enabled": True},
+            "apc_prefill_strategy": "batched",
+            "prefill": {
+                "max_batch_size": 8,
+                "max_batch_tokens": 64,
+                "max_padding_ratio": 0.25,
+            },
+            "max_ticks": 50,
+            "model": {
+                "block_size": 8,
+                "n_layer": 1,
+                "n_head": 1,
+                "n_embd": 8,
+                "dropout": 0.0,
+                "bias": False,
+            },
+            "scheduler": {"max_active_requests": 4, "max_cached_tokens": 32},
+        }
+    )
+    template = cast("list[dict[str, object]]", document["requests"])[0]
+    requests: list[dict[str, object]] = [
+        {
+            **template,
+            "request_id": "prime",
+            "prompt_tokens": [1, 2, 3, 4],
+            "max_new_tokens": 1,
+        }
+    ]
+    requests.extend(
+        {
+            **template,
+            "request_id": f"suffix-{index}",
+            "arrival_time": 10.0,
+            "prompt_tokens": [1, 2, 3, 4, suffix],
+            "max_new_tokens": 1,
+            "seed": 200 + index,
+        }
+        for index, suffix in enumerate((5, 6, 7, 8))
+    )
+    document["requests"] = requests
+    config_path = tmp_path / "stage15.json"
+    write_config(config_path, document)
+
+    # When: the Stage 15 simulator executes the configured batched APC mode.
+    config = load_simulator_config(config_path)
+    result = run_simulation(config, output_dir=tmp_path / "stage15")
+    summary = cast(
+        "dict[str, object]",
+        json.loads((result.output_dir / "summary.json").read_text(encoding="utf-8")),
+    )
+    observations = [
+        cast("dict[str, object]", json.loads(line))
+        for line in (result.output_dir / "prefill_observations.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    # Then: direct observations prove a size-four suffix batch and two total model calls.
+    assert summary["apc_prefill_strategy"] == "batched"
+    assert summary["cache_aware_prefill_batches"] == 2
+    assert summary["cache_aware_prefill_model_calls"] == 2
+    assert summary["suffix_prefill_batch_sizes"] == [1, 4]
+    assert summary["average_suffix_prefill_batch_size"] == 2.5
+    assert summary["max_suffix_prefill_batch_size"] == 4
+    assert summary["suffix_useful_tokens"] == 8
+    assert summary["suffix_padded_tokens"] == 8
+    assert summary["suffix_padding_waste_ratio"] == 0.0
+    assert summary["batched_suffix_requests"] == 5
+    assert summary["prefix_hit_tokens"] == 16
+    assert summary["avoided_prefill_tokens"] == 16
+    assert observations[-1]["execution_mode"] == "batched_apc_suffix"
+    assert observations[-1]["batch_size"] == 4
+    assert observations[-1]["model_calls"] == 1
+
+    # Then: the explicit sequential reference has identical logic but five model calls vs two.
+    comparison = run_cache_aware_prefill_equivalence(
+        config,
+        output_dir=tmp_path / "stage15-equivalence",
+    )
+    assert comparison.equivalent
+    assert sum(item.model_calls for item in comparison.sequential.prefill_observations) == 5
+    assert sum(item.model_calls for item in comparison.batched.prefill_observations) == 2
 
 
 def test_paged_backend_matches_dense_logical_contracts(tmp_path: Path) -> None:

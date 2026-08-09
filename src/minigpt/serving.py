@@ -1930,6 +1930,16 @@ class EngineMetrics:
     prefill_executor_time_seconds: float
     prefill_model_execution_time_seconds: float
     prefill_batch_assembly_scatter_time_seconds: float
+    cache_aware_prefill_batches: int
+    cache_aware_prefill_model_calls: int
+    suffix_prefill_batch_sizes: tuple[int, ...]
+    average_suffix_prefill_batch_size: float
+    max_suffix_prefill_batch_size: int
+    suffix_useful_tokens: int
+    suffix_padded_tokens: int
+    suffix_padding_waste_ratio: float
+    exact_cache_hit_requests: int
+    batched_suffix_requests: int
     prefix_cache_enabled: bool
     prefix_cache_blocks: int
     evictable_blocks: int
@@ -2175,6 +2185,37 @@ class ServingEngine:
         prompt_padding_waste_ratio = (
             prompt_padding_waste / padded_prompt_tokens if padded_prompt_tokens > 0 else 0.0
         )
+        apc_observations = tuple(
+            observation
+            for observation in prefill_observations
+            if observation.execution_mode
+            in {
+                PrefillExecutionMode.SEQUENTIAL_APC_SUFFIX,
+                PrefillExecutionMode.BATCHED_APC_SUFFIX,
+                PrefillExecutionMode.EXACT_CACHE_HIT,
+            }
+        )
+        suffix_observations = tuple(
+            observation
+            for observation in apc_observations
+            if observation.execution_mode
+            in {
+                PrefillExecutionMode.SEQUENTIAL_APC_SUFFIX,
+                PrefillExecutionMode.BATCHED_APC_SUFFIX,
+            }
+        )
+        batched_suffix_observations = tuple(
+            observation
+            for observation in suffix_observations
+            if observation.execution_mode is PrefillExecutionMode.BATCHED_APC_SUFFIX
+        )
+        suffix_batch_sizes = tuple(observation.batch_size for observation in suffix_observations)
+        suffix_useful_tokens = sum(
+            observation.useful_prompt_tokens for observation in suffix_observations
+        )
+        suffix_padded_tokens = sum(
+            observation.padded_prompt_tokens for observation in suffix_observations
+        )
         cache_metrics = (
             self._paged_cache_pool.metrics()
             if self._paged_cache_pool is not None
@@ -2251,6 +2292,30 @@ class ServingEngine:
             prefill_batch_assembly_scatter_time_seconds=sum(
                 observation.assembly_seconds + observation.scatter_seconds
                 for observation in prefill_observations
+            ),
+            cache_aware_prefill_batches=len(batched_suffix_observations),
+            cache_aware_prefill_model_calls=sum(
+                observation.model_calls for observation in apc_observations
+            ),
+            suffix_prefill_batch_sizes=suffix_batch_sizes,
+            average_suffix_prefill_batch_size=(
+                sum(suffix_batch_sizes) / len(suffix_batch_sizes) if suffix_batch_sizes else 0.0
+            ),
+            max_suffix_prefill_batch_size=max(suffix_batch_sizes, default=0),
+            suffix_useful_tokens=suffix_useful_tokens,
+            suffix_padded_tokens=suffix_padded_tokens,
+            suffix_padding_waste_ratio=(
+                (suffix_padded_tokens - suffix_useful_tokens) / suffix_padded_tokens
+                if suffix_padded_tokens
+                else 0.0
+            ),
+            exact_cache_hit_requests=sum(
+                observation.batch_size
+                for observation in apc_observations
+                if observation.execution_mode is PrefillExecutionMode.EXACT_CACHE_HIT
+            ),
+            batched_suffix_requests=sum(
+                observation.batch_size for observation in batched_suffix_observations
             ),
             prefix_cache_enabled=(
                 self._paged_cache_pool.prefix_cache_enabled
