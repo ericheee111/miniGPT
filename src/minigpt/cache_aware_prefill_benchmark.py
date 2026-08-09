@@ -227,6 +227,7 @@ def run_cache_aware_prefill_worker(
                     prompt_tokens=prompt,
                     max_new_tokens=2,
                     seed=1500 + phase_index * 100 + request_index,
+                    arrival_time=time.perf_counter() - origin,
                 )
             )
         for _ in range(128):
