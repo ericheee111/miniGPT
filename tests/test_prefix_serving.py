@@ -13,10 +13,12 @@ from minigpt.paged_kv_cache import (
     PrefixCacheNamespace,
 )
 from minigpt.serving import (
+    APCPrefillStrategy,
     EngineConfig,
     EngineEventType,
     GenerationRequest,
     PagedAttentionExecutor,
+    PrefillBatchConfig,
     RequestStatus,
     SchedulerConfig,
     ServingEngine,
@@ -24,7 +26,11 @@ from minigpt.serving import (
 from minigpt.settings import GPTConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import pytest
+
+    from minigpt.layers import KVCache, PagedKVCacheView
 
 
 @final
@@ -71,7 +77,14 @@ def _namespace(model: GPT) -> PrefixCacheNamespace:
     )
 
 
-def _engine(model: GPT, *, prefix_cache: bool, blocks: int = 16) -> ServingEngine:
+def _engine(
+    model: GPT,
+    *,
+    prefix_cache: bool,
+    blocks: int = 16,
+    prefix_prefill_strategy: APCPrefillStrategy = APCPrefillStrategy.BATCHED,
+    prefill_config: PrefillBatchConfig | None = None,
+) -> ServingEngine:
     paged = PagedKVCacheConfig(block_tokens=2, num_blocks=blocks)
     pool = PagedKVCachePool.from_model(
         paged,
@@ -81,6 +94,8 @@ def _engine(model: GPT, *, prefix_cache: bool, blocks: int = 16) -> ServingEngin
     executor = PagedAttentionExecutor(
         model,
         pool,
+        prefill_config=prefill_config,
+        prefix_prefill_strategy=prefix_prefill_strategy,
         clock=StepClock(0.001),
         telemetry_clock=StepClock(0.0001),
     )
@@ -138,6 +153,7 @@ def test_exact_repeated_prompt_skips_all_prefill_and_preserves_tokens_and_rng(
         raise AssertionError(reason)
 
     monkeypatch.setattr(model, "prefill_with_all_logits", forbid_full_prefix_recompute)
+    monkeypatch.setattr(model, "prefill_paged_batch", forbid_full_prefix_recompute)
 
     # When: the same prompt and seed run after its full blocks are resident.
     cached.submit(_request("hit", prompt))
@@ -155,6 +171,188 @@ def test_exact_repeated_prompt_skips_all_prefill_and_preserves_tokens_and_rng(
     assert metrics.avoided_prefill_tokens >= len(prompt)
     assert metrics.prefix_hit_requests == 1
     assert any(event.event_type is EngineEventType.PREFIX_HIT for event in cached.events)
+
+
+def test_four_same_length_apc_suffixes_use_one_batched_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: four admitted requests reuse the same canonical four-token prefix.
+    model = _model()
+    engine = _engine(model, prefix_cache=True)
+    engine.submit(_request("prime", (1, 2, 3, 4), max_new_tokens=1))
+    _run(engine)
+    model_calls = 0
+    original = model.prefill_paged_batch
+
+    def count_model_call(
+        token_ids: torch.Tensor,
+        new_token_lengths: torch.Tensor,
+        cache_views: Sequence[PagedKVCacheView | None],
+        past_lengths: torch.Tensor,
+    ) -> tuple[torch.Tensor, KVCache]:
+        nonlocal model_calls
+        model_calls += 1
+        return original(token_ids, new_token_lengths, cache_views, past_lengths)
+
+    monkeypatch.setattr(model, "prefill_paged_batch", count_model_call)
+
+    def reject_materialize(_request_id: str) -> Never:
+        reason = "batched APC suffix prefill materialized historical K/V"
+        raise AssertionError(reason)
+
+    pool = engine.paged_cache_pool
+    assert pool is not None
+    monkeypatch.setattr(pool, "materialize", reject_materialize)
+    for index, suffix in enumerate((5, 6, 7, 8)):
+        engine.submit(
+            _request(
+                f"batch-{index}",
+                (1, 2, 3, 4, suffix),
+                seed=index + 1,
+                max_new_tokens=1,
+            )
+        )
+
+    # When: one tick admits, then the next prefill step evaluates all four suffix rows.
+    engine.tick(now=1.0)
+    engine.tick(now=1.01)
+
+    # Then: the Stage 15 path performs one real batched model call, not four wrapped calls.
+    assert model_calls == 1
+    observation = engine.prefill_observations[-1]
+    assert observation.batch_size == 4
+    assert observation.useful_prompt_tokens == 4
+    assert observation.padded_prompt_tokens == 4
+    assert observation.model_calls == 1
+    assert observation.execution_mode.value == "batched_apc_suffix"
+    pool.verify_invariants()
+
+
+def test_batched_apc_matches_sequential_for_mixed_hits_lengths_and_rng() -> None:
+    # Given: equivalent sequential and batched APC engines with one resident prefix.
+    model = _model()
+    sequential = _engine(
+        model,
+        prefix_cache=True,
+        prefix_prefill_strategy=APCPrefillStrategy.SEQUENTIAL,
+        prefill_config=PrefillBatchConfig(max_padding_ratio=1.0),
+    )
+    batched = _engine(
+        model,
+        prefix_cache=True,
+        prefix_prefill_strategy=APCPrefillStrategy.BATCHED,
+        prefill_config=PrefillBatchConfig(max_padding_ratio=1.0),
+    )
+    for engine in (sequential, batched):
+        engine.submit(_request("prime", (1, 2, 3, 4), seed=5, max_new_tokens=1))
+        _run(engine)
+    requests = (
+        _request("exact", (1, 2, 3, 4), seed=11),
+        _request("short", (1, 2, 3, 4, 5), seed=13),
+        _request("long", (1, 2, 3, 4, 6, 7), seed=17),
+        _request("miss", (9, 10, 11), seed=19),
+    )
+
+    # When: both strategies run the same mixed FIFO admission set to completion.
+    for request in requests:
+        sequential.submit(request)
+        batched.submit(request)
+    _run(sequential, start=100)
+    _run(batched, start=100)
+
+    # Then: batch composition cannot couple per-request tokens, RNG, or terminal state.
+    for request in requests:
+        expected = sequential.request_state(request.request_id)
+        actual = batched.request_state(request.request_id)
+        assert actual.status is expected.status
+        assert actual.generated_tokens == expected.generated_tokens
+        assert torch.equal(actual.generator.get_state(), expected.generator.get_state())
+        assert actual.prefix_hit_tokens == expected.prefix_hit_tokens
+    observations = batched.prefill_observations
+    exact = next(item for item in observations if item.request_ids == ("exact",))
+    suffix_batch = next(item for item in observations if "short" in item.request_ids)
+    assert exact.model_calls == 0
+    assert exact.execution_mode.value == "exact_cache_hit"
+    assert suffix_batch.request_ids == ("short", "long", "miss")
+    assert suffix_batch.model_calls == 1
+    assert suffix_batch.useful_prompt_tokens == 6
+    assert suffix_batch.padded_prompt_tokens == 9
+    for engine in (sequential, batched):
+        assert engine.paged_cache_pool is not None
+        engine.paged_cache_pool.verify_invariants()
+
+
+def test_batched_apc_model_failure_fails_whole_batch_without_pool_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: two prefix-hit suffix rows and a failure at the batched model boundary.
+    model = _model()
+    engine = _engine(model, prefix_cache=True)
+    engine.submit(_request("prime", (1, 2, 3, 4), max_new_tokens=1))
+    _run(engine)
+    pool = engine.paged_cache_pool
+    assert pool is not None
+
+    def fail_batch(
+        _token_ids: torch.Tensor,
+        _new_token_lengths: torch.Tensor,
+        _cache_views: Sequence[PagedKVCacheView | None],
+        _past_lengths: torch.Tensor,
+    ) -> Never:
+        reason = "injected cache-aware batch failure"
+        raise RuntimeError(reason)
+
+    monkeypatch.setattr(model, "prefill_paged_batch", fail_batch)
+    for request_id, suffix in (("first", 5), ("second", 6)):
+        engine.submit(_request(request_id, (1, 2, 3, 4, suffix), max_new_tokens=1))
+
+    # When: admission completes and the shared model call fails before any suffix scatter.
+    engine.tick(now=1.0)
+    engine.tick(now=1.01)
+
+    # Then: both rows fail and request refs/reservations/private ownership are released.
+    for request_id in ("first", "second"):
+        state = engine.request_state(request_id)
+        assert state.status is RequestStatus.FAILED
+        assert state.failure_reason == "RuntimeError: injected cache-aware batch failure"
+    observation = engine.prefill_observations[-1]
+    assert observation.batch_failed
+    assert observation.model_calls == 1
+    metrics = pool.metrics()
+    assert metrics.active_shared_references == 0
+    assert metrics.private_blocks == 0
+    assert metrics.reserved_blocks == 0
+    assert metrics.allocated_blocks == metrics.prefix_cache_blocks
+    pool.verify_invariants()
+
+
+def test_concurrent_batched_misses_canonicalize_duplicate_prompt_blocks() -> None:
+    # Given: two concurrent misses with the same complete four-token prompt.
+    engine = _engine(_model(), prefix_cache=True)
+    for request_id, seed in (("first", 23), ("second", 29)):
+        engine.submit(_request(request_id, (1, 2, 3, 4), seed=seed, max_new_tokens=1))
+
+    # When: both rows prefill together and owner-thread promotion runs in FIFO order.
+    engine.tick(now=0.0)
+    engine.tick(now=0.01)
+
+    # Then: one canonical chain survives; the duplicate private chain is released.
+    assert all(
+        engine.request_state(request_id).status is RequestStatus.FINISHED
+        for request_id in ("first", "second")
+    )
+    observation = engine.prefill_observations[-1]
+    assert observation.request_ids == ("first", "second")
+    assert observation.model_calls == 1
+    pool = engine.paged_cache_pool
+    assert pool is not None
+    metrics = pool.metrics()
+    assert metrics.prefix_cache_blocks == 2
+    assert metrics.allocated_blocks == 2
+    assert metrics.active_shared_references == 0
+    assert metrics.private_blocks == 0
+    assert metrics.reserved_blocks == 0
+    pool.verify_invariants()
 
 
 def test_common_prefix_concurrent_requests_share_ids_and_release_refs_independently() -> None:

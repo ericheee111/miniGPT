@@ -15,7 +15,7 @@ from torch import Tensor
 from torch.nn import functional
 from typing_extensions import override
 
-from minigpt.layers import KVCache, LayerKVCache
+from minigpt.layers import KVCache, LayerKVCache, PagedKVCacheView
 from minigpt.paged_kv_cache import (
     KVCacheBackend,
     PagedKVCacheConfig,
@@ -324,6 +324,23 @@ class DecodeBatchObservation:
     batch_failed: bool
 
 
+class APCPrefillStrategy(StrEnum):
+    """Select the Stage 14 reference or Stage 15 batched APC prefill path."""
+
+    SEQUENTIAL = "sequential"
+    BATCHED = "batched"
+
+
+class PrefillExecutionMode(StrEnum):
+    """Identify the model-work path represented by a prefill observation."""
+
+    FULL_DENSE = "full_dense"
+    SEQUENTIAL_APC_SUFFIX = "sequential_apc_suffix"
+    BATCHED_APC_SUFFIX = "batched_apc_suffix"
+    EXACT_CACHE_HIT = "exact_cache_hit"
+    OVERFLOW_DENSE_REBUILD = "overflow_dense_rebuild"
+
+
 @dataclass(frozen=True, slots=True)
 class PrefillBatchConfig:
     """Bound deterministic FIFO prompt grouping and dense padding."""
@@ -357,6 +374,10 @@ class PrefillBatchObservation:
     started_at: float
     finished_at: float
     batch_failed: bool
+    execution_mode: PrefillExecutionMode = PrefillExecutionMode.FULL_DENSE
+    model_calls: int = 1
+    prefix_hit_tokens: int = 0
+    avoided_prefill_tokens: int = 0
 
     @property
     def padding_waste_ratio(self) -> float:
@@ -534,6 +555,7 @@ class ReferenceExecutor:
                 model_seconds=model_seconds,
                 scatter_seconds=scatter_seconds,
                 batch_failed=True,
+                used_fallback=used_fallback,
             )
             return ExecutionResult.failure(
                 state.request.request_id,
@@ -551,6 +573,7 @@ class ReferenceExecutor:
             model_seconds=model_seconds,
             scatter_seconds=scatter_seconds,
             batch_failed=False,
+            used_fallback=used_fallback,
         )
         return ExecutionResult.success(
             request_id=state.request.request_id,
@@ -573,6 +596,7 @@ class ReferenceExecutor:
         model_seconds: float,
         scatter_seconds: float,
         batch_failed: bool,
+        used_fallback: bool,
     ) -> None:
         observation = PrefillBatchObservation(
             request_ids=(state.request.request_id,),
@@ -586,6 +610,11 @@ class ReferenceExecutor:
             started_at=logical_start,
             finished_at=logical_start + elapsed,
             batch_failed=batch_failed,
+            execution_mode=(
+                PrefillExecutionMode.OVERFLOW_DENSE_REBUILD
+                if used_fallback
+                else PrefillExecutionMode.FULL_DENSE
+            ),
         )
         self._prefill_observations.append(observation)
         self._prefill_events.extend(
@@ -1194,12 +1223,13 @@ class ContinuousExecutor:
 class PagedAttentionExecutor:
     """Batch decode directly over Stage 13A physical block views."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         model: GPT,
         paged_cache_pool: PagedKVCachePool,
         *,
         prefill_config: PrefillBatchConfig | None = None,
+        prefix_prefill_strategy: APCPrefillStrategy = APCPrefillStrategy.BATCHED,
         clock: Clock = time.perf_counter,
         telemetry_clock: Clock = time.perf_counter,
     ) -> None:
@@ -1214,9 +1244,11 @@ class PagedAttentionExecutor:
         self.paged_cache_pool = paged_cache_pool
         self._clock = clock
         self._telemetry_clock = telemetry_clock
+        self.prefill_config = prefill_config or PrefillBatchConfig()
+        self.prefix_prefill_strategy = prefix_prefill_strategy
         self._prefill = ContinuousExecutor(
             model,
-            prefill_config=prefill_config,
+            prefill_config=self.prefill_config,
             clock=clock,
             telemetry_clock=telemetry_clock,
         )
@@ -1254,8 +1286,228 @@ class PagedAttentionExecutor:
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Reuse Stage 11B dense batched prefill before scattering into blocks."""
         if self.paged_cache_pool.prefix_cache_enabled:
+            if self.prefix_prefill_strategy is APCPrefillStrategy.BATCHED:
+                return self._prefill_prefix_cache_batched(requests)
             return tuple(self._prefill_prefix_cache_one(state) for state in requests)
         return self._prefill.prefill(requests)
+
+    def _prefill_prefix_cache_batched(
+        self,
+        requests: Sequence[RequestState],
+    ) -> tuple[ExecutionResult, ...]:
+        results: dict[str, ExecutionResult] = {}
+        suffix_requests: list[RequestState] = []
+        for state in requests:
+            prompt_length = len(state.request.prompt_tokens)
+            invalid_prefix = not 0 <= state.prefix_hit_tokens <= prompt_length
+            invalid_prompt = self._validate_prefix_prefill_state(state) is not None
+            if invalid_prefix or invalid_prompt or state.prefix_hit_tokens == prompt_length:
+                result = self._prefill_prefix_cache_one(state)
+                results[result.request_id] = result
+            else:
+                suffix_requests.append(state)
+        for batch in self._prefix_batches(suffix_requests):
+            for result in self._prefill_prefix_cache_batch(batch):
+                results[result.request_id] = result
+        return tuple(results[state.request.request_id] for state in requests)
+
+    def _prefix_batches(
+        self,
+        requests: Sequence[RequestState],
+    ) -> tuple[tuple[RequestState, ...], ...]:
+        batches: list[tuple[RequestState, ...]] = []
+        current: list[RequestState] = []
+        for state in requests:
+            if not current:
+                current.append(state)
+                continue
+            candidate = [*current, state]
+            lengths = [
+                len(item.request.prompt_tokens) - item.prefix_hit_tokens for item in candidate
+            ]
+            padded = len(candidate) * max(lengths)
+            useful = sum(lengths)
+            waste_ratio = (padded - useful) / padded
+            config = self.prefill_config
+            if (
+                len(candidate) <= config.max_batch_size
+                and padded <= config.max_batch_tokens
+                and waste_ratio <= config.max_padding_ratio
+            ):
+                current.append(state)
+            else:
+                batches.append(tuple(current))
+                current = [state]
+        if current:
+            batches.append(tuple(current))
+        return tuple(batches)
+
+    def _validate_prefix_prefill_state(self, state: RequestState) -> str | None:
+        tokens = state.request.prompt_tokens
+        if not tokens:
+            return "prefill prompt must be non-empty"
+        if len(tokens) > self.block_size:
+            return f"prefill prompt length {len(tokens)} exceeds block_size {self.block_size}"
+        if any(type(token) is not int for token in tokens):
+            return "prefill prompt tokens must be integers"
+        if any(token < 0 or token >= self._model.config.vocab_size for token in tokens):
+            return "prefill prompt token is outside model vocabulary"
+        return None
+
+    def _prefill_prefix_cache_batch(
+        self,
+        requests: Sequence[RequestState],
+    ) -> tuple[ExecutionResult, ...]:
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        request_ids = tuple(state.request.request_id for state in requests)
+        computed_lengths = tuple(
+            len(state.request.prompt_tokens) - state.prefix_hit_tokens for state in requests
+        )
+        prefix_tokens = sum(state.prefix_hit_tokens for state in requests)
+        useful_tokens = sum(computed_lengths)
+        padded_tokens = len(requests) * max(computed_lengths, default=0)
+        assembly_seconds = 0.0
+        model_seconds = 0.0
+        scatter_seconds = 0.0
+        model_calls = 0
+        try:
+            assembly_start = self._telemetry_clock()
+            token_ids, new_lengths, cache_views, past_lengths = self._assemble_prefix_prefill(
+                requests, computed_lengths
+            )
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
+            model_calls = 1
+            logits, padded_delta = self._model.prefill_paged_batch(
+                token_ids,
+                new_lengths,
+                cache_views,
+                past_lengths,
+            )
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+            scatter_start = self._telemetry_clock()
+            results = self._scatter_prefix_prefill(
+                requests,
+                computed_lengths,
+                logits,
+                padded_delta,
+            )
+            scatter_seconds = max(0.0, self._telemetry_clock() - scatter_start)
+        except Exception as error:  # noqa: BLE001
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            self._record_prefix_prefill_batch(
+                request_ids=request_ids,
+                useful_tokens=useful_tokens,
+                padded_tokens=padded_tokens,
+                prefix_hit_tokens=prefix_tokens,
+                logical_start=logical_start,
+                elapsed=elapsed,
+                executor_start=executor_start,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                batch_failed=True,
+                model_calls=model_calls,
+            )
+            message = f"{type(error).__name__}: {error}"
+            return tuple(
+                ExecutionResult.failure(state.request.request_id, message, elapsed)
+                for state in requests
+            )
+        elapsed = _logical_elapsed(self._clock, logical_start)
+        self._record_prefix_prefill_batch(
+            request_ids=request_ids,
+            useful_tokens=useful_tokens,
+            padded_tokens=padded_tokens,
+            prefix_hit_tokens=prefix_tokens,
+            logical_start=logical_start,
+            elapsed=elapsed,
+            executor_start=executor_start,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            scatter_seconds=scatter_seconds,
+            batch_failed=False,
+            model_calls=model_calls,
+        )
+        return tuple(replace(result, latency_seconds=elapsed) for result in results)
+
+    def _assemble_prefix_prefill(
+        self,
+        requests: Sequence[RequestState],
+        computed_lengths: Sequence[int],
+    ) -> tuple[Tensor, Tensor, tuple[PagedKVCacheView | None, ...], Tensor]:
+        device = self._model.token_embedding.weight.device
+        token_ids = torch.zeros(
+            (len(requests), max(computed_lengths)),
+            dtype=torch.long,
+            device=device,
+        )
+        views: list[PagedKVCacheView | None] = []
+        past_lengths: list[int] = []
+        for row, state in enumerate(requests):
+            prefix_tokens = state.prefix_hit_tokens
+            suffix = state.request.prompt_tokens[prefix_tokens:]
+            token_ids[row, : len(suffix)] = torch.tensor(
+                suffix,
+                dtype=torch.long,
+                device=device,
+            )
+            views.append(
+                self.paged_cache_pool.request_view(state.request.request_id)
+                if prefix_tokens
+                else None
+            )
+            past_lengths.append(prefix_tokens)
+        return (
+            token_ids,
+            torch.tensor(computed_lengths, dtype=torch.long, device=device),
+            tuple(views),
+            torch.tensor(past_lengths, dtype=torch.long, device=device),
+        )
+
+    def _scatter_prefix_prefill(
+        self,
+        requests: Sequence[RequestState],
+        computed_lengths: Sequence[int],
+        logits: Tensor,
+        padded_delta: KVCache,
+    ) -> tuple[ExecutionResult, ...]:
+        results: list[ExecutionResult] = []
+        for row, (state, computed_tokens) in enumerate(
+            zip(requests, computed_lengths, strict=True)
+        ):
+            try:
+                token_id = self._sample(state, logits[row : row + 1, computed_tokens - 1, :])
+            except Exception as error:  # noqa: BLE001
+                results.append(
+                    ExecutionResult.failure(
+                        state.request.request_id,
+                        f"{type(error).__name__}: {error}",
+                        0.0,
+                    )
+                )
+                continue
+            delta = tuple(
+                LayerKVCache(
+                    key=layer.key[row : row + 1, :, :computed_tokens, :].clone().detach(),
+                    value=layer.value[row : row + 1, :, :computed_tokens, :].clone().detach(),
+                )
+                for layer in padded_delta
+            )
+            results.append(
+                ExecutionResult.success(
+                    request_id=state.request.request_id,
+                    token_id=token_id,
+                    cache=delta,
+                    cache_tokens=len(state.request.prompt_tokens),
+                    latency_seconds=0.0,
+                    used_fallback=False,
+                    prefill_prefix_tokens=state.prefix_hit_tokens,
+                    prefill_logits=logits[row, :computed_tokens].clone().detach(),
+                )
+            )
+        return tuple(results)
 
     def _prefill_prefix_cache_one(self, state: RequestState) -> ExecutionResult:
         logical_start = self._clock()
@@ -1366,6 +1618,50 @@ class PagedAttentionExecutor:
                 started_at=logical_start,
                 finished_at=logical_start + elapsed,
                 batch_failed=batch_failed,
+                execution_mode=(
+                    PrefillExecutionMode.EXACT_CACHE_HIT
+                    if computed_tokens == 0
+                    else PrefillExecutionMode.SEQUENTIAL_APC_SUFFIX
+                ),
+                model_calls=0 if computed_tokens == 0 else 1,
+                prefix_hit_tokens=state.prefix_hit_tokens,
+                avoided_prefill_tokens=state.prefix_hit_tokens,
+            )
+        )
+
+    def _record_prefix_prefill_batch(  # noqa: PLR0913
+        self,
+        *,
+        request_ids: tuple[str, ...],
+        useful_tokens: int,
+        padded_tokens: int,
+        prefix_hit_tokens: int,
+        logical_start: float,
+        elapsed: float,
+        executor_start: float,
+        assembly_seconds: float,
+        model_seconds: float,
+        scatter_seconds: float,
+        batch_failed: bool,
+        model_calls: int,
+    ) -> None:
+        self._prefix_prefill_observations.append(
+            PrefillBatchObservation(
+                request_ids=request_ids,
+                batch_size=len(request_ids),
+                padded_prompt_tokens=padded_tokens,
+                useful_prompt_tokens=useful_tokens,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                executor_seconds=max(0.0, self._telemetry_clock() - executor_start),
+                started_at=logical_start,
+                finished_at=logical_start + elapsed,
+                batch_failed=batch_failed,
+                execution_mode=PrefillExecutionMode.BATCHED_APC_SUFFIX,
+                model_calls=model_calls,
+                prefix_hit_tokens=prefix_hit_tokens,
+                avoided_prefill_tokens=prefix_hit_tokens,
             )
         )
 
@@ -1702,6 +1998,11 @@ class ServingEngine:
     def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
         """Return executor-level prompt batch evidence separately from request events."""
         return self._executor.prefill_events
+
+    @property
+    def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
+        """Return executor observations with explicit prefill execution modes."""
+        return self._executor.prefill_observations
 
     @property
     def paged_cache_pool(self) -> PagedKVCachePool | None:
