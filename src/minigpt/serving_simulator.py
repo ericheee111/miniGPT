@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 from collections import deque
@@ -16,12 +17,18 @@ import yaml
 from typing_extensions import override
 
 from minigpt.model import GPT
-from minigpt.paged_kv_cache import KVCacheBackend, PagedKVCacheConfig, PagedKVCachePool
+from minigpt.paged_kv_cache import (
+    KVCacheBackend,
+    PagedKVCacheConfig,
+    PagedKVCachePool,
+    PrefixCacheNamespace,
+)
 from minigpt.serving import (
     ContinuousDecodeExecutor,
     ContinuousExecutor,
     EngineConfig,
     EngineEvent,
+    EngineEventType,
     EngineMetrics,
     GenerationRequest,
     PagedAttentionExecutor,
@@ -47,6 +54,7 @@ _TOP_LEVEL_KEYS = frozenset(
         "executor",
         "kv_cache_backend",
         "kv_cache",
+        "prefix_cache",
         "scenario_name",
         "model_seed",
         "tick_seconds",
@@ -65,11 +73,13 @@ _REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {
     "prefill",
     "kv_cache_backend",
     "kv_cache",
+    "prefix_cache",
 }
 _MODEL_KEYS = frozenset({"block_size", "n_layer", "n_head", "n_embd", "dropout", "bias"})
 _SCHEDULER_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
 _PREFILL_KEYS = frozenset({"max_batch_size", "max_batch_tokens", "max_padding_ratio"})
 _KV_CACHE_KEYS = frozenset({"block_tokens", "num_blocks"})
+_PREFIX_CACHE_KEYS = frozenset({"enabled"})
 _REQUEST_KEYS = frozenset(
     {
         "request_id",
@@ -110,6 +120,7 @@ class SimulatorConfig:
     executor: SimulatorExecutor
     kv_cache_backend: KVCacheBackend
     paged_kv_cache: PagedKVCacheConfig | None
+    prefix_cache_enabled: bool
     scenario_name: str
     model_seed: int
     tick_seconds: float
@@ -132,6 +143,7 @@ class SimulationResult:
     generated_tokens: dict[str, tuple[int, ...]]
     request_statuses: dict[str, RequestStatus]
     request_metrics: dict[str, RequestMetrics]
+    generator_state_hashes: dict[str, str]
     admission_order: tuple[str, ...]
     events: tuple[EngineEvent, ...]
     prefill_events: tuple[PrefillBatchEvent, ...]
@@ -174,6 +186,16 @@ class PagedAttentionEquivalenceResult:
     dense: SimulationResult
     materialized: SimulationResult
     direct: SimulationResult
+    equivalent: bool
+    checked_contracts: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PrefixCacheEquivalenceResult:
+    """Return direct-paged/APC runs after logical-contract validation."""
+
+    direct: SimulationResult
+    automatic_prefix_cache: SimulationResult
     equivalent: bool
     checked_contracts: tuple[str, ...]
 
@@ -351,6 +373,27 @@ def _paged_kv_cache(
     )
 
 
+def _prefix_cache_enabled(
+    document: ConfigMapping,
+    source: Path,
+    *,
+    backend: KVCacheBackend,
+    executor: SimulatorExecutor,
+) -> bool:
+    if "prefix_cache" not in document:
+        return False
+    raw = _mapping(document["prefix_cache"], source, "prefix_cache")
+    _exact_keys(raw, _PREFIX_CACHE_KEYS, source, "prefix_cache")
+    enabled = raw["enabled"]
+    if not isinstance(enabled, bool):
+        _invalid(source, "prefix_cache.enabled must be a boolean")
+    if enabled and (
+        backend is not KVCacheBackend.PAGED or executor is not SimulatorExecutor.PAGED_ATTENTION
+    ):
+        _invalid(source, "enabled prefix_cache requires paged_attention with paged KV cache")
+    return enabled
+
+
 def _optional_integer(document: ConfigMapping, key: str, source: Path) -> int | None:
     value = document[key]
     if value is None:
@@ -447,6 +490,12 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         executor=executor,
         kv_cache_backend=backend,
         paged_kv_cache=_paged_kv_cache(document, source, backend=backend),
+        prefix_cache_enabled=_prefix_cache_enabled(
+            document,
+            source,
+            backend=backend,
+            executor=executor,
+        ),
         scenario_name=_string(document, "scenario_name", source),
         model_seed=_integer(document, "model_seed", source, non_negative=True),
         tick_seconds=_number(document, "tick_seconds", source, positive=True),
@@ -474,6 +523,37 @@ def _build_model(config: SimulatorConfig) -> GPT:
         torch.set_rng_state(original_state)
     _ = model.eval()
     return model
+
+
+def _identity_hash(document: object) -> str:
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _generator_state_hash(engine: ServingEngine, request_id: str) -> str:
+    state = engine.request_state(request_id).generator.get_state()
+    values = cast("list[int]", state.tolist())  # pyright: ignore[reportUnknownMemberType]
+    return hashlib.sha256(bytes(values)).hexdigest()
+
+
+def _prefix_cache_namespace(config: SimulatorConfig, model: GPT) -> PrefixCacheNamespace | None:
+    if not config.prefix_cache_enabled:
+        return None
+    paged = config.paged_kv_cache
+    if paged is None:
+        _invalid(Path("<runtime>"), "enabled prefix cache requires paged KV cache config")
+    model_document = asdict(config.model)
+    return PrefixCacheNamespace(
+        model_checkpoint_identity=_identity_hash(
+            {"model_seed": config.model_seed, "model_config": model_document}
+        ),
+        model_config_identity=_identity_hash(model_document),
+        dtype=str(model.token_embedding.weight.dtype),
+        device=str(model.token_embedding.weight.device),
+        block_tokens=paged.block_tokens,
+        cache_schema_version=1,
+        position_embedding_semantics="learned_absolute_v1",
+    )
 
 
 def _event_document(event: EngineEvent) -> dict[str, JsonValue]:
@@ -515,6 +595,10 @@ def _request_document(engine: ServingEngine, request_id: str) -> dict[str, JsonV
             "time_per_output_token_seconds": metrics.time_per_output_token_seconds,
             "end_to_end_latency_seconds": metrics.end_to_end_latency_seconds,
             "failure_reason": metrics.failure_reason,
+            "prefix_hit_blocks": metrics.prefix_hit_blocks,
+            "prefix_hit_tokens": metrics.prefix_hit_tokens,
+            "prefix_miss_tokens": metrics.prefix_miss_tokens,
+            "prefill_tokens_computed": metrics.prefill_tokens_computed,
         },
     )
 
@@ -528,6 +612,7 @@ def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[s
             "claim": "logical serving correctness; wall-clock performance reported separately",
             "executor": config.executor.value,
             "kv_cache_backend": config.kv_cache_backend.value,
+            "prefix_cache_enabled": config.prefix_cache_enabled,
             "scheduling_level": (
                 "iteration-level with tensor-level prefill and block-aware decode batching"
                 if config.executor is SimulatorExecutor.PAGED_ATTENTION
@@ -604,6 +689,10 @@ def _write_requests(
         "time_per_output_token_seconds",
         "end_to_end_latency_seconds",
         "failure_reason",
+        "prefix_hit_blocks",
+        "prefix_hit_tokens",
+        "prefix_miss_tokens",
+        "prefill_tokens_computed",
     ]
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")
@@ -662,7 +751,11 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
     executor_clock = StepClock(config.executor_clock_step_seconds)
     telemetry_clock = StepClock(config.executor_clock_step_seconds / 10.0)
     paged_pool = (
-        PagedKVCachePool.from_model(config.paged_kv_cache, model)
+        PagedKVCachePool.from_model(
+            config.paged_kv_cache,
+            model,
+            prefix_cache_namespace=_prefix_cache_namespace(config, model),
+        )
         if config.kv_cache_backend is KVCacheBackend.PAGED and config.paged_kv_cache is not None
         else None
     )
@@ -749,6 +842,10 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
         request.request_id: engine.request_metrics(request.request_id)
         for request in config.requests
     }
+    generator_state_hashes = {
+        request.request_id: _generator_state_hash(engine, request.request_id)
+        for request in config.requests
+    }
     admission_order = tuple(
         event.request_id for event in engine.events if event.event_type.value == "admitted"
     )
@@ -759,6 +856,7 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
         generated_tokens=generated,
         request_statuses=request_statuses,
         request_metrics=request_metrics,
+        generator_state_hashes=generator_state_hashes,
         admission_order=admission_order,
         events=engine.events,
         prefill_events=engine.prefill_events,
@@ -939,6 +1037,73 @@ def run_paged_attention_equivalence(
         dense=dense,
         materialized=materialized,
         direct=direct,
+        equivalent=True,
+        checked_contracts=tuple(comparisons),
+    )
+
+
+_PREFIX_EVENT_TYPES = frozenset(
+    {
+        EngineEventType.PREFIX_LOOKUP,
+        EngineEventType.PREFIX_HIT,
+        EngineEventType.PREFIX_PROMOTE,
+        EngineEventType.PREFIX_EVICT,
+    }
+)
+
+
+def _logical_request_events(events: tuple[EngineEvent, ...]) -> tuple[EngineEvent, ...]:
+    filtered = (event for event in events if event.event_type not in _PREFIX_EVENT_TYPES)
+    return tuple(replace(event, sequence=index) for index, event in enumerate(filtered))
+
+
+def run_prefix_cache_equivalence(
+    config: SimulatorConfig,
+    *,
+    output_dir: Path,
+) -> PrefixCacheEquivalenceResult:
+    """Compare direct paged decode with and without Automatic Prefix Caching."""
+    if config.paged_kv_cache is None:
+        _invalid(Path("<equivalence>"), "prefix cache equivalence requires kv_cache config")
+    common = replace(
+        config,
+        executor=SimulatorExecutor.PAGED_ATTENTION,
+        kv_cache_backend=KVCacheBackend.PAGED,
+    )
+    direct = run_simulation(
+        replace(common, prefix_cache_enabled=False),
+        output_dir=output_dir / "paged_direct",
+    )
+    automatic_prefix_cache = run_simulation(
+        replace(common, prefix_cache_enabled=True),
+        output_dir=output_dir / "paged_direct_apc",
+    )
+    comparisons = {
+        "generated_tokens": direct.generated_tokens == automatic_prefix_cache.generated_tokens,
+        "rng_state": (
+            direct.generator_state_hashes == automatic_prefix_cache.generator_state_hashes
+        ),
+        "request_terminal_states_and_cancellation": (
+            direct.request_statuses == automatic_prefix_cache.request_statuses
+        ),
+        "fifo_admission_order": direct.admission_order == automatic_prefix_cache.admission_order,
+        "logical_request_events": (
+            _logical_request_events(direct.events)
+            == _logical_request_events(automatic_prefix_cache.events)
+        ),
+        "terminal_logical_cache_accounting": (
+            direct.metrics.cached_tokens == automatic_prefix_cache.metrics.cached_tokens == 0
+            and direct.metrics.reserved_cache_tokens
+            == automatic_prefix_cache.metrics.reserved_cache_tokens
+            == 0
+        ),
+    }
+    failed = tuple(name for name, matches in comparisons.items() if not matches)
+    if failed:
+        _invalid(Path("<equivalence>"), f"prefix cache contracts differ: {', '.join(failed)}")
+    return PrefixCacheEquivalenceResult(
+        direct=direct,
+        automatic_prefix_cache=automatic_prefix_cache,
         equivalent=True,
         checked_contracts=tuple(comparisons),
     )

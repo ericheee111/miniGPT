@@ -1,0 +1,7 @@
+{
+  "command": "python -m pytest -q tests/test_prefix_serving.py tests/test_http_lifecycle.py",
+  "exit_code": 0,
+  "schema_version": 1,
+  "stderr": "",
+  "stdout": "..........                                                               [100%]\n10 passed in 2.03s\n"
+}

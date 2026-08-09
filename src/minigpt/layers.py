@@ -212,6 +212,46 @@ class CausalSelfAttention(nn.Module):
         output = cast("Tensor", self.residual_dropout(projected))
         return output, LayerKVCache(key=key.detach(), value=value.detach())
 
+    def forward_paged_prefill(
+        self,
+        hidden_states: Tensor,
+        cache_view: PagedLayerKVCacheView,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Prefill one suffix while attending an immutable full-block prefix directly."""
+        query, key, value = self._project_qkv(hidden_states)
+        if query.shape[0] != 1 or query.shape[2] <= 0:
+            reason = "paged suffix prefill requires one non-empty request"
+            raise ValueError(reason)
+        blocks = self._validate_paged_view(query, cache_view)
+        score_chunks = [query @ key_block.unsqueeze(0).transpose(-2, -1) for key_block, _ in blocks]
+        suffix_scores = query @ key.transpose(-2, -1)
+        suffix_length = query.shape[2]
+        suffix_causal = torch.ones(
+            (suffix_length, suffix_length),
+            dtype=torch.bool,
+            device=query.device,
+        ).tril()
+        suffix_scores = suffix_scores.masked_fill(
+            ~suffix_causal.view(1, 1, suffix_length, suffix_length),
+            -torch.inf,
+        )
+        score_chunks.append(suffix_scores)
+        scores = torch.cat(score_chunks, dim=-1) / math.sqrt(self.head_size)
+        weights = cast("Tensor", self.attention_dropout(functional.softmax(scores, dim=-1)))
+        context = torch.zeros_like(query)
+        position = 0
+        for _, value_block in blocks:
+            block_length = value_block.shape[1]
+            context = context + weights[
+                ..., position : position + block_length
+            ] @ value_block.unsqueeze(0)
+            position += block_length
+        context = context + weights[..., position:] @ value
+        context = context.transpose(1, 2).contiguous().view(1, suffix_length, self.n_embd)
+        projected = cast("Tensor", self.output_projection(context))
+        output = cast("Tensor", self.residual_dropout(projected))
+        return output, LayerKVCache(key=key.detach(), value=value.detach())
+
     def _attend_paged_row(
         self,
         query: Tensor,
@@ -425,6 +465,22 @@ class TransformerBlock(nn.Module):
         attention_output, cache_delta = self.attention.forward_paged_batch(
             attention_input,
             cache_views,
+        )
+        hidden_states = hidden_states + attention_output
+        mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
+        output = hidden_states + cast("Tensor", self.mlp(mlp_input))
+        return output, cache_delta
+
+    def forward_paged_prefill(
+        self,
+        hidden_states: Tensor,
+        cache_view: PagedLayerKVCacheView,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Apply one suffix prefill against immutable paged prefix K/V."""
+        attention_input = cast("Tensor", self.attention_norm(hidden_states))
+        attention_output, cache_delta = self.attention.forward_paged_prefill(
+            attention_input,
+            cache_view,
         )
         hidden_states = hidden_states + attention_output
         mlp_input = cast("Tensor", self.mlp_norm(hidden_states))

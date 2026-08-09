@@ -14,6 +14,7 @@ from minigpt.serving_simulator import (
     run_cache_backend_equivalence,
     run_executor_equivalence,
     run_paged_attention_equivalence,
+    run_prefix_cache_equivalence,
     run_simulation,
 )
 
@@ -87,6 +88,58 @@ def test_json_and_yaml_inputs_resolve_to_the_same_strict_config(tmp_path: Path) 
     assert json_config == yaml_config
     assert json_config.requests[0].prompt_tokens == (1, 2)
     assert json_config.requests[1].prompt_tokens == (15, 16, 0)
+
+
+def test_prefix_cache_requires_direct_paged_executor(tmp_path: Path) -> None:
+    # Given: APC is enabled without the direct paged executor/storage pair.
+    config_path = tmp_path / "invalid-prefix-cache.json"
+    document = config_document()
+    document["prefix_cache"] = {"enabled": True}
+    write_config(config_path, document)
+
+    # When/Then: strict configuration rejects the ambiguous cache mode.
+    with pytest.raises(InvalidSimulatorConfigError, match="requires paged_attention"):
+        _ = load_simulator_config(config_path)
+
+
+def test_prefix_cache_simulation_preserves_logical_results_and_rng(tmp_path: Path) -> None:
+    # Given: an exact repeated prompt on direct paged decode with APC enabled.
+    config_path = tmp_path / "prefix-cache.json"
+    document = config_document()
+    document.update(
+        {
+            "executor": "paged_attention",
+            "kv_cache_backend": "paged",
+            "kv_cache": {"block_tokens": 2, "num_blocks": 12},
+            "prefix_cache": {"enabled": True},
+            "max_ticks": 50,
+            "scheduler": {"max_active_requests": 2, "max_cached_tokens": 16},
+        }
+    )
+    requests = cast("list[dict[str, object]]", document["requests"])
+    requests[0]["prompt_tokens"] = [1, 2, 3, 4]
+    requests[0]["max_new_tokens"] = 2
+    requests[1]["prompt_tokens"] = [1, 2, 3, 4]
+    requests[1]["prompt_length"] = None
+    requests[1]["arrival_time"] = 10.0
+    requests[1]["max_new_tokens"] = 2
+    write_config(config_path, document)
+    config = load_simulator_config(config_path)
+
+    # When: the same workload runs with direct paged decode and direct paged plus APC.
+    comparison = run_prefix_cache_equivalence(config, output_dir=tmp_path / "comparison")
+
+    # Then: logical output/RNG/state/events match and the repeated prompt skips four tokens.
+    assert comparison.equivalent
+    assert "rng_state" in comparison.checked_contracts
+    assert comparison.direct.generated_tokens == comparison.automatic_prefix_cache.generated_tokens
+    assert (
+        comparison.direct.generator_state_hashes
+        == comparison.automatic_prefix_cache.generator_state_hashes
+    )
+    metrics = comparison.automatic_prefix_cache.metrics
+    assert metrics.prefix_hit_requests == 1
+    assert metrics.avoided_prefill_tokens == 4
 
 
 def test_simulation_outputs_are_byte_reproducible(tmp_path: Path) -> None:

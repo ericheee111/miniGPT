@@ -1,0 +1,37 @@
+{
+  "artifacts": [
+    {
+      "bytes": 25140,
+      "path": "evidence/benchmark.json",
+      "sha256": "5ad404fc31e4a835dd95ebac04a59c7651c34bb38cbbfb2b0b2a15688dfb2d96"
+    },
+    {
+      "bytes": 932,
+      "path": "evidence/correctness.json",
+      "sha256": "6da6c758b81e7d794d44c07ae4e67a73d156b53991615bae7b0c5c8f364a9003"
+    },
+    {
+      "bytes": 271,
+      "path": "evidence/lifecycle_tests.json",
+      "sha256": "2dbdca8ea714e93032b69fbab36ccbbe99d7572eb197882747c6e8c224f120d3"
+    },
+    {
+      "bytes": 239,
+      "path": "evidence/stress_tests.json",
+      "sha256": "dd3e1aea1cc2cadbd34ad28b812385c311c28c0fcbc72829c155f0d6b13051aa"
+    },
+    {
+      "bytes": 2484,
+      "path": "README.md",
+      "sha256": "56da95cde4612dec5fa40e0ad7c601c8a0347786d0f842e28c1e86a64431eb48"
+    },
+    {
+      "bytes": 936,
+      "path": "summary.json",
+      "sha256": "67fb6a6be31b3f6336c33447620c5d31f91ddddd493fe0b17e35593ed8ef2d30"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "b248bff1166c4d57a3268140215d8d76c6b7575e",
+  "stage": "14"
+}

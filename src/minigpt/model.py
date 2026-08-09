@@ -399,13 +399,64 @@ class GPT(nn.Module):
     @torch.no_grad()
     def prefill(self, token_ids: Tensor) -> tuple[Tensor, KVCache]:
         """Evaluate a complete prompt and return final logits plus detached K/V."""
+        logits, cache = self.prefill_with_all_logits(token_ids)
+        return logits[:, -1:, :], cache
+
+    @torch.no_grad()
+    def prefill_with_all_logits(self, token_ids: Tensor) -> tuple[Tensor, KVCache]:
+        """Evaluate a prompt and retain logits at every prefix-cache block boundary."""
         self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
         time_steps = token_ids.shape[1]
         if time_steps > self.config.block_size:
             reason = f"time dimension {time_steps} exceeds block_size {self.config.block_size}"
             raise InvalidTokenTensorError(_PROMPT_NAME, reason)
-        logits, cache = self._cached_forward(token_ids, None, past_length=0)
-        return logits[:, -1:, :], cache
+        return self._cached_forward(token_ids, None, past_length=0)
+
+    @torch.no_grad()
+    def prefill_with_paged_prefix(
+        self,
+        token_ids: Tensor,
+        cache_view: PagedKVCacheView,
+        *,
+        prefix_length: int,
+    ) -> tuple[Tensor, KVCache]:
+        """Evaluate only a prompt suffix against immutable paged prefix K/V."""
+        self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
+        if token_ids.shape[0] != 1 or token_ids.shape[1] <= 0:
+            raise InvalidTokenTensorError(
+                _PROMPT_NAME, "paged suffix prefill requires shape [1, T]"
+            )
+        if isinstance(prefix_length, bool) or prefix_length <= 0:
+            _invalid_cache("paged prefix_length must be a positive integer")
+        if prefix_length + token_ids.shape[1] > self.config.block_size:
+            _invalid_cache("paged prefix plus suffix exceeds block_size")
+        if len(cache_view) != self.config.n_layer:
+            _invalid_cache("paged prefix layer count must equal model")
+        if any(layer.cache_length != prefix_length for layer in cache_view):
+            _invalid_cache("paged prefix view lengths must equal prefix_length")
+        positions = torch.arange(
+            prefix_length,
+            prefix_length + token_ids.shape[1],
+            device=token_ids.device,
+        )
+        token_embeddings = cast("Tensor", self.token_embedding(token_ids))
+        position_embeddings = cast("Tensor", self.position_embedding(positions))
+        hidden_states = cast(
+            "Tensor",
+            self.embedding_dropout(token_embeddings + position_embeddings),
+        )
+        cache_delta: list[LayerKVCache] = []
+        for layer_index, module in enumerate(self.blocks):
+            if not isinstance(module, TransformerBlock):
+                raise UnexpectedTransformerBlockError(layer_index, type(module).__name__)
+            hidden_states, layer_delta = module.forward_paged_prefill(
+                hidden_states,
+                cache_view[layer_index],
+            )
+            cache_delta.append(layer_delta)
+        normalized = cast("Tensor", self.final_norm(hidden_states))
+        logits = cast("Tensor", self.lm_head(normalized))
+        return logits, tuple(cache_delta)
 
     @torch.no_grad()
     def prefill_batch(

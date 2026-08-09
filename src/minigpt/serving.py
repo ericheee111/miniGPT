@@ -67,6 +67,10 @@ class EngineEventType(StrEnum):
     TOKEN = "token"  # noqa: S105
     FINISHED = "finished"
     FAILED = "failed"
+    PREFIX_LOOKUP = "PREFIX_LOOKUP"
+    PREFIX_HIT = "PREFIX_HIT"
+    PREFIX_PROMOTE = "PREFIX_PROMOTE"
+    PREFIX_EVICT = "PREFIX_EVICT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +139,13 @@ def _require_paged_cache_length(actual: int, expected: int) -> None:
     if actual != expected:
         reason = f"paged cache length {actual} does not equal executor occupancy {expected}"
         raise RuntimeError(reason)
+
+
+def _require_prefix_prefill_logits(logits: Tensor | None) -> Tensor:
+    if logits is None:
+        reason = "prefix-cache prefill omitted suffix boundary logits"
+        raise RuntimeError(reason)
+    return logits
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +238,10 @@ class RequestState:
     decode_latencies_seconds: list[float] = field(default_factory=list)
     token_timestamps: list[float] = field(default_factory=list)
     failure_reason: str | None = None
+    prefix_hit_blocks: int = 0
+    prefix_hit_tokens: int = 0
+    prefix_miss_tokens: int = 0
+    prefill_tokens_computed: int = 0
 
     @property
     def all_tokens(self) -> tuple[int, ...]:
@@ -246,6 +261,8 @@ class ExecutionResult:
     error: str | None
     used_fallback: bool
     cache_is_delta: bool
+    prefill_prefix_tokens: int
+    prefill_logits: Tensor | None = field(repr=False)
 
     @classmethod
     def success(  # noqa: PLR0913
@@ -258,6 +275,8 @@ class ExecutionResult:
         latency_seconds: float,
         used_fallback: bool,
         cache_is_delta: bool = False,
+        prefill_prefix_tokens: int = 0,
+        prefill_logits: Tensor | None = None,
     ) -> Self:
         """Build a successful token result."""
         return cls(
@@ -269,6 +288,8 @@ class ExecutionResult:
             error=None,
             used_fallback=used_fallback,
             cache_is_delta=cache_is_delta,
+            prefill_prefix_tokens=prefill_prefix_tokens,
+            prefill_logits=prefill_logits,
         )
 
     @classmethod
@@ -283,6 +304,8 @@ class ExecutionResult:
             error=error,
             used_fallback=False,
             cache_is_delta=False,
+            prefill_prefix_tokens=0,
+            prefill_logits=None,
         )
 
 
@@ -1203,6 +1226,7 @@ class PagedAttentionExecutor:
             telemetry_clock=telemetry_clock,
         )
         self._decode_observations: list[DecodeBatchObservation] = []
+        self._prefix_prefill_observations: list[PrefillBatchObservation] = []
         self.block_size = model.config.block_size
 
     @property
@@ -1213,7 +1237,11 @@ class PagedAttentionExecutor:
     @property
     def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
         """Return initial batched prefill plus dense overflow fallback telemetry."""
-        return (*self._prefill.prefill_observations, *self._fallback.prefill_observations)
+        return (
+            *self._prefill.prefill_observations,
+            *self._prefix_prefill_observations,
+            *self._fallback.prefill_observations,
+        )
 
     @property
     def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
@@ -1225,7 +1253,121 @@ class PagedAttentionExecutor:
 
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Reuse Stage 11B dense batched prefill before scattering into blocks."""
+        if self.paged_cache_pool.prefix_cache_enabled:
+            return tuple(self._prefill_prefix_cache_one(state) for state in requests)
         return self._prefill.prefill(requests)
+
+    def _prefill_prefix_cache_one(self, state: RequestState) -> ExecutionResult:
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        assembly_seconds = 0.0
+        model_seconds = 0.0
+        scatter_seconds = 0.0
+        prompt = state.request.prompt_tokens
+        prefix_tokens = state.prefix_hit_tokens
+        computed_tokens = len(prompt) - prefix_tokens
+        try:
+            if not 0 <= prefix_tokens <= len(prompt):
+                _invalid("prefix hit tokens must be within the prompt")
+            if any(token >= self._model.config.vocab_size for token in prompt):
+                _invalid("prefill prompt token is outside model vocabulary")
+            assembly_start = self._telemetry_clock()
+            device = self._model.token_embedding.weight.device
+            suffix = prompt[prefix_tokens:]
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
+            if not suffix:
+                boundary = self.paged_cache_pool.prefix_boundary_logits_for_request(
+                    state.request.request_id
+                )
+                logits = boundary.view(1, 1, -1)
+                cache_delta: KVCache = ()
+            else:
+                token_ids = torch.tensor((suffix,), dtype=torch.long, device=device)
+                if prefix_tokens:
+                    logits, cache_delta = self._model.prefill_with_paged_prefix(
+                        token_ids,
+                        self.paged_cache_pool.request_view(state.request.request_id),
+                        prefix_length=prefix_tokens,
+                    )
+                else:
+                    logits, cache_delta = self._model.prefill_with_all_logits(token_ids)
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+            scatter_start = self._telemetry_clock()
+            token_id = self._sample(state, logits[:, -1, :])
+            suffix_logits = (
+                logits[0].clone().detach() if suffix else logits.new_empty((0, logits.shape[-1]))
+            )
+            scatter_seconds = max(0.0, self._telemetry_clock() - scatter_start)
+        except Exception as error:  # noqa: BLE001
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            self._record_prefix_prefill(
+                state,
+                computed_tokens=computed_tokens,
+                logical_start=logical_start,
+                elapsed=elapsed,
+                executor_start=executor_start,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                batch_failed=True,
+            )
+            return ExecutionResult.failure(
+                state.request.request_id,
+                f"{type(error).__name__}: {error}",
+                elapsed,
+            )
+        elapsed = _logical_elapsed(self._clock, logical_start)
+        self._record_prefix_prefill(
+            state,
+            computed_tokens=computed_tokens,
+            logical_start=logical_start,
+            elapsed=elapsed,
+            executor_start=executor_start,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            scatter_seconds=scatter_seconds,
+            batch_failed=False,
+        )
+        return ExecutionResult.success(
+            request_id=state.request.request_id,
+            token_id=token_id,
+            cache=cache_delta,
+            cache_tokens=len(prompt),
+            latency_seconds=elapsed,
+            used_fallback=False,
+            prefill_prefix_tokens=prefix_tokens,
+            prefill_logits=suffix_logits,
+        )
+
+    def _record_prefix_prefill(  # noqa: PLR0913
+        self,
+        state: RequestState,
+        *,
+        computed_tokens: int,
+        logical_start: float,
+        elapsed: float,
+        executor_start: float,
+        assembly_seconds: float,
+        model_seconds: float,
+        scatter_seconds: float,
+        batch_failed: bool,
+    ) -> None:
+        self._prefix_prefill_observations.append(
+            PrefillBatchObservation(
+                request_ids=(state.request.request_id,),
+                batch_size=1,
+                padded_prompt_tokens=computed_tokens,
+                useful_prompt_tokens=computed_tokens,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                executor_seconds=max(0.0, self._telemetry_clock() - executor_start),
+                started_at=logical_start,
+                finished_at=logical_start + elapsed,
+                batch_failed=batch_failed,
+            )
+        )
 
     def decode(self, active_requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Isolate invalid/overflow rows and directly batch all other block views."""
@@ -1434,6 +1576,10 @@ class RequestMetrics:
     end_to_end_latency_seconds: float | None
     generated_tokens: int
     failure_reason: str | None
+    prefix_hit_blocks: int
+    prefix_hit_tokens: int
+    prefix_miss_tokens: int
+    prefill_tokens_computed: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1488,6 +1634,21 @@ class EngineMetrics:
     prefill_executor_time_seconds: float
     prefill_model_execution_time_seconds: float
     prefill_batch_assembly_scatter_time_seconds: float
+    prefix_cache_enabled: bool
+    prefix_cache_blocks: int
+    evictable_blocks: int
+    active_shared_blocks: int
+    active_shared_references: int
+    prefix_cache_evictions: int
+    prefix_lookup_requests: int
+    prefix_hit_requests: int
+    prefix_hit_blocks: int
+    prefix_hit_tokens: int
+    prefix_miss_tokens: int
+    prefill_tokens_computed: int
+    avoided_prefill_tokens: int
+    prefix_hit_request_ratio: float
+    prefix_hit_token_ratio: float
 
 
 @final
@@ -1673,6 +1834,10 @@ class ServingEngine:
             end_to_end_latency_seconds=e2e,
             generated_tokens=len(state.generated_tokens),
             failure_reason=state.failure_reason,
+            prefix_hit_blocks=state.prefix_hit_blocks,
+            prefix_hit_tokens=state.prefix_hit_tokens,
+            prefix_miss_tokens=state.prefix_miss_tokens,
+            prefill_tokens_computed=state.prefill_tokens_computed,
         )
 
     def metrics(self) -> EngineMetrics:
@@ -1714,6 +1879,15 @@ class ServingEngine:
             if self._paged_cache_pool is not None
             else _EMPTY_PAGED_METRICS
         )
+        prefill_tokens_computed = sum(state.prefill_tokens_computed for state in states)
+        prompt_tokens = sum(len(state.request.prompt_tokens) for state in states)
+        avoided_prefill_tokens = max(0, prompt_tokens - prefill_tokens_computed)
+        lookup_requests = cache_metrics.prefix_lookup_requests
+        hit_request_ratio = (
+            cache_metrics.prefix_hit_requests / lookup_requests if lookup_requests else 0.0
+        )
+        lookup_tokens = cache_metrics.prefix_hit_tokens + cache_metrics.prefix_miss_tokens
+        hit_token_ratio = cache_metrics.prefix_hit_tokens / lookup_tokens if lookup_tokens else 0.0
         return EngineMetrics(
             total_requests=len(states),
             completed_requests=completed,
@@ -1777,6 +1951,25 @@ class ServingEngine:
                 observation.assembly_seconds + observation.scatter_seconds
                 for observation in prefill_observations
             ),
+            prefix_cache_enabled=(
+                self._paged_cache_pool.prefix_cache_enabled
+                if self._paged_cache_pool is not None
+                else False
+            ),
+            prefix_cache_blocks=cache_metrics.prefix_cache_blocks,
+            evictable_blocks=cache_metrics.evictable_blocks,
+            active_shared_blocks=cache_metrics.active_shared_blocks,
+            active_shared_references=cache_metrics.active_shared_references,
+            prefix_cache_evictions=cache_metrics.prefix_cache_evictions,
+            prefix_lookup_requests=cache_metrics.prefix_lookup_requests,
+            prefix_hit_requests=cache_metrics.prefix_hit_requests,
+            prefix_hit_blocks=cache_metrics.prefix_hit_blocks,
+            prefix_hit_tokens=cache_metrics.prefix_hit_tokens,
+            prefix_miss_tokens=cache_metrics.prefix_miss_tokens,
+            prefill_tokens_computed=prefill_tokens_computed,
+            avoided_prefill_tokens=avoided_prefill_tokens,
+            prefix_hit_request_ratio=hit_request_ratio,
+            prefix_hit_token_ratio=hit_token_ratio,
         )
 
     def _apply_cancellations(self, tick_time: float) -> None:
@@ -1799,7 +1992,7 @@ class ServingEngine:
                 timestamp=tick_time,
             )
 
-    def _admit(self, tick_time: float) -> None:
+    def _admit(self, tick_time: float) -> None:  # noqa: C901, PLR0912, PLR0915
         scheduler = self.config.scheduler
         while self._waiting and len(self._active) < scheduler.max_active_requests:
             state = self._states[self._waiting[0]]
@@ -1839,10 +2032,18 @@ class ServingEngine:
                     continue
             if self._reserved_cache_tokens() + required > scheduler.max_cached_tokens:
                 break
-            if self._paged_cache_pool is not None and not self._paged_cache_pool.can_reserve(
-                required_blocks
-            ):
-                break
+            if self._paged_cache_pool is not None:
+                pool = self._paged_cache_pool
+                fits = (
+                    pool.can_reserve_with_prefix(
+                        reserved_blocks=required_blocks,
+                        prompt_tokens=state.request.prompt_tokens,
+                    )
+                    if pool.prefix_cache_enabled
+                    else pool.can_reserve(required_blocks)
+                )
+                if not fits:
+                    break
             _ = self._waiting.popleft()
             state.admission_time = tick_time
             state.reserved_cache_tokens = required
@@ -1862,10 +2063,40 @@ class ServingEngine:
                 )
                 continue
             if self._paged_cache_pool is not None:
-                self._paged_cache_pool.reserve(state.request.request_id, required_blocks)
+                pool = self._paged_cache_pool
+                if pool.prefix_cache_enabled:
+                    lookup = pool.reserve_with_prefix(
+                        state.request.request_id,
+                        reserved_blocks=required_blocks,
+                        prompt_tokens=state.request.prompt_tokens,
+                    )
+                    state.prefix_hit_blocks = lookup.prefix_hit_blocks
+                    state.prefix_hit_tokens = lookup.prefix_hit_tokens
+                    state.prefix_miss_tokens = lookup.prefix_miss_tokens
+                else:
+                    pool.reserve(state.request.request_id, required_blocks)
                 state.reserved_cache_blocks = required_blocks
             state.status = RequestStatus.PREFILLING
             self._active.append(state.request.request_id)
+            if self._paged_cache_pool is not None and self._paged_cache_pool.prefix_cache_enabled:
+                self._emit(
+                    event_type=EngineEventType.PREFIX_LOOKUP,
+                    state=state,
+                    timestamp=tick_time,
+                    detail=(
+                        f"hit_blocks={state.prefix_hit_blocks};"
+                        f"hit_tokens={state.prefix_hit_tokens};"
+                        f"miss_tokens={state.prefix_miss_tokens}"
+                    ),
+                )
+                if state.prefix_hit_blocks:
+                    self._emit(
+                        event_type=EngineEventType.PREFIX_HIT,
+                        state=state,
+                        timestamp=tick_time,
+                        detail=f"shared_blocks={state.prefix_hit_blocks}",
+                    )
+                self._emit_prefix_evictions(state, tick_time)
             self._emit(
                 event_type=EngineEventType.ADMITTED,
                 state=state,
@@ -1917,7 +2148,12 @@ class ServingEngine:
                 self._fail_state(state, tick_time, "executor returned malformed request results")
                 continue
             if self._paged_cache_pool is not None:
-                result = self._commit_paged_result(state, result, prefill=prefill)
+                result = self._commit_paged_result(
+                    state,
+                    result,
+                    prefill=prefill,
+                    tick_time=tick_time,
+                )
             self._apply_result(state, result, tick_time=tick_time, prefill=prefill)
 
     def _commit_paged_result(
@@ -1926,12 +2162,39 @@ class ServingEngine:
         result: ExecutionResult,
         *,
         prefill: bool,
+        tick_time: float,
     ) -> ExecutionResult:
         pool = self._paged_cache_pool
         if pool is None or result.error is not None or result.cache is None:
             return result
         try:
-            if prefill:
+            if prefill and pool.prefix_cache_enabled:
+                prefill_logits = _require_prefix_prefill_logits(result.prefill_logits)
+                pool.write_prefill_suffix(state.request.request_id, result.cache)
+                promotion = pool.promote_prompt_blocks(
+                    state.request.request_id,
+                    prompt_tokens=state.request.prompt_tokens,
+                    prefix_hit_tokens=result.prefill_prefix_tokens,
+                    suffix_logits=prefill_logits,
+                )
+                if promotion.promoted_blocks or promotion.duplicate_private_blocks_released:
+                    self._emit(
+                        event_type=EngineEventType.PREFIX_PROMOTE,
+                        state=state,
+                        timestamp=tick_time + result.latency_seconds,
+                        detail=(
+                            f"promoted={promotion.promoted_blocks};"
+                            f"duplicates={promotion.duplicate_private_blocks_released}"
+                        ),
+                    )
+                for prefix_hash in promotion.evicted_prefix_hashes:
+                    self._emit(
+                        event_type=EngineEventType.PREFIX_EVICT,
+                        state=state,
+                        timestamp=tick_time + result.latency_seconds,
+                        detail=f"prefix_hash={prefix_hash}",
+                    )
+            elif prefill:
                 pool.write_prefill(state.request.request_id, result.cache)
             elif result.used_fallback:
                 pool.rebuild(state.request.request_id, result.cache)
@@ -1941,6 +2204,7 @@ class ServingEngine:
                 pool.append(state.request.request_id, result.cache)
             table = pool.request_cache(state.request.request_id)
             _require_paged_cache_length(table.cache_length, result.cache_tokens)
+            self._emit_prefix_evictions(state, tick_time + result.latency_seconds)
         except Exception as error:  # noqa: BLE001
             message = f"{type(error).__name__}: {error}"
             return ExecutionResult.failure(
@@ -1949,6 +2213,18 @@ class ServingEngine:
                 result.latency_seconds,
             )
         return replace(result, cache=())
+
+    def _emit_prefix_evictions(self, state: RequestState, timestamp: float) -> None:
+        pool = self._paged_cache_pool
+        if pool is None or not pool.prefix_cache_enabled:
+            return
+        for prefix_hash in pool.take_recent_evictions():
+            self._emit(
+                event_type=EngineEventType.PREFIX_EVICT,
+                state=state,
+                timestamp=timestamp,
+                detail=f"prefix_hash={prefix_hash}",
+            )
 
     def _apply_result(
         self,
@@ -1982,6 +2258,9 @@ class ServingEngine:
         if prefill:
             state.prefill_latency_seconds = result.latency_seconds
             state.first_token_time = token_time
+            state.prefill_tokens_computed = (
+                len(state.request.prompt_tokens) - result.prefill_prefix_tokens
+            )
         else:
             state.decode_latencies_seconds.append(result.latency_seconds)
         self._emit(

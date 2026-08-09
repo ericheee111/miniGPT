@@ -752,6 +752,39 @@ def test_variable_length_paged_decode_matches_individual_dense_decode() -> None:
         torch.testing.assert_close(delta.value[1:], long_next[layer_index].value[:, :, -1:])
 
 
+def test_suffix_prefill_with_paged_prefix_matches_full_dense_prefill() -> None:
+    # Given: a learned-position model, a four-token cached prefix, and a two-token suffix.
+    _ = torch.default_generator.manual_seed(71)
+    gpt = model.GPT(replace(tiny_config(), block_size=8)).eval()
+    prefix = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    suffix = torch.tensor([[5, 6]], dtype=torch.long)
+    prefix_logits, prefix_cache = gpt.prefill_with_all_logits(prefix)
+    cache_view = tuple(
+        layers.PagedLayerKVCacheView(
+            key_blocks=(layer.key[0, :, :2], layer.key[0, :, 2:4]),
+            value_blocks=(layer.value[0, :, :2], layer.value[0, :, 2:4]),
+            cache_length=4,
+            block_tokens=2,
+        )
+        for layer in prefix_cache
+    )
+
+    # When: only the suffix runs against the immutable paged prefix.
+    suffix_logits, suffix_delta = gpt.prefill_with_paged_prefix(
+        suffix,
+        cache_view,
+        prefix_length=4,
+    )
+    full_logits, full_cache = gpt.prefill_with_all_logits(torch.cat((prefix, suffix), dim=1))
+
+    # Then: positions, logits, boundary logits, and suffix K/V match dense full prefill.
+    torch.testing.assert_close(suffix_logits, full_logits[:, 4:], rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(prefix_logits[:, -1], full_logits[:, 3], rtol=1e-5, atol=1e-6)
+    for layer_index, delta in enumerate(suffix_delta):
+        torch.testing.assert_close(delta.key, full_cache[layer_index].key[:, :, 4:])
+        torch.testing.assert_close(delta.value, full_cache[layer_index].value[:, :, 4:])
+
+
 @pytest.mark.parametrize(
     ("cache_lengths", "message"),
     [

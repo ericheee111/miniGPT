@@ -1,0 +1,28 @@
+{
+  "active_resources_released": true,
+  "active_shared_references": 0,
+  "avoided_prefill_tokens": 12,
+  "checked_contracts": [
+    "generated_tokens",
+    "generator_state",
+    "terminal_state_and_cancellation",
+    "fifo_admission_order",
+    "logical_request_events"
+  ],
+  "config": "serving_automatic_prefix_cache.yaml",
+  "correctness_sha256": {
+    "apc": "72fa7d583c2f2ac207d5de96d6154f835fa85c35e2c44acde6e8b9d3cb0a86fa",
+    "dense": "72fa7d583c2f2ac207d5de96d6154f835fa85c35e2c44acde6e8b9d3cb0a86fa",
+    "direct": "72fa7d583c2f2ac207d5de96d6154f835fa85c35e2c44acde6e8b9d3cb0a86fa",
+    "materialized": "72fa7d583c2f2ac207d5de96d6154f835fa85c35e2c44acde6e8b9d3cb0a86fa"
+  },
+  "equivalent": true,
+  "overflow_fallback_observed": false,
+  "prefill_tokens_computed": 8,
+  "prefix_cache_blocks": 3,
+  "prefix_hit_requests": 2,
+  "prefix_hit_tokens": 12,
+  "prefix_miss_tokens": 8,
+  "schema_version": 1,
+  "stage": "14"
+}
