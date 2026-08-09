@@ -239,7 +239,7 @@ def test_prefix_cache_http_completion_and_failure_release_active_refs() -> None:
 async def _check_prefix_cache_http_cleanup() -> None:
     # Given: an APC service primed with one immutable two-token prompt block.
     app, runner = _app(
-        stream_buffer_size=1,
+        stream_buffer_size=128,
         delay_seconds=0.0,
         failing_seeds={13},
         kv_cache_backend=KVCacheBackend.PAGED,
