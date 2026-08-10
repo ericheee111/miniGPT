@@ -718,9 +718,6 @@ def _cache_aware_prefill_summary(
                 if item.execution_mode is PrefillExecutionMode.EXACT_CACHE_HIT
             ),
             "batched_suffix_requests": sum(item.batch_size for item in batched),
-            "prefix_hit_tokens": sum(item.prefix_hit_tokens for item in apc),
-            "prefill_tokens_computed": useful_tokens,
-            "avoided_prefill_tokens": sum(item.avoided_prefill_tokens for item in apc),
         },
     )
 

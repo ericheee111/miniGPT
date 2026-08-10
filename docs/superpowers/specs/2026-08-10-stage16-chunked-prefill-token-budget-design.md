@@ -46,8 +46,8 @@ An intermediate chunk must end on a physical `block_tokens` boundary. The final 
 Admission prefix hits are already complete-block aligned, so this rule guarantees that every
 non-final next chunk starts from a complete-block boundary.
 
-This deliberately avoids partial-block COW while allowing already-computed full blocks to be promoted
-to the existing Automatic Prefix Cache after every chunk.
+This deliberately avoids partial-block COW. Already-computed full blocks remain request-private until
+the final prompt chunk reuses the existing Automatic Prefix Cache promotion transaction.
 
 ## Chunk execution
 

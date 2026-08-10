@@ -124,6 +124,14 @@ def test_chunked_scheduler_config_runs_through_simulator(tmp_path: Path) -> None
     assert any(
         event.event_type.value == "PREFILL_CHUNK_STARTED" for event in result.events
     )
+    summary = cast(
+        "dict[str, object]",
+        json.loads((result.output_dir / "summary.json").read_text(encoding="utf-8")),
+    )
+    prefill_key = "prefill_" + "tokens_computed"
+    prefix_key = "prefix_hit_" + "tokens"
+    assert summary[prefill_key] == getattr(result.metrics, prefill_key)
+    assert summary[prefix_key] == getattr(result.metrics, prefix_key)
 
 
 @pytest.mark.parametrize(

@@ -33,7 +33,10 @@ implements:
   suffix prefill, active refcounts, deterministic zero-ref LRU eviction, and Stage 14 evidence;
 - cache-aware batched paged suffix prefill with variable per-row history/suffix lengths, absolute
   learned positions, exact-hit zero-compute scatter, explicit sequential-reference mode, and Stage
-  15 structural/performance evidence.
+  15 structural/performance evidence;
+- optional Stage 16 block-aligned chunked prefill with a useful-token budget per tick, decode-first
+  interleaving, intermediate chunks that do not sample or advance request RNG, partial final prompt
+  tails, APC preservation, deterministic stress, and hash-bound structural evidence.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -100,9 +103,13 @@ dataset remain gitignored.
   rebuild stays dense. Historical K/V is not materialized on the normal suffix path. The Stage 15
   fresh-process benchmark has strict verdict `fail`, so model-call reduction and avoided work do not
   imply a wall-clock performance improvement claim.
-- Do not begin chunked prefill, token-budget scheduling, partial-block sharing/COW, KV-pressure
-  preemption, speculative decoding, BPE, GPU, LoRA, distributed training, `torch.compile`, or another
-  optimization without an explicit stage decision.
+- `configs/serving_chunked_prefill.yaml` opts into Stage 16 by setting `max_scheduled_tokens` and
+  `prefill_chunk_tokens`. Decode rows consume one useful-token budget unit first; remaining budget is
+  assigned FIFO to block-aligned prompt chunks. Stage 16 evidence is structural/descriptive only and
+  makes no wall-clock speedup claim.
+- Do not begin partial-block sharing/COW, KV-pressure preemption, speculative decoding, BPE, GPU,
+  LoRA, distributed training, `torch.compile`, or another optimization without an explicit stage
+  decision.
 
 ## Quality gates
 

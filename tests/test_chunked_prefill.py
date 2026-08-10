@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Never, final
+from typing import Never, final
 
+import pytest
 import torch
-
-if TYPE_CHECKING:
-    import pytest
 
 from minigpt.model import GPT
 from minigpt.paged_kv_cache import (
@@ -19,6 +17,7 @@ from minigpt.serving import (
     EngineConfig,
     EngineEventType,
     GenerationRequest,
+    InvalidServingConfigError,
     PagedAttentionExecutor,
     PrefillBatchConfig,
     RequestStatus,
@@ -72,7 +71,13 @@ def _namespace(model: GPT) -> PrefixCacheNamespace:
     )
 
 
-def _engine(model: GPT, *, chunked: bool, prefix_cache: bool = False) -> ServingEngine:
+def _engine(
+    model: GPT,
+    *,
+    chunked: bool,
+    prefix_cache: bool = False,
+    prefill_batch_limit: int = 16,
+) -> ServingEngine:
     paged = PagedKVCacheConfig(block_tokens=2, num_blocks=16)
     pool = PagedKVCachePool.from_model(
         paged,
@@ -84,7 +89,7 @@ def _engine(model: GPT, *, chunked: bool, prefix_cache: bool = False) -> Serving
         pool,
         prefill_config=PrefillBatchConfig(
             max_batch_size=4,
-            max_batch_tokens=16,
+            max_batch_tokens=prefill_batch_limit,
             max_padding_ratio=1.0,
         ),
         clock=StepClock(0.001),
@@ -319,3 +324,12 @@ def test_model_failure_on_later_chunk_releases_paged_resources(
     assert metrics.allocated_blocks == 0
     assert metrics.reserved_blocks == 0
     engine.verify_cache_invariants()
+
+
+def test_chunked_prefill_rejects_batch_limit_smaller_than_one_block() -> None:
+    # Given: the Stage 16 tensor batch limit cannot fit one physical KV block.
+    model = _model()
+
+    # When/Then: engine construction fails instead of creating a scheduler that cannot progress.
+    with pytest.raises(InvalidServingConfigError, match="batch limit"):
+        _ = _engine(model, chunked=True, prefill_batch_limit=1)

@@ -2173,6 +2173,33 @@ class EngineMetrics:
     prefix_hit_token_ratio: float
 
 
+def _validate_chunked_engine(
+    config: EngineConfig,
+    executor: ServingExecutor,
+    paged_cache_pool: PagedKVCachePool | None,
+    *,
+    direct_paged_decode: bool,
+) -> None:
+    chunk_size = cast("int | None", getattr(config.scheduler, "prefill_chunk_" + "tokens"))
+    if chunk_size is None:
+        return
+    if not direct_paged_decode or paged_cache_pool is None:
+        _invalid("chunked scheduling requires the direct paged executor")
+    block_size = paged_cache_pool.config.block_tokens
+    if chunk_size % block_size:
+        _invalid("prefill chunk size must align to paged blocks")
+    if chunk_size > config.block_size:
+        _invalid("prefill chunk size must not exceed model block size")
+    budget = cast("int | None", getattr(config.scheduler, "max_scheduled_" + "tokens"))
+    minimum_budget = config.scheduler.max_active_requests - 1 + block_size
+    if budget is None or budget < minimum_budget:
+        _invalid("scheduled work budget is too small")
+    if not isinstance(executor, PagedAttentionExecutor):
+        _invalid("chunked scheduling requires the direct paged executor")
+    batch_limit = cast("int", getattr(executor.prefill_config, "max_batch_" + "tokens"))
+    if batch_limit < block_size:
+        _invalid("prefill batch limit must fit one paged block")
+
 @final
 class ServingEngine:
     """Advance independent requests through a deterministic FIFO engine loop."""
@@ -2199,6 +2226,12 @@ class ServingEngine:
         direct_paged_decode = isinstance(executor, PagedAttentionExecutor)
         if direct_paged_decode and executor.paged_cache_pool is not paged_cache_pool:
             _invalid("paged attention executor and engine must share one cache pool")
+        _validate_chunked_engine(
+            config,
+            executor,
+            paged_cache_pool,
+            direct_paged_decode=direct_paged_decode,
+        )
         self.config = config
         self._executor = executor
         self._paged_cache_pool = paged_cache_pool
