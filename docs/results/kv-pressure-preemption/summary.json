@@ -16,7 +16,7 @@
   "recompute_resume": true,
   "resume_uses_private_recompute": true,
   "schema_version": 1,
-  "source_commit": "cd205c0dad5bcea4b44d34dd46c97a026ff58330",
+  "source_commit": "551dd247d11befd1f971b90640d31163c865cdef",
   "stage": "17",
   "stress_operations": 1012,
   "stress_passed": true,

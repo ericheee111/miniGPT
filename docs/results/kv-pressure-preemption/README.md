@@ -24,5 +24,4 @@ descriptive_only; no wall-clock performance improvement is claimed.
 Dynamic/lazy KV reservation, CPU swap, partial-block COW, GPU/CUDA, fused kernels,
 and new HTTP request APIs remain outside Stage 17.
 
-Source commit: cd205c0dad5bcea4b44d34dd46c97a026ff58330.
-
+Source commit: 551dd247d11befd1f971b90640d31163c865cdef.
