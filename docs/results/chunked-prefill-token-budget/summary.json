@@ -1,5 +1,7 @@
 {
   "active_resources_released": true,
+  "apc_batched_prefill_default": false,
+  "apc_batched_prefill_opt_in": true,
   "apc_prefix_reuse_preserved": true,
   "benchmark_strict_verdict": "descriptive_only",
   "chunked_prefill": true,
@@ -11,15 +13,17 @@
   "intermediate_chunks_sample": false,
   "lifecycle_passed": true,
   "new_http_api": false,
+  "overflow_budget_accounting": true,
   "partial_block_copy_on_write": false,
   "partial_final_chunk_supported": true,
   "per_request_rng_equivalence": true,
   "preemption": false,
   "schema_version": 1,
-  "source_commit": "d77117ad1b9dea3537a76097afdd48a2d8058dd1",
+  "source_commit": "9ab44bef0114173ad55c7a0d3b39c7e94760e535",
   "stage": "16",
   "stress_operations": 1000,
   "stress_passed": true,
+  "terminal_prefill_logits_released": true,
   "token_budget_scheduler": true,
   "wall_clock_performance_improvement": false
 }

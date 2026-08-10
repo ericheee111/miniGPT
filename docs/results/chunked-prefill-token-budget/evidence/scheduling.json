@@ -1,49 +1,97 @@
 {
   "active_resources_released": true,
   "block_size": 2,
-  "chunk_batches": 3,
-  "chunk_finishes": 4,
+  "chunk_batches": 8,
+  "chunk_finishes": 12,
   "chunk_size": 2,
-  "chunk_starts": 4,
-  "chunk_work_total": 7,
+  "chunk_starts": 12,
+  "chunk_work_total": 22,
   "decode_prefill_interleaving_observed": true,
   "intermediate_chunks_block_aligned": true,
   "intermediate_chunks_sample": false,
+  "overflow_rebuild_work_observed": true,
   "partial_final_chunk_observed": true,
   "per_tick": [
     {
-      "decode_rows": 0,
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
       "prefill_chunk_work": 0,
-      "scheduled_work": 0,
+      "scheduled_model_work": 0,
       "tick": 0
     },
     {
-      "decode_rows": 0,
-      "prefill_chunk_work": 4,
-      "scheduled_work": 4,
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 6,
+      "scheduled_model_work": 6,
       "tick": 1
     },
     {
-      "decode_rows": 1,
-      "prefill_chunk_work": 2,
-      "scheduled_work": 3,
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 4,
+      "scheduled_model_work": 5,
       "tick": 2
     },
     {
-      "decode_rows": 1,
-      "prefill_chunk_work": 1,
-      "scheduled_work": 2,
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 3,
+      "scheduled_model_work": 4,
       "tick": 3
     },
     {
-      "decode_rows": 1,
-      "prefill_chunk_work": 0,
-      "scheduled_work": 1,
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 2,
+      "scheduled_model_work": 3,
       "tick": 4
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 2,
+      "scheduled_model_work": 2,
+      "tick": 5
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 2,
+      "scheduled_model_work": 2,
+      "tick": 6
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 2,
+      "scheduled_model_work": 2,
+      "tick": 7
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 1,
+      "scheduled_model_work": 1,
+      "tick": 8
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "prefill_chunk_work": 0,
+      "scheduled_model_work": 1,
+      "tick": 9
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 16,
+      "prefill_chunk_work": 0,
+      "scheduled_model_work": 16,
+      "tick": 10
     }
   ],
   "per_tick_budget_respected": true,
-  "scheduled_budget": 6,
+  "scheduled_budget": 16,
   "schema_version": 1,
   "stage": "16"
 }

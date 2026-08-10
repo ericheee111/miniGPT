@@ -1,6 +1,6 @@
 {
   "bounded_prefill_work_per_tick": true,
-  "chunk_work_total": 7,
+  "chunk_work_total": 22,
   "correctness_equivalent": true,
   "decode_prefill_interleaving_observed": true,
   "prefill_computed_count": 19,
