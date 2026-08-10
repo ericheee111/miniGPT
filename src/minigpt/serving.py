@@ -1439,9 +1439,7 @@ class PagedAttentionExecutor:
                 device=device,
             )
             views.append(
-                self.paged_cache_pool.request_view(state.request.request_id)
-                if start
-                else None
+                self.paged_cache_pool.request_view(state.request.request_id) if start else None
             )
         return (
             token_ids,
@@ -1481,9 +1479,7 @@ class PagedAttentionExecutor:
             delta = tuple(
                 LayerKVCache(
                     key=layer.key[row : row + 1, :, :chunk_length, :].clone().detach(),
-                    value=layer.value[row : row + 1, :, :chunk_length, :]
-                    .clone()
-                    .detach(),
+                    value=layer.value[row : row + 1, :, :chunk_length, :].clone().detach(),
                 )
                 for layer in padded_delta
             )
@@ -2200,9 +2196,7 @@ def _validate_chunked_engine(
     if chunk_size > config.block_size:
         _invalid("prefill chunk size must not exceed model block size")
     budget = cast("int | None", getattr(config.scheduler, "max_scheduled_" + "tokens"))
-    minimum_budget = max(
-        config.block_size, config.scheduler.max_active_requests - 1 + block_size
-    )
+    minimum_budget = max(config.block_size, config.scheduler.max_active_requests - 1 + block_size)
     if budget is None or budget < minimum_budget:
         _invalid("scheduled work budget is too small")
     if not isinstance(executor, PagedAttentionExecutor):
@@ -2210,6 +2204,7 @@ def _validate_chunked_engine(
     batch_limit = cast("int", getattr(executor.prefill_config, "max_batch_" + "tokens"))
     if batch_limit < block_size:
         _invalid("prefill batch limit must fit one paged block")
+
 
 @final
 class ServingEngine:
@@ -3050,8 +3045,7 @@ class ServingEngine:
         except Exception as error:  # noqa: BLE001
             message = f"{type(error).__name__}: {error}"
             results = tuple(
-                ExecutionResult.failure(state.request.request_id, message, 0.0)
-                for state in states
+                ExecutionResult.failure(state.request.request_id, message, 0.0) for state in states
             )
         result_by_id = {result.request_id: result for result in results}
         duplicate_count = len(results) - len(result_by_id)
@@ -3071,10 +3065,7 @@ class ServingEngine:
                     event_type=EngineEventType.PREFILL_CHUNK_FINISHED,
                     state=state,
                     timestamp=tick_time + result.latency_seconds,
-                    detail=(
-                        f"start={state.cached_tokens};"
-                        f"end={result.cache_tokens};final=true"
-                    ),
+                    detail=(f"start={state.cached_tokens};end={result.cache_tokens};final=true"),
                 )
             self._apply_result(state, result, tick_time=tick_time, prefill=True)
 
@@ -3165,8 +3156,10 @@ class ServingEngine:
         cache = result.cache
         return_result = result
         try:
-            if prefill and result.cache_is_delta and (
-                not result.prefill_complete or not pool.prefix_cache_enabled
+            if (
+                prefill
+                and result.cache_is_delta
+                and (not result.prefill_complete or not pool.prefix_cache_enabled)
             ):
                 pool.write_prefill_suffix(state.request.request_id, cache)
                 table = pool.request_cache(state.request.request_id)
@@ -3260,8 +3253,8 @@ class ServingEngine:
         state.kv_cache = result.cache
         state.cached_tokens = result.cache_tokens
         state.prefill_latency_seconds = (
-            (state.prefill_latency_seconds or 0.0) + result.latency_seconds
-        )
+            state.prefill_latency_seconds or 0.0
+        ) + result.latency_seconds
         state.prefill_tokens_computed += computed_tokens
         pool = self._paged_cache_pool
         if pool is not None and pool.prefix_cache_enabled:
@@ -3313,8 +3306,8 @@ class ServingEngine:
         state.token_timestamps.append(token_time)
         if prefill:
             state.prefill_latency_seconds = (
-                (state.prefill_latency_seconds or 0.0) + result.latency_seconds
-            )
+                state.prefill_latency_seconds or 0.0
+            ) + result.latency_seconds
             state.first_token_time = token_time
             state.prefill_tokens_computed += result.cache_tokens - result.prefill_prefix_tokens
             state.prefill_logits_chunks.clear()

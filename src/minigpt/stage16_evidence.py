@@ -367,6 +367,7 @@ def _observed_tick_work(
     )
     return normal_decode, overflow, chunk
 
+
 def _tick_scheduling_evidence(
     *,
     tick: int,
@@ -389,6 +390,7 @@ def _tick_scheduling_evidence(
         },
     )
     return normal_decode_work + overflow_work > 0 and chunk_work > 0, overflow_work > 0, document
+
 
 def generate_stage16_scheduling(output_path: Path) -> Path:
     """Produce a deterministic witness for bounded chunk work and decode interleaving."""
@@ -461,9 +463,7 @@ def generate_stage16_scheduling(output_path: Path) -> Path:
     partial_final_observed = any(
         "final=true" in (event.detail or "")
         and (
-            _parse_chunk_detail(event.detail)[1]
-            - _parse_chunk_detail(event.detail)[0]
-            < block_size
+            _parse_chunk_detail(event.detail)[1] - _parse_chunk_detail(event.detail)[0] < block_size
         )
         for event in finishes
     )
@@ -539,8 +539,7 @@ def run_stage16_stress(
             prefix = rng.choice(prefixes)
             max_suffix = min(3, model.config.block_size - len(prefix) - 2)
             suffix = tuple(
-                rng.randrange(model.config.vocab_size)
-                for _ in range(rng.randint(0, max_suffix))
+                rng.randrange(model.config.vocab_size) for _ in range(rng.randint(0, max_suffix))
             )
             request_id = f"stage16-stress-{request_index}"
             request_index += 1

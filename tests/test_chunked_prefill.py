@@ -261,8 +261,7 @@ def test_chunked_prefill_interleaves_decode_with_long_prompt() -> None:
     long_chunk = next(
         index
         for index, event in enumerate(events)
-        if event.event_type is EngineEventType.PREFILL_CHUNK_STARTED
-        and event.request_id == "long"
+        if event.event_type is EngineEventType.PREFILL_CHUNK_STARTED and event.request_id == "long"
     )
     assert short_token < long_chunk
     assert engine.request_state("long").cached_tokens == 4

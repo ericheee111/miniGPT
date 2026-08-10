@@ -122,9 +122,7 @@ def test_chunked_scheduler_config_runs_through_simulator(tmp_path: Path) -> None
     # Then: the optional fields survive parsing and chunk events are observable.
     assert config.scheduler.max_scheduled_tokens == 4
     assert config.scheduler.prefill_chunk_tokens == 2
-    assert any(
-        event.event_type.value == "PREFILL_CHUNK_STARTED" for event in result.events
-    )
+    assert any(event.event_type.value == "PREFILL_CHUNK_STARTED" for event in result.events)
     summary = cast(
         "dict[str, object]",
         json.loads((result.output_dir / "summary.json").read_text(encoding="utf-8")),
