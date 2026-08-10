@@ -1247,7 +1247,7 @@ class PagedAttentionExecutor:
         paged_cache_pool: PagedKVCachePool,
         *,
         prefill_config: PrefillBatchConfig | None = None,
-        prefix_prefill_strategy: APCPrefillStrategy = APCPrefillStrategy.BATCHED,
+        prefix_prefill_strategy: APCPrefillStrategy = APCPrefillStrategy.SEQUENTIAL,
         clock: Clock = time.perf_counter,
         telemetry_clock: Clock = time.perf_counter,
     ) -> None:
@@ -1899,6 +1899,15 @@ class PagedAttentionExecutor:
                 results[result.request_id] = result
         return tuple(results[state.request.request_id] for state in active_requests)
 
+    def decode_model_work(self, state: RequestState) -> int:
+        """Return actual model work charged for one Stage 16 decode operation."""
+        error = self._validate_decode_state(state)
+        if error is not None:
+            return 0
+        if state.cached_tokens >= self.block_size:
+            return len(state.all_tokens[-self.block_size :])
+        return 1
+
     def _decode_batch(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         logical_start = self._clock()
         executor_start = self._telemetry_clock()
@@ -2191,7 +2200,9 @@ def _validate_chunked_engine(
     if chunk_size > config.block_size:
         _invalid("prefill chunk size must not exceed model block size")
     budget = cast("int | None", getattr(config.scheduler, "max_scheduled_" + "tokens"))
-    minimum_budget = config.scheduler.max_active_requests - 1 + block_size
+    minimum_budget = max(
+        config.block_size, config.scheduler.max_active_requests - 1 + block_size
+    )
     if budget is None or budget < minimum_budget:
         _invalid("scheduled work budget is too small")
     if not isinstance(executor, PagedAttentionExecutor):
@@ -2247,6 +2258,8 @@ class ServingEngine:
         self._peak_waiting = 0
         self._peak_cached = 0
         self._peak_reserved = 0
+        self._chunk_schedule_cursor: str | None = None
+        self._chunk_resume_decode: str | None = None
 
     @property
     def events(self) -> tuple[EngineEvent, ...]:
@@ -2284,12 +2297,15 @@ class ServingEngine:
             self._paged_cache_pool.release_all()
         for state in self._states.values():
             state.kv_cache = None
+            state.prefill_logits_chunks.clear()
             state.cached_tokens = 0
             state.reserved_cache_tokens = 0
             state.reserved_cache_blocks = 0
         self._active.clear()
         self._waiting.clear()
         self._pending_cancellations.clear()
+        self._chunk_schedule_cursor = None
+        self._chunk_resume_decode = None
 
     def submit(self, request: GenerationRequest) -> None:
         """Append a validated request to the FIFO waiting queue."""
@@ -2387,19 +2403,38 @@ class ServingEngine:
         self._apply_cancellations(tick_time)
         self._admit(tick_time)
 
-        live_decode = tuple(
-            request_id
-            for request_id in decode_ids
-            if self._states[request_id].status is RequestStatus.DECODING
-        )
-        self._execute(live_decode, tick_time=tick_time, prefill=False)
-        remaining_budget = budget - len(live_decode)
-
         live_prefill = tuple(
             request_id
             for request_id in prefill_ids
             if self._states[request_id].status is RequestStatus.PREFILLING
         )
+        live_decode = tuple(
+            request_id
+            for request_id in decode_ids
+            if self._states[request_id].status is RequestStatus.DECODING
+        )
+        if self._chunk_schedule_cursor in live_prefill:
+            self._run_chunked_prefill_first(
+                live_prefill,
+                live_decode,
+                budget=budget,
+                tick_time=tick_time,
+            )
+            return
+        selected_decode, decode_work, deferred_decode = self._select_chunked_decode(
+            live_decode, budget=budget
+        )
+        if selected_decode:
+            self._execute_chunked_decode_fifo(selected_decode, tick_time=tick_time)
+        remaining_budget = budget - decode_work
+        if deferred_decode is not None:
+            if live_prefill:
+                self._chunk_resume_decode = deferred_decode
+                self._chunk_schedule_cursor = live_prefill[0]
+            else:
+                self._chunk_schedule_cursor = deferred_decode
+            return
+
         exact_ids = tuple(
             request_id
             for request_id in live_prefill
@@ -2421,6 +2456,128 @@ class ServingEngine:
                 selected_lengths,
                 tick_time=tick_time,
             )
+        selected_set = set(selected_ids)
+        self._chunk_schedule_cursor = next(
+            (
+                request_id
+                for request_id in live_prefill
+                if request_id not in exact_set and request_id not in selected_set
+            ),
+            None,
+        )
+
+    def _execute_chunked_decode_fifo(
+        self,
+        request_ids: tuple[str, ...],
+        *,
+        tick_time: float,
+    ) -> None:
+        executor = self._executor
+        if not isinstance(executor, PagedAttentionExecutor):
+            _invalid("chunked decode execution requires the direct paged executor")
+        normal_batch: list[str] = []
+        for request_id in request_ids:
+            state = self._states[request_id]
+            work = executor.decode_model_work(state)
+            if work == 1:
+                normal_batch.append(request_id)
+                continue
+            if normal_batch:
+                self._execute(tuple(normal_batch), tick_time=tick_time, prefill=False)
+                normal_batch.clear()
+            self._execute((request_id,), tick_time=tick_time, prefill=False)
+        if normal_batch:
+            self._execute(tuple(normal_batch), tick_time=tick_time, prefill=False)
+
+    def _run_chunked_prefill_first(
+        self,
+        live_prefill: tuple[str, ...],
+        live_decode: tuple[str, ...],
+        *,
+        budget: int,
+        tick_time: float,
+    ) -> None:
+        _, pending_prefill = self._run_chunked_prefill_phase(
+            live_prefill,
+            budget=budget,
+            tick_time=tick_time,
+        )
+        resume_decode = self._chunk_resume_decode
+        if resume_decode in live_decode:
+            self._chunk_schedule_cursor = resume_decode
+        elif live_decode:
+            self._chunk_schedule_cursor = live_decode[0]
+        else:
+            self._chunk_schedule_cursor = pending_prefill
+        self._chunk_resume_decode = None
+
+    def _rotate_chunked_ids(
+        self,
+        request_ids: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        cursor = self._chunk_schedule_cursor
+        if cursor is None or cursor not in request_ids:
+            return request_ids
+        index = request_ids.index(cursor)
+        return (*request_ids[index:], *request_ids[:index])
+
+    def _select_chunked_decode(
+        self, request_ids: tuple[str, ...], *, budget: int
+    ) -> tuple[tuple[str, ...], int, str | None]:
+        executor = self._executor
+        if not isinstance(executor, PagedAttentionExecutor):
+            _invalid("chunked decode selection requires the direct paged executor")
+        ordered = self._rotate_chunked_ids(request_ids)
+        selected: list[str] = []
+        used = 0
+        deferred: str | None = None
+        for request_id in ordered:
+            state = self._states[request_id]
+            work = executor.decode_model_work(state)
+            if work > budget - used:
+                deferred = request_id
+                break
+            selected.append(request_id)
+            used += work
+        return tuple(selected), used, deferred
+
+    def _run_chunked_prefill_phase(
+        self,
+        request_ids: tuple[str, ...],
+        *,
+        budget: int,
+        tick_time: float,
+    ) -> tuple[int, str | None]:
+        pool = self._paged_cache_pool
+        if pool is None:
+            _invalid("chunked prefill phase requires a paged cache pool")
+        ordered = self._rotate_chunked_ids(request_ids)
+        exact_ids = tuple(
+            request_id
+            for request_id in ordered
+            if pool.request_cache(request_id).cache_length
+            == len(self._states[request_id].request.prompt_tokens)
+        )
+        if exact_ids:
+            self._execute(exact_ids, tick_time=tick_time, prefill=True)
+        exact_set = set(exact_ids)
+        candidates = tuple(request_id for request_id in ordered if request_id not in exact_set)
+        selected_ids, selected_lengths = self._select_chunked_prefill(
+            candidates,
+            excluded=set(),
+            budget=budget,
+        )
+        if selected_ids:
+            self._execute_prefill_chunks(
+                selected_ids,
+                selected_lengths,
+                tick_time=tick_time,
+            )
+        selected_set = set(selected_ids)
+        pending = next(
+            (request_id for request_id in candidates if request_id not in selected_set), None
+        )
+        return sum(selected_lengths), pending
 
     def _select_chunked_prefill(
         self,
@@ -3106,7 +3263,9 @@ class ServingEngine:
             (state.prefill_latency_seconds or 0.0) + result.latency_seconds
         )
         state.prefill_tokens_computed += computed_tokens
-        state.prefill_logits_chunks.append(result.prefill_logits)
+        pool = self._paged_cache_pool
+        if pool is not None and pool.prefix_cache_enabled:
+            state.prefill_logits_chunks.append(result.prefill_logits)
         state.status = RequestStatus.PREFILLING
         self._emit(
             event_type=EngineEventType.PREFILL_CHUNK_FINISHED,
@@ -3204,6 +3363,7 @@ class ServingEngine:
         if self._paged_cache_pool is not None and self._paged_cache_pool.has_request(request_id):
             self._paged_cache_pool.release(request_id)
         state.kv_cache = None
+        state.prefill_logits_chunks.clear()
         state.cached_tokens = 0
         state.reserved_cache_tokens = 0
         state.reserved_cache_blocks = 0

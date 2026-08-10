@@ -270,20 +270,22 @@ def test_chunked_prefill_interleaves_decode_with_long_prompt() -> None:
 
 def test_cancellation_between_chunks_releases_paged_resources() -> None:
     # Given: a long request has committed one intermediate chunk.
-    engine = _engine(_model(), chunked=True)
+    engine = _engine(_model(), chunked=True, prefix_cache=True)
     engine.submit(_request("cancel", (1, 2, 3, 4, 5, 6), max_new_tokens=2))
     engine.tick(now=0.0)
     engine.tick(now=0.01)
     state = engine.request_state("cancel")
     assert state.status is RequestStatus.PREFILLING
     assert state.cached_tokens == 2
+    assert len(state.prefill_logits_chunks) == 1
 
     # When: cancellation is requested before the next chunk.
     engine.cancel("cancel", at=0.015)
     engine.tick(now=0.02)
 
-    # Then: request-private blocks and reservation capacity are fully released.
+    # Then: request-private blocks, reservation capacity, and retained logits are released.
     assert state.status is RequestStatus.CANCELLED
+    assert state.prefill_logits_chunks == []
     pool = engine.paged_cache_pool
     assert pool is not None
     metrics = pool.metrics()
@@ -297,13 +299,14 @@ def test_model_failure_on_later_chunk_releases_paged_resources(
 ) -> None:
     # Given: the first chunk is committed and the request remains PREFILLING.
     model = _model()
-    engine = _engine(model, chunked=True)
+    engine = _engine(model, chunked=True, prefix_cache=True)
     engine.submit(_request("fail", (1, 2, 3, 4, 5, 6), max_new_tokens=2))
     engine.tick(now=0.0)
     engine.tick(now=0.01)
     state = engine.request_state("fail")
     assert state.status is RequestStatus.PREFILLING
     assert state.cached_tokens == 2
+    assert len(state.prefill_logits_chunks) == 1
 
     failure_message = "stage16 injected prefill failure"
 
@@ -318,6 +321,7 @@ def test_model_failure_on_later_chunk_releases_paged_resources(
     # Then: the request fails in isolation and all private capacity is released.
     assert state.status is RequestStatus.FAILED
     assert state.failure_reason == f"RuntimeError: {failure_message}"
+    assert state.prefill_logits_chunks == []
     pool = engine.paged_cache_pool
     assert pool is not None
     metrics = pool.metrics()
@@ -333,3 +337,112 @@ def test_chunked_prefill_rejects_batch_limit_smaller_than_one_block() -> None:
     # When/Then: engine construction fails instead of creating a scheduler that cannot progress.
     with pytest.raises(InvalidServingConfigError, match="batch limit"):
         _ = _engine(model, chunked=True, prefill_batch_limit=1)
+
+
+def test_apc_disabled_does_not_retain_intermediate_prefill_logits() -> None:
+    # Given: chunked prefill runs without Automatic Prefix Caching.
+    engine = _engine(_model(), chunked=True, prefix_cache=False)
+    engine.submit(_request("no-apc", (1, 2, 3, 4, 5, 6), max_new_tokens=2))
+
+    # When: the first intermediate chunk is committed.
+    engine.tick(now=0.0)
+    engine.tick(now=0.01)
+
+    # Then: promotion-only logits are not retained when there is no APC consumer.
+    state = engine.request_state("no-apc")
+    assert state.status is RequestStatus.PREFILLING
+    assert state.prefill_logits_chunks == []
+
+
+def test_release_all_cache_resources_clears_intermediate_prefill_logits() -> None:
+    # Given: an APC request has one retained intermediate promotion-logit tensor.
+    engine = _engine(_model(), chunked=True, prefix_cache=True)
+    engine.submit(_request("shutdown", (1, 2, 3, 4, 5, 6), max_new_tokens=2))
+    engine.tick(now=0.0)
+    engine.tick(now=0.01)
+    state = engine.request_state("shutdown")
+    assert len(state.prefill_logits_chunks) == 1
+
+    # When: catastrophic/shutdown cleanup releases all request resources.
+    engine.release_all_cache_resources()
+
+    # Then: no request keeps a Tensor reachable through intermediate prefill state.
+    assert state.prefill_logits_chunks == []
+
+
+def test_normal_decode_uses_single_token_model_work() -> None:
+    # Given: a seven-token prompt leaves exactly one normal paged decode before overflow.
+    engine = _engine(_model(), chunked=True)
+    engine.submit(_request("normal", (1, 2, 3, 4, 5, 6, 7), max_new_tokens=2))
+
+    # When: prompt prefill and the first decode step complete.
+    for tick in range(6):
+        engine.tick(now=tick * 0.01)
+
+    # Then: normal decode emits one token without the dense-overflow fallback.
+    state = engine.request_state("normal")
+    assert len(state.generated_tokens) == 2
+    token_events = [event for event in engine.events if event.event_type is EngineEventType.TOKEN]
+    assert token_events[-1].used_fallback is False
+
+
+def test_overflow_decode_accounts_full_rebuild_context() -> None:
+    # Given: one request reaches the learned-position window boundary.
+    model = _model()
+    engine = _engine(model, chunked=True)
+    engine.submit(_request("overflow", (1, 2, 3, 4, 5, 6, 7), max_new_tokens=3))
+    for tick in range(6):
+        engine.tick(now=tick * 0.01)
+    assert engine.request_state("overflow").cached_tokens == model.config.block_size
+
+    # When: the next decode performs the dense sliding-window rebuild.
+    engine.tick(now=0.06)
+
+    # Then: telemetry records the actual full-window model-token work.
+    overflow = next(
+        item
+        for item in engine.prefill_observations
+        if item.execution_mode.value == "overflow_dense_rebuild"
+    )
+    assert overflow.useful_prompt_tokens == model.config.block_size
+    token_events = [event for event in engine.events if event.event_type is EngineEventType.TOKEN]
+    assert token_events[-1].used_fallback is True
+
+
+def test_multiple_overflow_decodes_do_not_exceed_one_tick_budget() -> None:
+    # Given: two FIFO requests reach overflow together with budget equal to one rebuild.
+    engine = _engine(_model(), chunked=True)
+    for request_id in ("first", "second"):
+        engine.submit(_request(request_id, (1, 2, 3, 4, 5, 6, 7), max_new_tokens=3))
+    for tick in range(6):
+        engine.tick(now=tick * 0.01)
+    assert all(engine.request_state(item).cached_tokens == 8 for item in ("first", "second"))
+
+    # When: only eight model tokens are available for two eight-token rebuilds.
+    engine.tick(now=0.06)
+
+    # Then: FIFO schedules one fallback and defers the second without starvation.
+    assert len(engine.request_state("first").generated_tokens) == 3
+    assert len(engine.request_state("second").generated_tokens) == 2
+    engine.tick(now=0.07)
+    assert len(engine.request_state("second").generated_tokens) == 3
+
+
+def test_overflow_and_prefill_do_not_silently_exceed_budget() -> None:
+    # Given: an overflow decode and a newly admitted prefill share an eight-token budget.
+    engine = _engine(_model(), chunked=True)
+    engine.submit(_request("overflow", (1, 2, 3, 4, 5, 6, 7), max_new_tokens=4))
+    for tick in range(6):
+        engine.tick(now=tick * 0.01)
+    engine.submit(_request("prefill", (8, 9, 10, 11, 12, 13), max_new_tokens=1))
+    engine.tick(now=0.06)
+    assert engine.request_state("prefill").cached_tokens == 0
+
+    # When: the next tick has an eight-token overflow plus a two-token chunk ready.
+    engine.tick(now=0.07)
+
+    # Then: the older overflow consumes the budget and prefill is deferred, not overrun.
+    assert engine.request_state("overflow").status is RequestStatus.FINISHED
+    assert engine.request_state("prefill").cached_tokens == 0
+    engine.tick(now=0.08)
+    assert engine.request_state("prefill").cached_tokens == 2

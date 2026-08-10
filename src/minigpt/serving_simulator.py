@@ -437,7 +437,7 @@ def _prefix_cache_enabled(
 
 
 def _apc_prefill_strategy(document: ConfigMapping, source: Path) -> APCPrefillStrategy:
-    raw = document.get("apc_prefill_strategy", APCPrefillStrategy.BATCHED.value)
+    raw = document.get("apc_prefill_strategy", APCPrefillStrategy.SEQUENTIAL.value)
     if not isinstance(raw, str):
         _invalid(source, "apc_prefill_strategy must be a string")
     try:
@@ -545,6 +545,7 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         executor=executor,
     )
     paged_kv_cache = _paged_kv_cache(document, source, backend=backend)
+    model = _model(document, source, vocab_size=vocab_size)
     scheduler = _scheduler(document, source)
     if scheduler.prefill_chunk_tokens is not None:
         if (
@@ -555,7 +556,9 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
             _invalid(source, "chunked prefill requires paged_attention with paged KV cache")
         if scheduler.prefill_chunk_tokens % paged_kv_cache.block_tokens:
             _invalid(source, "prefill_chunk_tokens must align to kv_cache.block_tokens")
-        minimum_budget = scheduler.max_active_requests - 1 + paged_kv_cache.block_tokens
+        minimum_budget = max(
+            model.block_size, scheduler.max_active_requests - 1 + paged_kv_cache.block_tokens
+        )
         if (
             scheduler.max_scheduled_tokens is None
             or scheduler.max_scheduled_tokens < minimum_budget
@@ -579,7 +582,7 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         ),
         max_ticks=_integer(document, "max_ticks", source, positive=True),
         output_dir=Path(_string(document, "output_dir", source)),
-        model=_model(document, source, vocab_size=vocab_size),
+        model=model,
         scheduler=scheduler,
         prefill=_prefill(document, source),
         requests=_requests(document, source, vocab_size=vocab_size),

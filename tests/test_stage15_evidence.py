@@ -116,6 +116,8 @@ def test_stage15_package_binds_batching_claim_policy_and_exact_hashes(tmp_path: 
 
     # Then: fake batching, scope limits, strict fail, and no wall-clock claim are explicit.
     assert manifest["stage"] == "15"
+    assert summary["batched_prefill_opt_in"] is True
+    assert summary["batched_prefill_default"] is False
     assert summary["fake_batching_guard_passed"] is True
     assert summary["sequential_model_calls"] == 5
     assert summary["batched_model_calls"] == 2

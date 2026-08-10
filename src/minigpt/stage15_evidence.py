@@ -428,6 +428,8 @@ def generate_stage15_evidence(  # noqa: C901, PLR0913
         "stage": STAGE_NAME,
         "source_commit": source_commit,
         "batched_paged_history_primitive": True,
+        "batched_prefill_opt_in": True,
+        "batched_prefill_default": False,
         "variable_past_and_suffix_lengths": True,
         "absolute_learned_positions": True,
         "historical_kv_materialized": False,
@@ -515,6 +517,7 @@ def verify_stage15_evidence(package_root: Path) -> EvidenceDocument:  # noqa: C9
         _invalid("summary source_commit differs from manifest")
     for key in (
         "batched_paged_history_primitive",
+        "batched_prefill_opt_in",
         "variable_past_and_suffix_lengths",
         "absolute_learned_positions",
         "suffix_batch_budgeting",
@@ -530,6 +533,7 @@ def verify_stage15_evidence(package_root: Path) -> EvidenceDocument:  # noqa: C9
         if summary.get(key) is not True:
             _invalid(f"summary contract {key} did not pass")
     for key in (
+        "batched_prefill_default",
         "historical_kv_materialized",
         "chunked_prefill",
         "partial_block_copy_on_write",
@@ -629,6 +633,10 @@ def _readme(summary: EvidenceDocument, benchmark: EvidenceDocument) -> str:
         ),
         "All valid suffix logits and suffix-only K/V deltas are scattered through the existing",
         "owner-thread write, promotion, duplicate canonicalization, and refcount transactions.",
+        "Because the aggregate strict benchmark verdict is not `pass`, sequential APC suffix",
+        "prefill remains the production default. The Stage 15 config opts into batched prefill",
+        "explicitly; model-call reduction alone does not justify a silent default change.",
+        "",
         "",
         "This remains a Python/PyTorch reference implementation. There is no chunked prefill,",
         "partial-block sharing or copy-on-write, KV-pressure preemption, speculative decoding,",

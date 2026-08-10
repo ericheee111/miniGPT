@@ -24,8 +24,9 @@ batched     Stage 15 path: FIFO suffix groups and one model call per group
 
 The strategy is selectable by the simulator and benchmark and may be wired through the existing
 server construction path, but it is not a new HTTP request parameter. Stage 15 uses `batched` for
-its production comparison; `sequential` remains available as a correctness and performance
-reference.
+its benchmark comparison while retaining `sequential` as the production default. The aggregate
+strict benchmark verdict is `fail`, so reduced model-call count is not sufficient evidence to make
+BATCHED a silent default. Stage 15/16 evidence configs opt into BATCHED explicitly.
 
 Exact full-boundary hits are not members of either model-call group. They read immutable cached
 boundary logits, sample with the request generator, and report zero model prefill calls.

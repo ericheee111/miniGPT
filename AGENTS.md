@@ -98,15 +98,17 @@ dataset remain gitignored.
   block-aware decode path. Initial/overflow prefill remains dense; do not describe it as an all-path
   paged kernel or claim speedup from descriptive single-machine evidence.
 - `--prefix-cache` additionally enables Stage 14 full-block APC. Partial tails remain private and
-  there is no partial-block COW. Stage 15 batches paged-history suffix rows by computed suffix tokens
-  while retaining a sequential APC reference mode; exact hits still use boundary logits and overflow
-  rebuild stays dense. Historical K/V is not materialized on the normal suffix path. The Stage 15
-  fresh-process benchmark has strict verdict `fail`, so model-call reduction and avoided work do not
-  imply a wall-clock performance improvement claim.
+  there is no partial-block COW. Stage 15 can batch paged-history suffix rows by computed suffix
+  tokens, but SEQUENTIAL remains the production default because the aggregate strict benchmark is
+  `fail`; Stage 15/16 evidence configs opt into BATCHED explicitly. Exact hits still use boundary
+  logits and overflow rebuild stays dense. Historical K/V is not materialized on the normal suffix
+  path, and model-call reduction alone does not imply a wall-clock performance improvement claim.
 - `configs/serving_chunked_prefill.yaml` opts into Stage 16 by setting `max_scheduled_tokens` and
-  `prefill_chunk_tokens`. Decode rows consume one useful-token budget unit first; remaining budget is
-  assigned FIFO to block-aligned prompt chunks. Stage 16 evidence is structural/descriptive only and
-  makes no wall-clock speedup claim.
+  `prefill_chunk_tokens`. Normal paged decode costs one model-work unit; learned-position overflow
+  costs the actual dense rebuild context length. Work that does not fit the remaining tick budget is
+  deferred rather than executed over budget, and the deterministic fairness cursor alternates
+  deferred decode/prefill work to avoid starvation. Stage 16 evidence is structural/descriptive only
+  and makes no wall-clock speedup claim.
 - Do not begin partial-block sharing/COW, KV-pressure preemption, speculative decoding, BPE, GPU,
   LoRA, distributed training, `torch.compile`, or another optimization without an explicit stage
   decision.

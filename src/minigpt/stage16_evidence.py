@@ -27,7 +27,7 @@ from minigpt.serving import (
     GenerationRequest,
     PagedAttentionExecutor,
     PrefillBatchConfig,
-    RequestStatus,
+    PrefillExecutionMode,
     SchedulerConfig,
     ServingEngine,
 )
@@ -144,7 +144,9 @@ def _engine(
             max_active_requests=max_active_requests,
             max_cached_tokens=max_cached,
             **{
-                _BUDGET_FIELD: max_active_requests + paged.block_tokens,
+                _BUDGET_FIELD: max(
+                    model.config.block_size, max_active_requests + paged.block_tokens
+                ),
                 _CHUNK_FIELD: 2,
             },
         )
@@ -344,12 +346,57 @@ def _parse_chunk_detail(detail: str | None) -> tuple[int, int]:
         raise Stage16EvidenceVerificationError(reason) from error
 
 
+def _observed_tick_work(
+    engine: ServingEngine,
+    *,
+    before_decode_batches: int,
+    before_prefill: int,
+) -> tuple[int, int, int]:
+    after_metrics = engine.metrics()
+    normal_decode = sum(after_metrics.decode_batch_sizes[before_decode_batches:])
+    new_prefill = engine.prefill_observations[before_prefill:]
+    overflow = sum(
+        item.useful_prompt_tokens
+        for item in new_prefill
+        if item.execution_mode is PrefillExecutionMode.OVERFLOW_DENSE_REBUILD
+    )
+    chunk = sum(
+        item.useful_prompt_tokens
+        for item in new_prefill
+        if item.execution_mode is PrefillExecutionMode.CHUNKED_PAGED_PREFILL
+    )
+    return normal_decode, overflow, chunk
+
+def _tick_scheduling_evidence(
+    *,
+    tick: int,
+    budget: int,
+    normal_decode_work: int,
+    overflow_work: int,
+    chunk_work: int,
+) -> tuple[bool, bool, JsonValue]:
+    scheduled_work = normal_decode_work + overflow_work + chunk_work
+    if scheduled_work > budget:
+        _invalid("observed scheduled work exceeds the configured budget")
+    document = cast(
+        "JsonValue",
+        {
+            "tick": tick,
+            "normal_decode_work": normal_decode_work,
+            "overflow_rebuild_work": overflow_work,
+            "prefill_chunk_work": chunk_work,
+            "scheduled_model_work": scheduled_work,
+        },
+    )
+    return normal_decode_work + overflow_work > 0 and chunk_work > 0, overflow_work > 0, document
+
 def generate_stage16_scheduling(output_path: Path) -> Path:
     """Produce a deterministic witness for bounded chunk work and decode interleaving."""
     engine = _engine(_model(), chunked=True, prefix_cache=False)
     requests = (
         _request("short", (1, 2), sample_seed=1620, max_new_tokens=4),
         _request("long", (3, 4, 5, 6, 7), sample_seed=1621, max_new_tokens=1),
+        _request("overflow", tuple(range(8, 23)), sample_seed=1622, max_new_tokens=3),
     )
     for request in requests:
         engine.submit(request)
@@ -358,36 +405,37 @@ def generate_stage16_scheduling(output_path: Path) -> Path:
     block_size = pool.config.block_tokens
     per_tick: list[JsonValue] = []
     interleaving_observed = False
+    overflow_observed = False
     for tick in range(32):
         if engine.is_idle:
             break
-        decode_rows = sum(
-            engine.request_state(request.request_id).status is RequestStatus.DECODING
-            for request in requests
-        )
-        before = len(engine.events)
+        before_decode_batches = len(engine.metrics().decode_batch_sizes)
+        before_prefill = len(engine.prefill_observations)
         engine.tick(now=float(tick))
-        events = engine.events[before:]
-        chunk_events = [
-            event for event in events if event.event_type is EngineEventType.PREFILL_CHUNK_STARTED
-        ]
-        chunk_work = sum(
-            end - start
-            for start, end in (_parse_chunk_detail(event.detail) for event in chunk_events)
+        normal_decode_work, overflow_work, chunk_work = _observed_tick_work(
+            engine,
+            before_decode_batches=before_decode_batches,
+            before_prefill=before_prefill,
         )
-        scheduled_work = decode_rows + chunk_work
-        if scheduled_work > budget:
-            _invalid("observed scheduled work exceeds the configured budget")
-        if decode_rows > 0 and chunk_work > 0:
-            interleaving_observed = True
+        tick_interleaving, tick_overflow, _ = _tick_scheduling_evidence(
+            tick=tick,
+            budget=budget,
+            normal_decode_work=normal_decode_work,
+            overflow_work=overflow_work,
+            chunk_work=chunk_work,
+        )
+        interleaving_observed = interleaving_observed or tick_interleaving
+        overflow_observed = overflow_observed or tick_overflow
+        scheduled_work = normal_decode_work + overflow_work + chunk_work
         per_tick.append(
             cast(
                 "JsonValue",
                 {
                     "tick": tick,
-                    "decode_rows": decode_rows,
+                    "normal_decode_work": normal_decode_work,
+                    "overflow_rebuild_work": overflow_work,
                     "prefill_chunk_work": chunk_work,
-                    "scheduled_work": scheduled_work,
+                    "scheduled_model_work": scheduled_work,
                 },
             )
         )
@@ -419,7 +467,12 @@ def generate_stage16_scheduling(output_path: Path) -> Path:
         )
         for event in finishes
     )
-    if not interleaving_observed or not nonfinal_aligned or not partial_final_observed:
+    if (
+        not interleaving_observed
+        or not overflow_observed
+        or not nonfinal_aligned
+        or not partial_final_observed
+    ):
         _invalid("Stage 16 scheduling witness did not cover required chunk contracts")
     metrics = engine.metrics()
     if not _active_resources_released(engine):
@@ -439,6 +492,7 @@ def generate_stage16_scheduling(output_path: Path) -> Path:
                 "chunk_batches": metrics.chunked_prefill_batches,
                 "chunk_work_total": metrics.chunked_prefill_useful_tokens,
                 "decode_prefill_interleaving_observed": interleaving_observed,
+                "overflow_rebuild_work_observed": overflow_observed,
                 "per_tick_budget_respected": True,
                 "intermediate_chunks_block_aligned": nonfinal_aligned,
                 "partial_final_chunk_observed": partial_final_observed,
@@ -517,6 +571,13 @@ def run_stage16_stress(
             pool.verify_invariants()
         if not engine.is_idle:
             _invalid("Stage 16 stress engine did not become idle")
+    retained_logits = [
+        request_id
+        for request_id in all_request_ids
+        if engine.request_state(request_id).prefill_logits_chunks
+    ]
+    if retained_logits:
+        _invalid("terminal Stage 16 requests retained intermediate prefill logits")
     terminal = {
         request_id: engine.request_state(request_id).status.value
         for request_id in sorted(all_request_ids)
@@ -550,6 +611,7 @@ def run_stage16_stress(
                 and final.allocated_blocks == 0
                 and final.free_blocks == final.total_blocks
             ),
+            "terminal_prefill_logits_released": True,
         },
     )
 
@@ -630,6 +692,7 @@ def generate_stage16_evidence(  # noqa: C901, PLR0912, PLR0913
         _invalid("Stage 16 correctness run leaked active resources")
     for key in (
         "decode_prefill_interleaving_observed",
+        "overflow_rebuild_work_observed",
         "per_tick_budget_respected",
         "intermediate_chunks_block_aligned",
         "partial_final_chunk_observed",
@@ -641,6 +704,8 @@ def generate_stage16_evidence(  # noqa: C901, PLR0912, PLR0913
         _invalid("intermediate chunks must not sample")
     if stress.get("all_resources_released") is not True:
         _invalid("Stage 16 stress evidence leaked cache resources")
+    if stress.get("terminal_prefill_logits_released") is not True:
+        _invalid("Stage 16 stress evidence retained terminal prefill logits")
     if lifecycle.get("exit_code") != 0:
         _invalid("Stage 16 lifecycle tests did not pass")
     if benchmark.get("strict_verdict") != "descriptive_only":
@@ -654,6 +719,10 @@ def generate_stage16_evidence(  # noqa: C901, PLR0912, PLR0913
         "chunked_prefill": True,
         "token_budget_scheduler": True,
         "decode_prefill_interleaving": True,
+        "overflow_budget_accounting": True,
+        "terminal_prefill_logits_released": True,
+        "apc_batched_prefill_default": False,
+        "apc_batched_prefill_opt_in": True,
         "intermediate_chunks_block_aligned": True,
         "partial_final_chunk_supported": True,
         "intermediate_chunks_sample": False,
@@ -734,6 +803,9 @@ def verify_stage16_evidence(  # noqa: C901
         "chunked_prefill",
         "token_budget_scheduler",
         "decode_prefill_interleaving",
+        "overflow_budget_accounting",
+        "terminal_prefill_logits_released",
+        "apc_batched_prefill_opt_in",
         "intermediate_chunks_block_aligned",
         "partial_final_chunk_supported",
         "per_request_rng_equivalence",
@@ -745,6 +817,7 @@ def verify_stage16_evidence(  # noqa: C901
         if summary.get(key) is not True:
             _invalid(f"summary contract {key} did not pass")
     for key in (
+        "apc_batched_prefill_default",
         "intermediate_chunks_sample",
         "historical_kv_materialized",
         "wall_clock_performance_improvement",
@@ -788,6 +861,7 @@ def _readme(
     scheduling: EvidenceDocument,
 ) -> str:
     interleaving = scheduling["decode_prefill_interleaving_observed"]
+    overflow = scheduling["overflow_rebuild_work_observed"]
     budget_respected = scheduling["per_tick_budget_respected"]
     partial_final = scheduling["partial_final_chunk_observed"]
     return "\n".join(
@@ -799,12 +873,18 @@ def _readme(
             "advance request RNG; only the final prompt chunk produces the first generated token.",
             "",
             "The implementation reuses Stage 15 paged-history batched prefill and Stage 14 APC.",
+            "Normal paged decode is charged one work unit; learned-position overflow is charged",
+            "the actual dense rebuild context length. Work that does not fit the remaining budget",
+            "is deferred by the FIFO fairness cursor instead of executing over budget.",
+            "Stage 15 batched APC suffix prefill remains an explicit config opt-in,",
+            "not the production default.",
             "Complete APC blocks remain immutable/shared; partial tails remain request-private.",
             "Chunked APC promotion reuses the existing final prompt promotion transaction.",
             "",
             f"Correctness equivalent to unchunked Stage 15: `{correctness['equivalent']}`.",
             f"Observed chunk count: `{correctness['chunk_count']}`.",
             f"Decode/prefill interleaving observed: `{interleaving}`.",
+            f"Overflow rebuild work observed and budgeted: `{overflow}`.",
             f"Per-tick budget respected: `{budget_respected}`.",
             f"Partial final chunk observed: `{partial_final}`.",
             "",

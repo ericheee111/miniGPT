@@ -39,6 +39,7 @@ def test_stage16_stress_is_deterministic_and_releases_every_block() -> None:
     assert cast("int", first["operations"]) >= 100
     assert cast("int", first["chunk_count"]) > 0
     assert first["all_resources_released"] is True
+    assert first["terminal_prefill_logits_released"] is True
     assert first["active_refs_after_cleanup"] == 0
     assert first["private_blocks_after_cleanup"] == 0
     assert first["reservations_after_cleanup"] == 0
@@ -78,6 +79,10 @@ def test_stage16_package_binds_scheduler_claims_and_exact_hashes(tmp_path: Path)
     assert summary["chunked_prefill"] is True
     assert summary["token_budget_scheduler"] is True
     assert summary["decode_prefill_interleaving"] is True
+    assert summary["overflow_budget_accounting"] is True
+    assert summary["terminal_prefill_logits_released"] is True
+    assert summary["apc_batched_prefill_opt_in"] is True
+    assert summary["apc_batched_prefill_default"] is False
     assert summary["intermediate_chunks_block_aligned"] is True
     assert summary["partial_final_chunk_supported"] is True
     assert summary["intermediate_chunks_sample"] is False

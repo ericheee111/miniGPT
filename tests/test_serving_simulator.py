@@ -89,6 +89,7 @@ def test_json_and_yaml_inputs_resolve_to_the_same_strict_config(tmp_path: Path) 
     assert json_config == yaml_config
     assert json_config.requests[0].prompt_tokens == (1, 2)
     assert json_config.requests[1].prompt_tokens == (15, 16, 0)
+    assert json_config.apc_prefill_strategy.value == "sequential"
 
 
 def test_chunked_scheduler_config_runs_through_simulator(tmp_path: Path) -> None:

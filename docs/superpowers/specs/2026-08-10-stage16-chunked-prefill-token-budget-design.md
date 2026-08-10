@@ -21,24 +21,33 @@ prefill_chunk_tokens
 
 They are either both unset (legacy Stage 10–15 scheduling) or both positive (Stage 16 mode).
 Stage 16 mode requires the paged backend. `prefill_chunk_tokens` must be a multiple of the physical
-`block_tokens`, and the per-tick budget must be large enough to advance every decode row plus at least
-one physical prefill block when a prefill request is active.
+`block_tokens`. `max_scheduled_tokens` must be large enough for at least one full learned-position
+window rebuild, because an overflow decode may execute dense fallback over that entire context.
 
-The budget counts useful logical tokens, not padding. Stage 15 `PrefillBatchConfig` still independently
-bounds tensor batch size, padded tokens, and padding waste.
+The budget counts actual model-token work, not padding. A normal paged decode costs one token;
+learned-position overflow costs the actual dense rebuild context length; a prompt chunk costs its
+computed chunk length. Stage 15 `PrefillBatchConfig` still independently bounds tensor batch size,
+padded tokens, and padding waste.
 
 ## Scheduling policy
 
-Each Stage 16 tick applies cancellation and admission first, then builds one deterministic schedule:
+Each Stage 16 tick applies cancellation and admission first, then schedules only requests that were
+already live at the tick boundary. New admissions never wait for a future arrival to form a batch and
+begin model work on a later tick, preserving the existing no-wait control-plane contract.
 
-1. every currently decoding request receives one decode token budget unit;
-2. remaining budget is assigned to PREFILLING requests in active/FIFO order;
-3. each request receives at most `prefill_chunk_tokens` useful prompt tokens in that tick;
-4. multiple selected chunks may execute in one Stage 15 paged-history batch when padding limits allow;
-5. requests are never reordered and the scheduler never waits for future arrivals.
+For each eligible request, model work is charged before execution:
 
-Exact full-prefix hits consume zero Transformer token budget and may finish prefill without a model
-call.
+1. normal paged decode costs `1`;
+2. learned-position overflow costs the actual dense rebuild token count;
+3. each PREFILLING request receives at most `prefill_chunk_tokens` prompt tokens;
+4. exact full-prefix hits cost zero model tokens;
+5. work that does not fit the remaining budget is deferred and is never executed over budget.
+
+Scheduling follows deterministic FIFO order. When a high-cost decode blocks the remaining budget while
+prefill is also live, a persistent fairness cursor gives the prefill side the next tick before resuming
+the deferred decode. This bounded alternation preserves FIFO progress without starving either decode or
+prefill. Consecutive normal decode rows may still batch together, and multiple selected chunks may use
+one Stage 15 paged-history batch when padding limits allow.
 
 ## Chunk boundaries
 
@@ -82,11 +91,12 @@ boundary, the next chunk always starts at an append-safe complete-block boundary
 leave the existing PRIVATE partial tail.
 
 When APC is enabled, intermediate chunk logits are retained only as request-local promotion evidence.
-Full prompt blocks remain request-private until the final prompt chunk. The final commit concatenates
-the computed suffix logits across chunks and reuses the existing `promote_prompt_blocks` transaction
-once, with the semantic prefix inferred from the original APC hit rather than from the current chunk
-cursor. This preserves Stage 14 canonicalization, duplicate release, rollback, and refcount semantics
-without introducing partial-block sharing or a second promotion protocol.
+When APC is disabled, those logits are not retained at all. Full prompt blocks remain request-private
+until the final prompt chunk. The final commit concatenates the computed suffix logits across chunks
+and reuses the existing `promote_prompt_blocks` transaction once, with the semantic prefix inferred
+from the original APC hit rather than from the current chunk cursor. This preserves Stage 14
+canonicalization, duplicate release, rollback, and refcount semantics without introducing partial-block
+sharing or a second promotion protocol.
 
 Partial tails remain PRIVATE.
 
@@ -95,7 +105,8 @@ Partial tails remain PRIVATE.
 A request may remain `PREFILLING` across multiple ticks. Its paged table length is the authoritative
 prefill cursor. Cancellation, disconnect, backpressure failure, model failure, promotion failure, and
 shutdown reuse the existing owner-thread cleanup path and must release active refs, private ownership,
-and reservations without leaking blocks.
+reservations, and any retained intermediate `prefill_logits_chunks`. Terminal requests must not keep
+promotion-only logits tensors reachable after cleanup.
 
 The request's first-token timestamp is set only after the final prompt chunk. `prefill_tokens_computed`
 is cumulative across chunks and still excludes APC-hit tokens.

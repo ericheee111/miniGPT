@@ -113,6 +113,23 @@ def _engine(
     )
 
 
+def test_paged_apc_default_prefill_strategy_is_sequential() -> None:
+    # Given: a direct paged executor is constructed without a Stage 15 strategy override.
+    model = _model()
+    paged = PagedKVCacheConfig(block_tokens=2, num_blocks=16)
+    pool = PagedKVCachePool.from_model(
+        paged,
+        model,
+        prefix_cache_namespace=_namespace(model),
+    )
+
+    # When: the executor uses its production default.
+    executor = PagedAttentionExecutor(model, pool)
+
+    # Then: the unproven batched strategy is opt-in rather than silently enabled.
+    assert executor.prefix_prefill_strategy is APCPrefillStrategy.SEQUENTIAL
+
+
 def _run(engine: ServingEngine, *, start: int = 0) -> None:
     for tick in range(start, start + 100):
         if engine.is_idle:
