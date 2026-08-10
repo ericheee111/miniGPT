@@ -1,0 +1,14 @@
+{
+  "all_requests_terminal": true,
+  "all_resources_released": true,
+  "operations": 1012,
+  "preemptions": 121,
+  "recompute_tokens": 413,
+  "requests": 131,
+  "resumes": 77,
+  "schema_version": 1,
+  "stage": "17",
+  "stress_seed": 1717,
+  "terminal_prefill_logits_released": true,
+  "terminal_state_sha256": "431cbaf14e3fafd97c13f8ca53b426759b1554bb220db8777db8c736ec7cf9b2"
+}

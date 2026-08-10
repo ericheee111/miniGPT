@@ -1,0 +1,33 @@
+{
+  "active_resources_released": true,
+  "equivalent": true,
+  "overflow_observed": true,
+  "overflow_sliding_window_equivalence": true,
+  "per_request": {
+    "first": {
+      "generated_token_match": true,
+      "preemptions": 5,
+      "recompute_tokens": 34,
+      "resumes": 5,
+      "rng_match": true,
+      "rng_sha256": "a6747f8e6198b1c21f314d051df8108e0937118baf2ffc7db475060dba134ed1",
+      "status": "finished"
+    },
+    "second": {
+      "generated_token_match": true,
+      "preemptions": 5,
+      "recompute_tokens": 34,
+      "resumes": 5,
+      "rng_match": true,
+      "rng_sha256": "b55fe825cea7ada592ab5035ce05d562ef543cdd207072c63dbf88e3fc4264b4",
+      "status": "finished"
+    }
+  },
+  "per_request_rng_equivalence": true,
+  "preemptions": 10,
+  "recompute_observation_tokens": 68,
+  "recompute_tokens": 68,
+  "resumes": 10,
+  "schema_version": 1,
+  "stage": "17"
+}

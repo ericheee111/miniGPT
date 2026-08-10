@@ -1,0 +1,47 @@
+{
+  "artifacts": [
+    {
+      "bytes": 164,
+      "path": "evidence/apc.json",
+      "sha256": "5e89199eab8541f07fe84f1a5fa29aff0f4c12b8714f968a363364dfa7255746"
+    },
+    {
+      "bytes": 260,
+      "path": "evidence/benchmark.json",
+      "sha256": "8c3e0dcc1a83009cae9c3b0d5a639834372a96e119b46aa15cd5be47746b4c09"
+    },
+    {
+      "bytes": 889,
+      "path": "evidence/correctness.json",
+      "sha256": "c9b9e268133b1c35c30ce5c67ef53f433e7736b5c123c322748172e617dac5f5"
+    },
+    {
+      "bytes": 536,
+      "path": "evidence/lifecycle_tests.json",
+      "sha256": "a298689bad8b6f536141f674c37e0c2cdbae6251e247f03d7d5fdc542dfaa35e"
+    },
+    {
+      "bytes": 7760,
+      "path": "evidence/scheduling.json",
+      "sha256": "e9d64c45938c12f9dbd6756fc3d633f07c819a94b05b39c2936decec016a3dd4"
+    },
+    {
+      "bytes": 379,
+      "path": "evidence/stress.json",
+      "sha256": "fc728bc7d5b75257a4c5ea2d693b0c3abb0d6b2a8877166a70b86a246bbde387"
+    },
+    {
+      "bytes": 1025,
+      "path": "README.md",
+      "sha256": "9dcccdff3378046170de3564b50590484f3519a219c2671b47cd6d332a76b917"
+    },
+    {
+      "bytes": 889,
+      "path": "summary.json",
+      "sha256": "6ffa50b31a05bf2241b9acb68ef3dc986fff659c73188cb1852fd76c85b0e79b"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "cd205c0dad5bcea4b44d34dd46c97a026ff58330",
+  "stage": "17"
+}

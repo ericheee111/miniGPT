@@ -1,0 +1,7 @@
+{
+  "active_resources_released": true,
+  "resume_uses_private_recompute": true,
+  "schema_version": 1,
+  "shared_refs_released_on_preempt": true,
+  "stage": "17"
+}
