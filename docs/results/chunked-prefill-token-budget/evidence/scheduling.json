@@ -1,0 +1,49 @@
+{
+  "active_resources_released": true,
+  "block_size": 2,
+  "chunk_batches": 3,
+  "chunk_finishes": 4,
+  "chunk_size": 2,
+  "chunk_starts": 4,
+  "chunk_work_total": 7,
+  "decode_prefill_interleaving_observed": true,
+  "intermediate_chunks_block_aligned": true,
+  "intermediate_chunks_sample": false,
+  "partial_final_chunk_observed": true,
+  "per_tick": [
+    {
+      "decode_rows": 0,
+      "prefill_chunk_work": 0,
+      "scheduled_work": 0,
+      "tick": 0
+    },
+    {
+      "decode_rows": 0,
+      "prefill_chunk_work": 4,
+      "scheduled_work": 4,
+      "tick": 1
+    },
+    {
+      "decode_rows": 1,
+      "prefill_chunk_work": 2,
+      "scheduled_work": 3,
+      "tick": 2
+    },
+    {
+      "decode_rows": 1,
+      "prefill_chunk_work": 1,
+      "scheduled_work": 2,
+      "tick": 3
+    },
+    {
+      "decode_rows": 1,
+      "prefill_chunk_work": 0,
+      "scheduled_work": 1,
+      "tick": 4
+    }
+  ],
+  "per_tick_budget_respected": true,
+  "scheduled_budget": 6,
+  "schema_version": 1,
+  "stage": "16"
+}

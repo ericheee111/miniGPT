@@ -1,0 +1,18 @@
+{
+  "active_refs_after_cleanup": 0,
+  "active_refs_before_cleanup": 0,
+  "all_resources_released": true,
+  "allocated_blocks_after_cleanup": 0,
+  "chunk_count": 394,
+  "free_blocks_after_cleanup": 48,
+  "operations": 1000,
+  "prefix_hit_requests": 385,
+  "private_blocks_after_cleanup": 0,
+  "requests": 426,
+  "reservations_after_cleanup": 0,
+  "schema_version": 1,
+  "stage": "16",
+  "stress_seed": 1616,
+  "terminal_state_sha256": "6ae8055c44b8136ed1aea5de0240118d9b7dcf6889c76b1d56b377f2cfd23bbd",
+  "total_blocks": 48
+}

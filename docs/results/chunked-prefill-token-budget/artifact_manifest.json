@@ -1,0 +1,42 @@
+{
+  "artifacts": [
+    {
+      "bytes": 411,
+      "path": "evidence/benchmark.json",
+      "sha256": "fe4cbb1401aca4b3959f876c6b34a9a50bea540513a67264979d4018992e7d0a"
+    },
+    {
+      "bytes": 669,
+      "path": "evidence/correctness.json",
+      "sha256": "df85dc0df26cc65f9ad922d03b797ec6c9ba3978639213871df108681148f3af"
+    },
+    {
+      "bytes": 389,
+      "path": "evidence/lifecycle_tests.json",
+      "sha256": "bbca3523633c677ef11841a9e3856a1d11bff4599b484e02246984047ab16f01"
+    },
+    {
+      "bytes": 1018,
+      "path": "evidence/scheduling.json",
+      "sha256": "5f9047112a3b034585b89ec26bc4fa82e2992eeb6efd39726d57da788916e1be"
+    },
+    {
+      "bytes": 525,
+      "path": "evidence/stress.json",
+      "sha256": "d4c3f5ee55c5f66f2f581ebd60fc72e08a071b52a788be5749f20f9f04fdcd6b"
+    },
+    {
+      "bytes": 1269,
+      "path": "README.md",
+      "sha256": "bd527d386f1e806f24e77776ef3259c5f9e985aa56576b9a47deb1f52d0aa207"
+    },
+    {
+      "bytes": 839,
+      "path": "summary.json",
+      "sha256": "2be2660ecd92c18a4954f14f24ba92c7f7ea42c2985d142ce6b3896ac8362d2b"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "d77117ad1b9dea3537a76097afdd48a2d8058dd1",
+  "stage": "16"
+}

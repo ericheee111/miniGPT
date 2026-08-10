@@ -1,0 +1,14 @@
+{
+  "bounded_prefill_work_per_tick": true,
+  "chunk_work_total": 7,
+  "correctness_equivalent": true,
+  "decode_prefill_interleaving_observed": true,
+  "prefill_computed_count": 19,
+  "reused_prompt_count": 16,
+  "schema_version": 1,
+  "stage": "16",
+  "strict_verdict": "descriptive_only",
+  "timing_claim_permitted": false,
+  "timing_samples_collected": false,
+  "wall_clock_performance_improvement": false
+}
