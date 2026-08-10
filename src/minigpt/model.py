@@ -459,6 +459,97 @@ class GPT(nn.Module):
         return logits, tuple(cache_delta)
 
     @torch.no_grad()
+    def prefill_paged_batch(
+        self,
+        token_ids: Tensor,
+        new_token_lengths: Tensor,
+        cache_views: Sequence[PagedKVCacheView | None],
+        past_lengths: Tensor,
+    ) -> tuple[Tensor, KVCache]:
+        """Evaluate right-padded token segments against optional paged history."""
+        self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
+        batch_size, padded_length = token_ids.shape
+        self._validate_paged_segment_lengths(
+            token_ids,
+            new_token_lengths,
+            past_lengths,
+        )
+        self._validate_paged_prefill_views(cache_views, past_lengths, batch_size)
+
+        offsets = torch.arange(padded_length, device=token_ids.device).view(1, -1)
+        valid_tokens = offsets < new_token_lengths.view(-1, 1)
+        absolute_positions = past_lengths.view(-1, 1) + offsets
+        safe_positions = absolute_positions.masked_fill(~valid_tokens, 0)
+        token_embeddings = cast("Tensor", self.token_embedding(token_ids))
+        position_embeddings = cast("Tensor", self.position_embedding(safe_positions))
+        hidden_states = cast(
+            "Tensor",
+            self.embedding_dropout(token_embeddings + position_embeddings),
+        )
+        cache_delta: list[LayerKVCache] = []
+        for layer_index, module in enumerate(self.blocks):
+            if not isinstance(module, TransformerBlock):
+                raise UnexpectedTransformerBlockError(layer_index, type(module).__name__)
+            layer_views = tuple(
+                None if request_view is None else request_view[layer_index]
+                for request_view in cache_views
+            )
+            hidden_states, layer_delta = module.forward_paged_prefill_batch(
+                hidden_states,
+                layer_views,
+                new_token_lengths,
+            )
+            cache_delta.append(layer_delta)
+        normalized = cast("Tensor", self.final_norm(hidden_states))
+        logits = cast("Tensor", self.lm_head(normalized))
+        return logits, tuple(cache_delta)
+
+    def _validate_paged_segment_lengths(
+        self,
+        token_ids: Tensor,
+        new_token_lengths: Tensor,
+        past_lengths: Tensor,
+    ) -> None:
+        batch_size, padded_length = token_ids.shape
+        for name, lengths in (
+            ("new token lengths", new_token_lengths),
+            ("past lengths", past_lengths),
+        ):
+            if lengths.shape != (batch_size,) or lengths.dtype != torch.long:
+                _invalid_cache(f"{name} batch/dtype is invalid")
+            if lengths.device != token_ids.device:
+                _invalid_cache(f"{name} device must equal input device")
+        minimum_new = int(new_token_lengths.min().item())
+        maximum_new = int(new_token_lengths.max().item())
+        if minimum_new <= 0 or maximum_new > padded_length:
+            _invalid_cache("new token lengths must be in [1, padded segment length]")
+        if int(past_lengths.min().item()) < 0:
+            _invalid_cache("past lengths must be non-negative")
+        if int((new_token_lengths + past_lengths).max().item()) > self.config.block_size:
+            _invalid_cache("paged history plus new segment exceeds block_size")
+
+    def _validate_paged_prefill_views(
+        self,
+        cache_views: Sequence[PagedKVCacheView | None],
+        past_lengths: Tensor,
+        batch_size: int,
+    ) -> None:
+        if len(cache_views) != batch_size:
+            _invalid_cache("paged cache view count must equal input batch")
+        for row, request_view in enumerate(cache_views):
+            row_past = int(past_lengths[row].item())
+            if row_past == 0:
+                if request_view is not None:
+                    _invalid_cache(f"paged row {row} with zero history must not have a view")
+                continue
+            if request_view is None:
+                _invalid_cache(f"paged row {row} with history must have a view")
+            if len(request_view) != self.config.n_layer:
+                _invalid_cache(f"paged row {row} layer count must equal model")
+            if any(layer.cache_length != row_past for layer in request_view):
+                _invalid_cache(f"paged row {row} view lengths must equal past lengths")
+
+    @torch.no_grad()
     def prefill_batch(
         self,
         token_ids: Tensor,

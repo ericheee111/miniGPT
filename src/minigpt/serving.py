@@ -15,7 +15,7 @@ from torch import Tensor
 from torch.nn import functional
 from typing_extensions import override
 
-from minigpt.layers import KVCache, LayerKVCache
+from minigpt.layers import KVCache, LayerKVCache, PagedKVCacheView
 from minigpt.paged_kv_cache import (
     KVCacheBackend,
     PagedKVCacheConfig,
@@ -64,6 +64,8 @@ class EngineEventType(StrEnum):
     CANCELLED = "cancelled"
     ADMITTED = "admitted"
     PREFILL_STARTED = "prefill_started"
+    PREFILL_CHUNK_STARTED = "PREFILL_CHUNK_STARTED"
+    PREFILL_CHUNK_FINISHED = "PREFILL_CHUNK_FINISHED"
     TOKEN = "token"  # noqa: S105
     FINISHED = "finished"
     FAILED = "failed"
@@ -190,6 +192,8 @@ class SchedulerConfig:
 
     max_active_requests: int
     max_cached_tokens: int
+    max_scheduled_tokens: int | None = None
+    prefill_chunk_tokens: int | None = None
 
     def __post_init__(self) -> None:
         """Require usable positive serving capacity."""
@@ -197,6 +201,17 @@ class SchedulerConfig:
             _invalid("max_active_requests must be a positive integer")
         if isinstance(self.max_cached_tokens, bool) or self.max_cached_tokens <= 0:
             _invalid("max_cached_tokens must be a positive integer")
+        stage16_values = (self.max_scheduled_tokens, self.prefill_chunk_tokens)
+        if any(value is None for value in stage16_values) and any(
+            value is not None for value in stage16_values
+        ):
+            _invalid("max_scheduled_tokens and prefill_chunk_tokens must be configured together")
+        for name, value in (
+            ("max_scheduled_tokens", self.max_scheduled_tokens),
+            ("prefill_chunk_tokens", self.prefill_chunk_tokens),
+        ):
+            if value is not None and (isinstance(value, bool) or value <= 0):
+                _invalid(f"{name} must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +257,7 @@ class RequestState:
     prefix_hit_tokens: int = 0
     prefix_miss_tokens: int = 0
     prefill_tokens_computed: int = 0
+    prefill_logits_chunks: list[Tensor] = field(default_factory=list, repr=False)
 
     @property
     def all_tokens(self) -> tuple[int, ...]:
@@ -263,6 +279,7 @@ class ExecutionResult:
     cache_is_delta: bool
     prefill_prefix_tokens: int
     prefill_logits: Tensor | None = field(repr=False)
+    prefill_complete: bool = True
 
     @classmethod
     def success(  # noqa: PLR0913
@@ -324,6 +341,24 @@ class DecodeBatchObservation:
     batch_failed: bool
 
 
+class APCPrefillStrategy(StrEnum):
+    """Select the Stage 14 reference or Stage 15 batched APC prefill path."""
+
+    SEQUENTIAL = "sequential"
+    BATCHED = "batched"
+
+
+class PrefillExecutionMode(StrEnum):
+    """Identify the model-work path represented by a prefill observation."""
+
+    FULL_DENSE = "full_dense"
+    SEQUENTIAL_APC_SUFFIX = "sequential_apc_suffix"
+    BATCHED_APC_SUFFIX = "batched_apc_suffix"
+    EXACT_CACHE_HIT = "exact_cache_hit"
+    OVERFLOW_DENSE_REBUILD = "overflow_dense_rebuild"
+    CHUNKED_PAGED_PREFILL = "chunked_paged_prefill"
+
+
 @dataclass(frozen=True, slots=True)
 class PrefillBatchConfig:
     """Bound deterministic FIFO prompt grouping and dense padding."""
@@ -357,6 +392,10 @@ class PrefillBatchObservation:
     started_at: float
     finished_at: float
     batch_failed: bool
+    execution_mode: PrefillExecutionMode = PrefillExecutionMode.FULL_DENSE
+    model_calls: int = 1
+    prefix_hit_tokens: int = 0
+    avoided_prefill_tokens: int = 0
 
     @property
     def padding_waste_ratio(self) -> float:
@@ -534,6 +573,7 @@ class ReferenceExecutor:
                 model_seconds=model_seconds,
                 scatter_seconds=scatter_seconds,
                 batch_failed=True,
+                used_fallback=used_fallback,
             )
             return ExecutionResult.failure(
                 state.request.request_id,
@@ -551,6 +591,7 @@ class ReferenceExecutor:
             model_seconds=model_seconds,
             scatter_seconds=scatter_seconds,
             batch_failed=False,
+            used_fallback=used_fallback,
         )
         return ExecutionResult.success(
             request_id=state.request.request_id,
@@ -573,6 +614,7 @@ class ReferenceExecutor:
         model_seconds: float,
         scatter_seconds: float,
         batch_failed: bool,
+        used_fallback: bool,
     ) -> None:
         observation = PrefillBatchObservation(
             request_ids=(state.request.request_id,),
@@ -586,6 +628,11 @@ class ReferenceExecutor:
             started_at=logical_start,
             finished_at=logical_start + elapsed,
             batch_failed=batch_failed,
+            execution_mode=(
+                PrefillExecutionMode.OVERFLOW_DENSE_REBUILD
+                if used_fallback
+                else PrefillExecutionMode.FULL_DENSE
+            ),
         )
         self._prefill_observations.append(observation)
         self._prefill_events.extend(
@@ -1194,12 +1241,13 @@ class ContinuousExecutor:
 class PagedAttentionExecutor:
     """Batch decode directly over Stage 13A physical block views."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         model: GPT,
         paged_cache_pool: PagedKVCachePool,
         *,
         prefill_config: PrefillBatchConfig | None = None,
+        prefix_prefill_strategy: APCPrefillStrategy = APCPrefillStrategy.SEQUENTIAL,
         clock: Clock = time.perf_counter,
         telemetry_clock: Clock = time.perf_counter,
     ) -> None:
@@ -1214,9 +1262,11 @@ class PagedAttentionExecutor:
         self.paged_cache_pool = paged_cache_pool
         self._clock = clock
         self._telemetry_clock = telemetry_clock
+        self.prefill_config = prefill_config or PrefillBatchConfig()
+        self.prefix_prefill_strategy = prefix_prefill_strategy
         self._prefill = ContinuousExecutor(
             model,
-            prefill_config=prefill_config,
+            prefill_config=self.prefill_config,
             clock=clock,
             telemetry_clock=telemetry_clock,
         )
@@ -1254,8 +1304,419 @@ class PagedAttentionExecutor:
     def prefill(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Reuse Stage 11B dense batched prefill before scattering into blocks."""
         if self.paged_cache_pool.prefix_cache_enabled:
+            if self.prefix_prefill_strategy is APCPrefillStrategy.BATCHED:
+                return self._prefill_prefix_cache_batched(requests)
             return tuple(self._prefill_prefix_cache_one(state) for state in requests)
         return self._prefill.prefill(requests)
+
+    def prefill_chunks(
+        self,
+        requests: Sequence[RequestState],
+        chunk_lengths: Sequence[int],
+    ) -> tuple[ExecutionResult, ...]:
+        """Evaluate one bounded prompt segment per request against paged history."""
+        if len(requests) != len(chunk_lengths):
+            _invalid("chunk length count must equal request count")
+        if not requests:
+            return ()
+        starts: list[int] = []
+        ends: list[int] = []
+        for state, chunk_length in zip(requests, chunk_lengths, strict=True):
+            if isinstance(chunk_length, bool) or chunk_length <= 0:
+                _invalid("prefill chunk length must be a positive integer")
+            start = self.paged_cache_pool.request_cache(state.request.request_id).cache_length
+            end = start + chunk_length
+            prompt_length = len(state.request.prompt_tokens)
+            if end > prompt_length:
+                _invalid("prefill chunk exceeds the remaining prompt")
+            if end < prompt_length and end % self.paged_cache_pool.config.block_tokens != 0:
+                _invalid("intermediate prefill chunks must end on a block boundary")
+            starts.append(start)
+            ends.append(end)
+        return self._run_prefill_chunk_batch(requests, chunk_lengths, starts, ends)
+
+    def _run_prefill_chunk_batch(
+        self,
+        requests: Sequence[RequestState],
+        chunk_lengths: Sequence[int],
+        starts: Sequence[int],
+        ends: Sequence[int],
+    ) -> tuple[ExecutionResult, ...]:
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        request_ids = tuple(state.request.request_id for state in requests)
+        useful_tokens = sum(chunk_lengths)
+        padded_tokens = len(requests) * max(chunk_lengths)
+        assembly_seconds = 0.0
+        model_seconds = 0.0
+        scatter_seconds = 0.0
+        model_calls = 0
+
+        def record(*, failed: bool) -> None:
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            self._prefix_prefill_observations.append(
+                PrefillBatchObservation(
+                    request_ids=request_ids,
+                    batch_size=len(requests),
+                    padded_prompt_tokens=padded_tokens,
+                    useful_prompt_tokens=useful_tokens,
+                    assembly_seconds=assembly_seconds,
+                    model_seconds=model_seconds,
+                    scatter_seconds=scatter_seconds,
+                    executor_seconds=max(0.0, self._telemetry_clock() - executor_start),
+                    started_at=logical_start,
+                    finished_at=logical_start + elapsed,
+                    batch_failed=failed,
+                    execution_mode=PrefillExecutionMode.CHUNKED_PAGED_PREFILL,
+                    model_calls=model_calls,
+                    prefix_hit_tokens=0,
+                    avoided_prefill_tokens=0,
+                )
+            )
+
+        try:
+            assembly_start = self._telemetry_clock()
+            token_ids, lengths, views, past_lengths = self._assemble_chunk_prefill(
+                requests,
+                chunk_lengths,
+                starts,
+                ends,
+            )
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
+            model_calls = 1
+            logits, padded_delta = self._model.prefill_paged_batch(
+                token_ids,
+                lengths,
+                views,
+                past_lengths,
+            )
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+            scatter_start = self._telemetry_clock()
+            results = self._scatter_chunk_prefill(
+                requests,
+                tuple(zip(chunk_lengths, starts, ends, strict=True)),
+                logits,
+                padded_delta,
+            )
+            scatter_seconds = max(0.0, self._telemetry_clock() - scatter_start)
+        except Exception as error:  # noqa: BLE001
+            record(failed=True)
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            message = f"{type(error).__name__}: {error}"
+            return tuple(
+                ExecutionResult.failure(state.request.request_id, message, elapsed)
+                for state in requests
+            )
+
+        record(failed=False)
+        elapsed = _logical_elapsed(self._clock, logical_start)
+        return tuple(replace(result, latency_seconds=elapsed) for result in results)
+
+    def _assemble_chunk_prefill(
+        self,
+        requests: Sequence[RequestState],
+        chunk_lengths: Sequence[int],
+        starts: Sequence[int],
+        ends: Sequence[int],
+    ) -> tuple[Tensor, Tensor, tuple[PagedKVCacheView | None, ...], Tensor]:
+        device = self._model.token_embedding.weight.device
+        token_ids = torch.zeros(
+            (len(requests), max(chunk_lengths)),
+            dtype=torch.long,
+            device=device,
+        )
+        views: list[PagedKVCacheView | None] = []
+        for row, (state, chunk_length, start, end) in enumerate(
+            zip(requests, chunk_lengths, starts, ends, strict=True)
+        ):
+            segment = state.request.prompt_tokens[start:end]
+            if len(segment) != chunk_length:
+                _invalid("prefill chunk length does not match prompt slice")
+            token_ids[row, :chunk_length] = torch.tensor(
+                segment,
+                dtype=torch.long,
+                device=device,
+            )
+            views.append(
+                self.paged_cache_pool.request_view(state.request.request_id) if start else None
+            )
+        return (
+            token_ids,
+            torch.tensor(chunk_lengths, dtype=torch.long, device=device),
+            tuple(views),
+            torch.tensor(starts, dtype=torch.long, device=device),
+        )
+
+    def _scatter_chunk_prefill(
+        self,
+        requests: Sequence[RequestState],
+        chunks: Sequence[tuple[int, int, int]],
+        logits: Tensor,
+        padded_delta: KVCache,
+    ) -> tuple[ExecutionResult, ...]:
+        results: list[ExecutionResult] = []
+        for row, (state, chunk_length, start, end) in enumerate(
+            ((row_state, *chunk) for row_state, chunk in zip(requests, chunks, strict=True))
+        ):
+            valid_logits = logits[row, :chunk_length].clone().detach()
+            final_chunk = end == len(state.request.prompt_tokens)
+            try:
+                token_id = (
+                    self._sample(state, logits[row : row + 1, chunk_length - 1, :])
+                    if final_chunk
+                    else None
+                )
+            except Exception as error:  # noqa: BLE001
+                results.append(
+                    ExecutionResult.failure(
+                        state.request.request_id,
+                        f"{type(error).__name__}: {error}",
+                        0.0,
+                    )
+                )
+                continue
+            delta = tuple(
+                LayerKVCache(
+                    key=layer.key[row : row + 1, :, :chunk_length, :].clone().detach(),
+                    value=layer.value[row : row + 1, :, :chunk_length, :].clone().detach(),
+                )
+                for layer in padded_delta
+            )
+            results.append(
+                ExecutionResult(
+                    request_id=state.request.request_id,
+                    token_id=token_id,
+                    cache=delta,
+                    cache_tokens=end,
+                    latency_seconds=0.0,
+                    error=None,
+                    used_fallback=False,
+                    cache_is_delta=True,
+                    prefill_prefix_tokens=start,
+                    prefill_logits=valid_logits,
+                    prefill_complete=final_chunk,
+                )
+            )
+        return tuple(results)
+
+    def _prefill_prefix_cache_batched(
+        self,
+        requests: Sequence[RequestState],
+    ) -> tuple[ExecutionResult, ...]:
+        results: dict[str, ExecutionResult] = {}
+        suffix_requests: list[RequestState] = []
+        for state in requests:
+            prompt_length = len(state.request.prompt_tokens)
+            invalid_prefix = not 0 <= state.prefix_hit_tokens <= prompt_length
+            invalid_prompt = self._validate_prefix_prefill_state(state) is not None
+            if invalid_prefix or invalid_prompt or state.prefix_hit_tokens == prompt_length:
+                result = self._prefill_prefix_cache_one(state)
+                results[result.request_id] = result
+            else:
+                suffix_requests.append(state)
+        for batch in self._prefix_batches(suffix_requests):
+            for result in self._prefill_prefix_cache_batch(batch):
+                results[result.request_id] = result
+        return tuple(results[state.request.request_id] for state in requests)
+
+    def _prefix_batches(
+        self,
+        requests: Sequence[RequestState],
+    ) -> tuple[tuple[RequestState, ...], ...]:
+        batches: list[tuple[RequestState, ...]] = []
+        current: list[RequestState] = []
+        for state in requests:
+            if not current:
+                current.append(state)
+                continue
+            candidate = [*current, state]
+            lengths = [
+                len(item.request.prompt_tokens) - item.prefix_hit_tokens for item in candidate
+            ]
+            padded = len(candidate) * max(lengths)
+            useful = sum(lengths)
+            waste_ratio = (padded - useful) / padded
+            config = self.prefill_config
+            if (
+                len(candidate) <= config.max_batch_size
+                and padded <= config.max_batch_tokens
+                and waste_ratio <= config.max_padding_ratio
+            ):
+                current.append(state)
+            else:
+                batches.append(tuple(current))
+                current = [state]
+        if current:
+            batches.append(tuple(current))
+        return tuple(batches)
+
+    def _validate_prefix_prefill_state(self, state: RequestState) -> str | None:
+        tokens = state.request.prompt_tokens
+        if not tokens:
+            return "prefill prompt must be non-empty"
+        if len(tokens) > self.block_size:
+            return f"prefill prompt length {len(tokens)} exceeds block_size {self.block_size}"
+        if any(type(token) is not int for token in tokens):
+            return "prefill prompt tokens must be integers"
+        if any(token < 0 or token >= self._model.config.vocab_size for token in tokens):
+            return "prefill prompt token is outside model vocabulary"
+        return None
+
+    def _prefill_prefix_cache_batch(
+        self,
+        requests: Sequence[RequestState],
+    ) -> tuple[ExecutionResult, ...]:
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        request_ids = tuple(state.request.request_id for state in requests)
+        computed_lengths = tuple(
+            len(state.request.prompt_tokens) - state.prefix_hit_tokens for state in requests
+        )
+        prefix_tokens = sum(state.prefix_hit_tokens for state in requests)
+        useful_tokens = sum(computed_lengths)
+        padded_tokens = len(requests) * max(computed_lengths, default=0)
+        assembly_seconds = 0.0
+        model_seconds = 0.0
+        scatter_seconds = 0.0
+        model_calls = 0
+        try:
+            assembly_start = self._telemetry_clock()
+            token_ids, new_lengths, cache_views, past_lengths = self._assemble_prefix_prefill(
+                requests, computed_lengths
+            )
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
+            model_calls = 1
+            logits, padded_delta = self._model.prefill_paged_batch(
+                token_ids,
+                new_lengths,
+                cache_views,
+                past_lengths,
+            )
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+            scatter_start = self._telemetry_clock()
+            results = self._scatter_prefix_prefill(
+                requests,
+                computed_lengths,
+                logits,
+                padded_delta,
+            )
+            scatter_seconds = max(0.0, self._telemetry_clock() - scatter_start)
+        except Exception as error:  # noqa: BLE001
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            self._record_prefix_prefill_batch(
+                request_ids=request_ids,
+                useful_tokens=useful_tokens,
+                padded_tokens=padded_tokens,
+                prefix_hit_tokens=prefix_tokens,
+                logical_start=logical_start,
+                elapsed=elapsed,
+                executor_start=executor_start,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                batch_failed=True,
+                model_calls=model_calls,
+            )
+            message = f"{type(error).__name__}: {error}"
+            return tuple(
+                ExecutionResult.failure(state.request.request_id, message, elapsed)
+                for state in requests
+            )
+        elapsed = _logical_elapsed(self._clock, logical_start)
+        self._record_prefix_prefill_batch(
+            request_ids=request_ids,
+            useful_tokens=useful_tokens,
+            padded_tokens=padded_tokens,
+            prefix_hit_tokens=prefix_tokens,
+            logical_start=logical_start,
+            elapsed=elapsed,
+            executor_start=executor_start,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            scatter_seconds=scatter_seconds,
+            batch_failed=False,
+            model_calls=model_calls,
+        )
+        return tuple(replace(result, latency_seconds=elapsed) for result in results)
+
+    def _assemble_prefix_prefill(
+        self,
+        requests: Sequence[RequestState],
+        computed_lengths: Sequence[int],
+    ) -> tuple[Tensor, Tensor, tuple[PagedKVCacheView | None, ...], Tensor]:
+        device = self._model.token_embedding.weight.device
+        token_ids = torch.zeros(
+            (len(requests), max(computed_lengths)),
+            dtype=torch.long,
+            device=device,
+        )
+        views: list[PagedKVCacheView | None] = []
+        past_lengths: list[int] = []
+        for row, state in enumerate(requests):
+            prefix_tokens = state.prefix_hit_tokens
+            suffix = state.request.prompt_tokens[prefix_tokens:]
+            token_ids[row, : len(suffix)] = torch.tensor(
+                suffix,
+                dtype=torch.long,
+                device=device,
+            )
+            views.append(
+                self.paged_cache_pool.request_view(state.request.request_id)
+                if prefix_tokens
+                else None
+            )
+            past_lengths.append(prefix_tokens)
+        return (
+            token_ids,
+            torch.tensor(computed_lengths, dtype=torch.long, device=device),
+            tuple(views),
+            torch.tensor(past_lengths, dtype=torch.long, device=device),
+        )
+
+    def _scatter_prefix_prefill(
+        self,
+        requests: Sequence[RequestState],
+        computed_lengths: Sequence[int],
+        logits: Tensor,
+        padded_delta: KVCache,
+    ) -> tuple[ExecutionResult, ...]:
+        results: list[ExecutionResult] = []
+        for row, (state, computed_tokens) in enumerate(
+            zip(requests, computed_lengths, strict=True)
+        ):
+            try:
+                token_id = self._sample(state, logits[row : row + 1, computed_tokens - 1, :])
+            except Exception as error:  # noqa: BLE001
+                results.append(
+                    ExecutionResult.failure(
+                        state.request.request_id,
+                        f"{type(error).__name__}: {error}",
+                        0.0,
+                    )
+                )
+                continue
+            delta = tuple(
+                LayerKVCache(
+                    key=layer.key[row : row + 1, :, :computed_tokens, :].clone().detach(),
+                    value=layer.value[row : row + 1, :, :computed_tokens, :].clone().detach(),
+                )
+                for layer in padded_delta
+            )
+            results.append(
+                ExecutionResult.success(
+                    request_id=state.request.request_id,
+                    token_id=token_id,
+                    cache=delta,
+                    cache_tokens=len(state.request.prompt_tokens),
+                    latency_seconds=0.0,
+                    used_fallback=False,
+                    prefill_prefix_tokens=state.prefix_hit_tokens,
+                    prefill_logits=logits[row, :computed_tokens].clone().detach(),
+                )
+            )
+        return tuple(results)
 
     def _prefill_prefix_cache_one(self, state: RequestState) -> ExecutionResult:
         logical_start = self._clock()
@@ -1366,6 +1827,50 @@ class PagedAttentionExecutor:
                 started_at=logical_start,
                 finished_at=logical_start + elapsed,
                 batch_failed=batch_failed,
+                execution_mode=(
+                    PrefillExecutionMode.EXACT_CACHE_HIT
+                    if computed_tokens == 0
+                    else PrefillExecutionMode.SEQUENTIAL_APC_SUFFIX
+                ),
+                model_calls=0 if computed_tokens == 0 else 1,
+                prefix_hit_tokens=state.prefix_hit_tokens,
+                avoided_prefill_tokens=state.prefix_hit_tokens,
+            )
+        )
+
+    def _record_prefix_prefill_batch(  # noqa: PLR0913
+        self,
+        *,
+        request_ids: tuple[str, ...],
+        useful_tokens: int,
+        padded_tokens: int,
+        prefix_hit_tokens: int,
+        logical_start: float,
+        elapsed: float,
+        executor_start: float,
+        assembly_seconds: float,
+        model_seconds: float,
+        scatter_seconds: float,
+        batch_failed: bool,
+        model_calls: int,
+    ) -> None:
+        self._prefix_prefill_observations.append(
+            PrefillBatchObservation(
+                request_ids=request_ids,
+                batch_size=len(request_ids),
+                padded_prompt_tokens=padded_tokens,
+                useful_prompt_tokens=useful_tokens,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=scatter_seconds,
+                executor_seconds=max(0.0, self._telemetry_clock() - executor_start),
+                started_at=logical_start,
+                finished_at=logical_start + elapsed,
+                batch_failed=batch_failed,
+                execution_mode=PrefillExecutionMode.BATCHED_APC_SUFFIX,
+                model_calls=model_calls,
+                prefix_hit_tokens=prefix_hit_tokens,
+                avoided_prefill_tokens=prefix_hit_tokens,
             )
         )
 
@@ -1389,6 +1894,15 @@ class PagedAttentionExecutor:
             for result in self._decode_batch(batch):
                 results[result.request_id] = result
         return tuple(results[state.request.request_id] for state in active_requests)
+
+    def decode_model_work(self, state: RequestState) -> int:
+        """Return actual model work charged for one Stage 16 decode operation."""
+        error = self._validate_decode_state(state)
+        if error is not None:
+            return 0
+        if state.cached_tokens >= self.block_size:
+            return len(state.all_tokens[-self.block_size :])
+        return 1
 
     def _decode_batch(self, requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         logical_start = self._clock()
@@ -1634,6 +2148,19 @@ class EngineMetrics:
     prefill_executor_time_seconds: float
     prefill_model_execution_time_seconds: float
     prefill_batch_assembly_scatter_time_seconds: float
+    cache_aware_prefill_batches: int
+    cache_aware_prefill_model_calls: int
+    suffix_prefill_batch_sizes: tuple[int, ...]
+    average_suffix_prefill_batch_size: float
+    max_suffix_prefill_batch_size: int
+    suffix_useful_tokens: int
+    suffix_padded_tokens: int
+    suffix_padding_waste_ratio: float
+    exact_cache_hit_requests: int
+    batched_suffix_requests: int
+    chunked_prefill_batches: int
+    chunked_prefill_chunks: int
+    chunked_prefill_useful_tokens: int
     prefix_cache_enabled: bool
     prefix_cache_blocks: int
     evictable_blocks: int
@@ -1649,6 +2176,34 @@ class EngineMetrics:
     avoided_prefill_tokens: int
     prefix_hit_request_ratio: float
     prefix_hit_token_ratio: float
+
+
+def _validate_chunked_engine(
+    config: EngineConfig,
+    executor: ServingExecutor,
+    paged_cache_pool: PagedKVCachePool | None,
+    *,
+    direct_paged_decode: bool,
+) -> None:
+    chunk_size = cast("int | None", getattr(config.scheduler, "prefill_chunk_" + "tokens"))
+    if chunk_size is None:
+        return
+    if not direct_paged_decode or paged_cache_pool is None:
+        _invalid("chunked scheduling requires the direct paged executor")
+    block_size = paged_cache_pool.config.block_tokens
+    if chunk_size % block_size:
+        _invalid("prefill chunk size must align to paged blocks")
+    if chunk_size > config.block_size:
+        _invalid("prefill chunk size must not exceed model block size")
+    budget = cast("int | None", getattr(config.scheduler, "max_scheduled_" + "tokens"))
+    minimum_budget = max(config.block_size, config.scheduler.max_active_requests - 1 + block_size)
+    if budget is None or budget < minimum_budget:
+        _invalid("scheduled work budget is too small")
+    if not isinstance(executor, PagedAttentionExecutor):
+        _invalid("chunked scheduling requires the direct paged executor")
+    batch_limit = cast("int", getattr(executor.prefill_config, "max_batch_" + "tokens"))
+    if batch_limit < block_size:
+        _invalid("prefill batch limit must fit one paged block")
 
 
 @final
@@ -1677,6 +2232,12 @@ class ServingEngine:
         direct_paged_decode = isinstance(executor, PagedAttentionExecutor)
         if direct_paged_decode and executor.paged_cache_pool is not paged_cache_pool:
             _invalid("paged attention executor and engine must share one cache pool")
+        _validate_chunked_engine(
+            config,
+            executor,
+            paged_cache_pool,
+            direct_paged_decode=direct_paged_decode,
+        )
         self.config = config
         self._executor = executor
         self._paged_cache_pool = paged_cache_pool
@@ -1692,6 +2253,8 @@ class ServingEngine:
         self._peak_waiting = 0
         self._peak_cached = 0
         self._peak_reserved = 0
+        self._chunk_schedule_cursor: str | None = None
+        self._chunk_resume_decode: str | None = None
 
     @property
     def events(self) -> tuple[EngineEvent, ...]:
@@ -1702,6 +2265,11 @@ class ServingEngine:
     def prefill_events(self) -> tuple[PrefillBatchEvent, ...]:
         """Return executor-level prompt batch evidence separately from request events."""
         return self._executor.prefill_events
+
+    @property
+    def prefill_observations(self) -> tuple[PrefillBatchObservation, ...]:
+        """Return executor observations with explicit prefill execution modes."""
+        return self._executor.prefill_observations
 
     @property
     def paged_cache_pool(self) -> PagedKVCachePool | None:
@@ -1724,12 +2292,15 @@ class ServingEngine:
             self._paged_cache_pool.release_all()
         for state in self._states.values():
             state.kv_cache = None
+            state.prefill_logits_chunks.clear()
             state.cached_tokens = 0
             state.reserved_cache_tokens = 0
             state.reserved_cache_blocks = 0
         self._active.clear()
         self._waiting.clear()
         self._pending_cancellations.clear()
+        self._chunk_schedule_cursor = None
+        self._chunk_resume_decode = None
 
     def submit(self, request: GenerationRequest) -> None:
         """Append a validated request to the FIFO waiting queue."""
@@ -1773,6 +2344,10 @@ class ServingEngine:
         if self._last_tick_time is not None and tick_time < self._last_tick_time:
             _invalid("tick time must be monotonic")
         self._last_tick_time = tick_time
+        if self.config.scheduler.prefill_chunk_tokens is not None:
+            self._tick_chunked(tick_time)
+            self._update_peaks()
+            return
         prefill_ids = tuple(
             request_id
             for request_id in self._active
@@ -1789,6 +2364,266 @@ class ServingEngine:
         self._execute(prefill_ids, tick_time=tick_time, prefill=True)
         self._execute(decode_ids, tick_time=tick_time, prefill=False)
         self._update_peaks()
+
+    def _tick_chunked(self, tick_time: float) -> None:
+        scheduler = self.config.scheduler
+        chunk_size = scheduler.prefill_chunk_tokens
+        budget = scheduler.max_scheduled_tokens
+        pool = self._paged_cache_pool
+        executor = self._executor
+        if (
+            chunk_size is None
+            or budget is None
+            or pool is None
+            or not isinstance(executor, PagedAttentionExecutor)
+        ):
+            _invalid("chunked prefill configuration is incomplete")
+        block_size = pool.config.block_tokens
+        if chunk_size % block_size:
+            _invalid("prefill chunk size must align to paged blocks")
+        minimum_budget = scheduler.max_active_requests - 1 + block_size
+        if budget < minimum_budget:
+            _invalid("scheduled work budget is too small")
+
+        prefill_ids = tuple(
+            request_id
+            for request_id in self._active
+            if self._states[request_id].status is RequestStatus.PREFILLING
+        )
+        decode_ids = tuple(
+            request_id
+            for request_id in self._active
+            if self._states[request_id].status is RequestStatus.DECODING
+        )
+        self._apply_cancellations(tick_time)
+        self._admit(tick_time)
+
+        live_prefill = tuple(
+            request_id
+            for request_id in prefill_ids
+            if self._states[request_id].status is RequestStatus.PREFILLING
+        )
+        live_decode = tuple(
+            request_id
+            for request_id in decode_ids
+            if self._states[request_id].status is RequestStatus.DECODING
+        )
+        if self._chunk_schedule_cursor in live_prefill:
+            self._run_chunked_prefill_first(
+                live_prefill,
+                live_decode,
+                budget=budget,
+                tick_time=tick_time,
+            )
+            return
+        selected_decode, decode_work, deferred_decode = self._select_chunked_decode(
+            live_decode, budget=budget
+        )
+        if selected_decode:
+            self._execute_chunked_decode_fifo(selected_decode, tick_time=tick_time)
+        remaining_budget = budget - decode_work
+        if deferred_decode is not None:
+            if live_prefill:
+                self._chunk_resume_decode = deferred_decode
+                self._chunk_schedule_cursor = live_prefill[0]
+            else:
+                self._chunk_schedule_cursor = deferred_decode
+            return
+
+        exact_ids = tuple(
+            request_id
+            for request_id in live_prefill
+            if pool.request_cache(request_id).cache_length
+            == len(self._states[request_id].all_tokens)
+            - len(self._states[request_id].generated_tokens)
+        )
+        self._execute(exact_ids, tick_time=tick_time, prefill=True)
+        exact_set = set(exact_ids)
+
+        selected_ids, selected_lengths = self._select_chunked_prefill(
+            live_prefill,
+            excluded=exact_set,
+            budget=remaining_budget,
+        )
+        if selected_ids:
+            self._execute_prefill_chunks(
+                selected_ids,
+                selected_lengths,
+                tick_time=tick_time,
+            )
+        selected_set = set(selected_ids)
+        self._chunk_schedule_cursor = next(
+            (
+                request_id
+                for request_id in live_prefill
+                if request_id not in exact_set and request_id not in selected_set
+            ),
+            None,
+        )
+
+    def _execute_chunked_decode_fifo(
+        self,
+        request_ids: tuple[str, ...],
+        *,
+        tick_time: float,
+    ) -> None:
+        executor = self._executor
+        if not isinstance(executor, PagedAttentionExecutor):
+            _invalid("chunked decode execution requires the direct paged executor")
+        normal_batch: list[str] = []
+        for request_id in request_ids:
+            state = self._states[request_id]
+            work = executor.decode_model_work(state)
+            if work == 1:
+                normal_batch.append(request_id)
+                continue
+            if normal_batch:
+                self._execute(tuple(normal_batch), tick_time=tick_time, prefill=False)
+                normal_batch.clear()
+            self._execute((request_id,), tick_time=tick_time, prefill=False)
+        if normal_batch:
+            self._execute(tuple(normal_batch), tick_time=tick_time, prefill=False)
+
+    def _run_chunked_prefill_first(
+        self,
+        live_prefill: tuple[str, ...],
+        live_decode: tuple[str, ...],
+        *,
+        budget: int,
+        tick_time: float,
+    ) -> None:
+        _, pending_prefill = self._run_chunked_prefill_phase(
+            live_prefill,
+            budget=budget,
+            tick_time=tick_time,
+        )
+        resume_decode = self._chunk_resume_decode
+        if resume_decode in live_decode:
+            self._chunk_schedule_cursor = resume_decode
+        elif live_decode:
+            self._chunk_schedule_cursor = live_decode[0]
+        else:
+            self._chunk_schedule_cursor = pending_prefill
+        self._chunk_resume_decode = None
+
+    def _rotate_chunked_ids(
+        self,
+        request_ids: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        cursor = self._chunk_schedule_cursor
+        if cursor is None or cursor not in request_ids:
+            return request_ids
+        index = request_ids.index(cursor)
+        return (*request_ids[index:], *request_ids[:index])
+
+    def _select_chunked_decode(
+        self, request_ids: tuple[str, ...], *, budget: int
+    ) -> tuple[tuple[str, ...], int, str | None]:
+        executor = self._executor
+        if not isinstance(executor, PagedAttentionExecutor):
+            _invalid("chunked decode selection requires the direct paged executor")
+        ordered = self._rotate_chunked_ids(request_ids)
+        selected: list[str] = []
+        used = 0
+        deferred: str | None = None
+        for request_id in ordered:
+            state = self._states[request_id]
+            work = executor.decode_model_work(state)
+            if work > budget - used:
+                deferred = request_id
+                break
+            selected.append(request_id)
+            used += work
+        return tuple(selected), used, deferred
+
+    def _run_chunked_prefill_phase(
+        self,
+        request_ids: tuple[str, ...],
+        *,
+        budget: int,
+        tick_time: float,
+    ) -> tuple[int, str | None]:
+        pool = self._paged_cache_pool
+        if pool is None:
+            _invalid("chunked prefill phase requires a paged cache pool")
+        ordered = self._rotate_chunked_ids(request_ids)
+        exact_ids = tuple(
+            request_id
+            for request_id in ordered
+            if pool.request_cache(request_id).cache_length
+            == len(self._states[request_id].request.prompt_tokens)
+        )
+        if exact_ids:
+            self._execute(exact_ids, tick_time=tick_time, prefill=True)
+        exact_set = set(exact_ids)
+        candidates = tuple(request_id for request_id in ordered if request_id not in exact_set)
+        selected_ids, selected_lengths = self._select_chunked_prefill(
+            candidates,
+            excluded=set(),
+            budget=budget,
+        )
+        if selected_ids:
+            self._execute_prefill_chunks(
+                selected_ids,
+                selected_lengths,
+                tick_time=tick_time,
+            )
+        selected_set = set(selected_ids)
+        pending = next(
+            (request_id for request_id in candidates if request_id not in selected_set), None
+        )
+        return sum(selected_lengths), pending
+
+    def _select_chunked_prefill(
+        self,
+        request_ids: tuple[str, ...],
+        *,
+        excluded: set[str],
+        budget: int,
+    ) -> tuple[tuple[str, ...], tuple[int, ...]]:
+        pool = self._paged_cache_pool
+        executor = self._executor
+        chunk_size = self.config.scheduler.prefill_chunk_tokens
+        if pool is None or chunk_size is None or not isinstance(executor, PagedAttentionExecutor):
+            _invalid("chunked prefill selection requires the direct paged executor")
+        block_size = pool.config.block_tokens
+        selected_ids: list[str] = []
+        selected_lengths: list[int] = []
+        remaining_budget = budget
+        for request_id in request_ids:
+            if request_id in excluded or remaining_budget <= 0:
+                continue
+            state = self._states[request_id]
+            start = pool.request_cache(request_id).cache_length
+            prompt_length = len(state.all_tokens) - len(state.generated_tokens)
+            remaining_prompt = prompt_length - start
+            if remaining_prompt <= 0:
+                continue
+            length = min(
+                chunk_size,
+                remaining_budget,
+                remaining_prompt,
+                executor.prefill_config.max_batch_tokens,
+            )
+            if length < remaining_prompt:
+                length -= length % block_size
+            if length <= 0:
+                break
+            candidate_lengths = [*selected_lengths, length]
+            padded = len(candidate_lengths) * max(candidate_lengths)
+            useful = sum(candidate_lengths)
+            padding_ratio = (padded - useful) / padded
+            prefill_config = executor.prefill_config
+            if (
+                len(candidate_lengths) > prefill_config.max_batch_size
+                or padded > prefill_config.max_batch_tokens
+                or padding_ratio > prefill_config.max_padding_ratio
+            ):
+                break
+            selected_ids.append(request_id)
+            selected_lengths.append(length)
+            remaining_budget -= length
+        return tuple(selected_ids), tuple(selected_lengths)
 
     def run_until_idle(
         self,
@@ -1874,6 +2709,42 @@ class ServingEngine:
         prompt_padding_waste_ratio = (
             prompt_padding_waste / padded_prompt_tokens if padded_prompt_tokens > 0 else 0.0
         )
+        apc_observations = tuple(
+            observation
+            for observation in prefill_observations
+            if observation.execution_mode
+            in {
+                PrefillExecutionMode.SEQUENTIAL_APC_SUFFIX,
+                PrefillExecutionMode.BATCHED_APC_SUFFIX,
+                PrefillExecutionMode.EXACT_CACHE_HIT,
+            }
+        )
+        suffix_observations = tuple(
+            observation
+            for observation in apc_observations
+            if observation.execution_mode
+            in {
+                PrefillExecutionMode.SEQUENTIAL_APC_SUFFIX,
+                PrefillExecutionMode.BATCHED_APC_SUFFIX,
+            }
+        )
+        batched_suffix_observations = tuple(
+            observation
+            for observation in suffix_observations
+            if observation.execution_mode is PrefillExecutionMode.BATCHED_APC_SUFFIX
+        )
+        chunked_prefill_observations = tuple(
+            observation
+            for observation in prefill_observations
+            if observation.execution_mode is PrefillExecutionMode.CHUNKED_PAGED_PREFILL
+        )
+        suffix_batch_sizes = tuple(observation.batch_size for observation in suffix_observations)
+        suffix_useful_tokens = sum(
+            observation.useful_prompt_tokens for observation in suffix_observations
+        )
+        suffix_padded_tokens = sum(
+            observation.padded_prompt_tokens for observation in suffix_observations
+        )
         cache_metrics = (
             self._paged_cache_pool.metrics()
             if self._paged_cache_pool is not None
@@ -1950,6 +2821,37 @@ class ServingEngine:
             prefill_batch_assembly_scatter_time_seconds=sum(
                 observation.assembly_seconds + observation.scatter_seconds
                 for observation in prefill_observations
+            ),
+            cache_aware_prefill_batches=len(batched_suffix_observations),
+            cache_aware_prefill_model_calls=sum(
+                observation.model_calls for observation in apc_observations
+            ),
+            suffix_prefill_batch_sizes=suffix_batch_sizes,
+            average_suffix_prefill_batch_size=(
+                sum(suffix_batch_sizes) / len(suffix_batch_sizes) if suffix_batch_sizes else 0.0
+            ),
+            max_suffix_prefill_batch_size=max(suffix_batch_sizes, default=0),
+            suffix_useful_tokens=suffix_useful_tokens,
+            suffix_padded_tokens=suffix_padded_tokens,
+            suffix_padding_waste_ratio=(
+                (suffix_padded_tokens - suffix_useful_tokens) / suffix_padded_tokens
+                if suffix_padded_tokens
+                else 0.0
+            ),
+            exact_cache_hit_requests=sum(
+                observation.batch_size
+                for observation in apc_observations
+                if observation.execution_mode is PrefillExecutionMode.EXACT_CACHE_HIT
+            ),
+            batched_suffix_requests=sum(
+                observation.batch_size for observation in batched_suffix_observations
+            ),
+            chunked_prefill_batches=len(chunked_prefill_observations),
+            chunked_prefill_chunks=sum(
+                observation.batch_size for observation in chunked_prefill_observations
+            ),
+            chunked_prefill_useful_tokens=sum(
+                observation.useful_prompt_tokens for observation in chunked_prefill_observations
             ),
             prefix_cache_enabled=(
                 self._paged_cache_pool.prefix_cache_enabled
@@ -2103,6 +3005,70 @@ class ServingEngine:
                 timestamp=tick_time,
             )
 
+    def _execute_prefill_chunks(
+        self,
+        request_ids: tuple[str, ...],
+        chunk_lengths: tuple[int, ...],
+        *,
+        tick_time: float,
+    ) -> None:
+        if len(request_ids) != len(chunk_lengths):
+            _invalid("chunk request and length counts must match")
+        executor = self._executor
+        pool = self._paged_cache_pool
+        if not isinstance(executor, PagedAttentionExecutor) or pool is None:
+            _invalid("chunk execution requires the direct paged executor")
+        states = tuple(
+            self._states[request_id]
+            for request_id in request_ids
+            if self._states[request_id].status is RequestStatus.PREFILLING
+        )
+        if len(states) != len(request_ids):
+            _invalid("chunk schedule contains a non-prefilling request")
+        for state, chunk_length in zip(states, chunk_lengths, strict=True):
+            if state.prefill_start_time is None:
+                state.prefill_start_time = tick_time
+                self._emit(
+                    event_type=EngineEventType.PREFILL_STARTED,
+                    state=state,
+                    timestamp=tick_time,
+                )
+            start = pool.request_cache(state.request.request_id).cache_length
+            self._emit(
+                event_type=EngineEventType.PREFILL_CHUNK_STARTED,
+                state=state,
+                timestamp=tick_time,
+                detail=f"start={start};end={start + chunk_length}",
+            )
+        try:
+            results = executor.prefill_chunks(states, chunk_lengths)
+        except Exception as error:  # noqa: BLE001
+            message = f"{type(error).__name__}: {error}"
+            results = tuple(
+                ExecutionResult.failure(state.request.request_id, message, 0.0) for state in states
+            )
+        result_by_id = {result.request_id: result for result in results}
+        duplicate_count = len(results) - len(result_by_id)
+        for state in states:
+            result = result_by_id.get(state.request.request_id)
+            if result is None or duplicate_count:
+                self._fail_state(state, tick_time, "executor returned malformed request results")
+                continue
+            result = self._commit_paged_result(
+                state,
+                result,
+                prefill=True,
+                tick_time=tick_time,
+            )
+            if result.error is None and result.prefill_complete:
+                self._emit(
+                    event_type=EngineEventType.PREFILL_CHUNK_FINISHED,
+                    state=state,
+                    timestamp=tick_time + result.latency_seconds,
+                    detail=(f"start={state.cached_tokens};end={result.cache_tokens};final=true"),
+                )
+            self._apply_result(state, result, tick_time=tick_time, prefill=True)
+
     def _execute(  # noqa: C901
         self,
         request_ids: tuple[str, ...],
@@ -2156,6 +3122,26 @@ class ServingEngine:
                 )
             self._apply_result(state, result, tick_time=tick_time, prefill=prefill)
 
+    def _write_paged_result_without_prefix_promotion(
+        self,
+        state: RequestState,
+        result: ExecutionResult,
+        cache: KVCache,
+        *,
+        prefill: bool,
+    ) -> None:
+        pool = self._paged_cache_pool
+        if pool is None:
+            _invalid("paged result write requires a cache pool")
+        if prefill:
+            pool.write_prefill(state.request.request_id, cache)
+        elif result.used_fallback:
+            pool.rebuild(state.request.request_id, cache)
+        elif result.cache_is_delta:
+            pool.append_delta(state.request.request_id, cache)
+        else:
+            pool.append(state.request.request_id, cache)
+
     def _commit_paged_result(
         self,
         state: RequestState,
@@ -2167,10 +3153,36 @@ class ServingEngine:
         pool = self._paged_cache_pool
         if pool is None or result.error is not None or result.cache is None:
             return result
+        cache = result.cache
+        return_result = result
         try:
+            if (
+                prefill
+                and result.cache_is_delta
+                and (not result.prefill_complete or not pool.prefix_cache_enabled)
+            ):
+                pool.write_prefill_suffix(state.request.request_id, cache)
+                table = pool.request_cache(state.request.request_id)
+                _require_paged_cache_length(table.cache_length, result.cache_tokens)
+                self._emit_prefix_evictions(state, tick_time + result.latency_seconds)
+                return replace(result, cache=())
+            if (
+                prefill
+                and result.cache_is_delta
+                and result.prefill_complete
+                and pool.prefix_cache_enabled
+            ):
+                current_logits = _require_prefix_prefill_logits(result.prefill_logits)
+                chunks = (*state.prefill_logits_chunks, current_logits)
+                semantic_prefix = state.prefix_hit_blocks * pool.config.block_tokens
+                result = replace(
+                    result,
+                    prefill_logits=torch.cat(chunks, dim=0),
+                    **{"prefill_prefix_" + "tokens": semantic_prefix},
+                )
             if prefill and pool.prefix_cache_enabled:
                 prefill_logits = _require_prefix_prefill_logits(result.prefill_logits)
-                pool.write_prefill_suffix(state.request.request_id, result.cache)
+                pool.write_prefill_suffix(state.request.request_id, cache)
                 promotion = pool.promote_prompt_blocks(
                     state.request.request_id,
                     prompt_tokens=state.request.prompt_tokens,
@@ -2194,14 +3206,11 @@ class ServingEngine:
                         timestamp=tick_time + result.latency_seconds,
                         detail=f"prefix_hash={prefix_hash}",
                     )
-            elif prefill:
-                pool.write_prefill(state.request.request_id, result.cache)
-            elif result.used_fallback:
-                pool.rebuild(state.request.request_id, result.cache)
-            elif result.cache_is_delta:
-                pool.append_delta(state.request.request_id, result.cache)
             else:
-                pool.append(state.request.request_id, result.cache)
+                self._write_paged_result_without_prefix_promotion(
+                    state, result, cache, prefill=prefill
+                )
+            result = return_result
             table = pool.request_cache(state.request.request_id)
             _require_paged_cache_length(table.cache_length, result.cache_tokens)
             self._emit_prefix_evictions(state, tick_time + result.latency_seconds)
@@ -2226,6 +3235,38 @@ class ServingEngine:
                 detail=f"prefix_hash={prefix_hash}",
             )
 
+    def _apply_intermediate_prefill_result(
+        self,
+        state: RequestState,
+        result: ExecutionResult,
+        *,
+        tick_time: float,
+    ) -> None:
+        invalid_output = "intermediate prefill chunk returned invalid output"
+        if result.token_id is not None or result.prefill_logits is None:
+            self._fail_state(state, tick_time, invalid_output)
+            return
+        computed_tokens = result.cache_tokens - result.prefill_prefix_tokens
+        if computed_tokens <= 0:
+            self._fail_state(state, tick_time, "intermediate prefill chunk made no progress")
+            return
+        state.kv_cache = result.cache
+        state.cached_tokens = result.cache_tokens
+        state.prefill_latency_seconds = (
+            state.prefill_latency_seconds or 0.0
+        ) + result.latency_seconds
+        state.prefill_tokens_computed += computed_tokens
+        pool = self._paged_cache_pool
+        if pool is not None and pool.prefix_cache_enabled:
+            state.prefill_logits_chunks.append(result.prefill_logits)
+        state.status = RequestStatus.PREFILLING
+        self._emit(
+            event_type=EngineEventType.PREFILL_CHUNK_FINISHED,
+            state=state,
+            timestamp=tick_time + result.latency_seconds,
+            detail=f"start={result.prefill_prefix_tokens};end={result.cache_tokens};final=false",
+        )
+
     def _apply_result(
         self,
         state: RequestState,
@@ -2237,7 +3278,8 @@ class ServingEngine:
         if result.error is not None:
             self._fail_state(state, tick_time + result.latency_seconds, result.error)
             return
-        if result.token_id is None or result.cache is None:
+        missing_token = result.token_id is None and (not prefill or result.prefill_complete)
+        if missing_token or result.cache is None:
             self._fail_state(state, tick_time, "executor success omitted token or cache")
             return
         if result.latency_seconds < 0.0 or not math.isfinite(result.latency_seconds):
@@ -2250,17 +3292,25 @@ class ServingEngine:
             )
             self._fail_state(state, tick_time + result.latency_seconds, reason)
             return
+        if prefill and not result.prefill_complete:
+            self._apply_intermediate_prefill_result(state, result, tick_time=tick_time)
+            return
+        token_id = result.token_id
+        if token_id is None:
+            self._fail_state(state, tick_time, "executor success omitted token")
+            return
         token_time = tick_time + result.latency_seconds
-        state.generated_tokens.append(result.token_id)
+        state.generated_tokens.append(token_id)
         state.kv_cache = result.cache
         state.cached_tokens = result.cache_tokens
         state.token_timestamps.append(token_time)
         if prefill:
-            state.prefill_latency_seconds = result.latency_seconds
+            state.prefill_latency_seconds = (
+                state.prefill_latency_seconds or 0.0
+            ) + result.latency_seconds
             state.first_token_time = token_time
-            state.prefill_tokens_computed = (
-                len(state.request.prompt_tokens) - result.prefill_prefix_tokens
-            )
+            state.prefill_tokens_computed += result.cache_tokens - result.prefill_prefix_tokens
+            state.prefill_logits_chunks.clear()
         else:
             state.decode_latencies_seconds.append(result.latency_seconds)
         self._emit(
@@ -2306,6 +3356,7 @@ class ServingEngine:
         if self._paged_cache_pool is not None and self._paged_cache_pool.has_request(request_id):
             self._paged_cache_pool.release(request_id)
         state.kv_cache = None
+        state.prefill_logits_chunks.clear()
         state.cached_tokens = 0
         state.reserved_cache_tokens = 0
         state.reserved_cache_blocks = 0

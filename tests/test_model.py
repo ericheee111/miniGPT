@@ -785,6 +785,132 @@ def test_suffix_prefill_with_paged_prefix_matches_full_dense_prefill() -> None:
         torch.testing.assert_close(delta.value, full_cache[layer_index].value[:, :, 4:])
 
 
+def test_batched_paged_history_prefill_matches_variable_dense_rows() -> None:
+    # Given: rows with zero, two, and four historical tokens plus variable new segments.
+    _ = torch.default_generator.manual_seed(73)
+    gpt = model.GPT(replace(tiny_config(), block_size=8)).eval()
+    histories = (
+        torch.empty((1, 0), dtype=torch.long),
+        torch.tensor([[1, 2]], dtype=torch.long),
+        torch.tensor([[3, 4, 5, 6]], dtype=torch.long),
+    )
+    segments = (
+        torch.tensor([[7, 8, 9]], dtype=torch.long),
+        torch.tensor([[3, 4]], dtype=torch.long),
+        torch.tensor([[7]], dtype=torch.long),
+    )
+    history_caches = tuple(
+        None if history.shape[1] == 0 else gpt.prefill_with_all_logits(history)[1]
+        for history in histories
+    )
+    cache_views = tuple(
+        None
+        if cache is None
+        else tuple(
+            layers.PagedLayerKVCacheView(
+                key_blocks=tuple(
+                    layer.key[0, :, start : start + 2, :] for start in range(0, layer.length, 2)
+                ),
+                value_blocks=tuple(
+                    layer.value[0, :, start : start + 2, :] for start in range(0, layer.length, 2)
+                ),
+                cache_length=layer.length,
+                block_tokens=2,
+            )
+            for layer in cache
+        )
+        for cache in history_caches
+    )
+    token_ids = torch.tensor([[7, 8, 9], [3, 4, 0], [7, 0, 0]], dtype=torch.long)
+    new_lengths = torch.tensor([3, 2, 1], dtype=torch.long)
+    past_lengths = torch.tensor([0, 2, 4], dtype=torch.long)
+
+    # When: one primitive call evaluates every row against its own paged history.
+    batched_logits, padded_delta = gpt.prefill_paged_batch(
+        token_ids,
+        new_lengths,
+        cache_views,
+        past_lengths,
+    )
+
+    # Then: all valid logits and suffix-only K/V equal independent dense full-prefill rows.
+    assert batched_logits.shape == (3, 3, gpt.config.vocab_size)
+    for row, (history, segment) in enumerate(zip(histories, segments, strict=True)):
+        new_length = segment.shape[1]
+        past_length = history.shape[1]
+        full_logits, full_cache = gpt.prefill_with_all_logits(torch.cat((history, segment), dim=1))
+        torch.testing.assert_close(
+            batched_logits[row : row + 1, :new_length],
+            full_logits[:, past_length:],
+            rtol=1e-5,
+            atol=1e-6,
+        )
+        for layer_index, delta in enumerate(padded_delta):
+            torch.testing.assert_close(
+                delta.key[row : row + 1, :, :new_length],
+                full_cache[layer_index].key[:, :, past_length:],
+            )
+            torch.testing.assert_close(
+                delta.value[row : row + 1, :, :new_length],
+                full_cache[layer_index].value[:, :, past_length:],
+            )
+
+
+def test_batched_paged_prefill_masks_padding_positions_near_context_limit() -> None:
+    # Given: one row at past length seven and another row with a three-token zero-history segment.
+    _ = torch.default_generator.manual_seed(79)
+    gpt = model.GPT(replace(tiny_config(), block_size=8)).eval()
+    long_history = torch.tensor([[1, 2, 3, 4, 5, 6, 7]], dtype=torch.long)
+    _, long_cache = gpt.prefill_with_all_logits(long_history)
+    long_view = tuple(
+        layers.PagedLayerKVCacheView(
+            key_blocks=tuple(
+                layer.key[0, :, start : start + 2, :] for start in range(0, layer.length, 2)
+            ),
+            value_blocks=tuple(
+                layer.value[0, :, start : start + 2, :] for start in range(0, layer.length, 2)
+            ),
+            cache_length=layer.length,
+            block_tokens=2,
+        )
+        for layer in long_cache
+    )
+    first_padding = torch.tensor([[8, 9, 10], [8, 0, 0]], dtype=torch.long)
+    second_padding = torch.tensor([[8, 9, 10], [8, 9, 10]], dtype=torch.long)
+    new_lengths = torch.tensor([3, 1], dtype=torch.long)
+    past_lengths = torch.tensor([0, 7], dtype=torch.long)
+    views: tuple[layers.PagedKVCacheView | None, ...] = (None, long_view)
+
+    # When: invalid padded columns would exceed the learned position table without masking.
+    first_logits, first_delta = gpt.prefill_paged_batch(
+        first_padding,
+        new_lengths,
+        views,
+        past_lengths,
+    )
+    second_logits, second_delta = gpt.prefill_paged_batch(
+        second_padding,
+        new_lengths,
+        views,
+        past_lengths,
+    )
+
+    # Then: the only valid near-limit token is padding-independent and matches dense absolute pos 7.
+    expected_logits, expected_cache = gpt.prefill_with_all_logits(
+        torch.cat((long_history, torch.tensor([[8]], dtype=torch.long)), dim=1)
+    )
+    torch.testing.assert_close(first_logits[1, :1], second_logits[1, :1])
+    torch.testing.assert_close(first_logits[1:2, :1], expected_logits[:, 7:], rtol=1e-5, atol=1e-6)
+    for layer_index, (first_layer, second_layer) in enumerate(
+        zip(first_delta, second_delta, strict=True)
+    ):
+        torch.testing.assert_close(first_layer.key[1:2, :, :1], second_layer.key[1:2, :, :1])
+        torch.testing.assert_close(
+            first_layer.key[1:2, :, :1],
+            expected_cache[layer_index].key[:, :, 7:],
+        )
+
+
 @pytest.mark.parametrize(
     ("cache_lengths", "message"),
     [

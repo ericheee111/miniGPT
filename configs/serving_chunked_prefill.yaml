@@ -1,0 +1,21 @@
+schema_version: 1
+executor: paged_attention
+kv_cache_backend: paged
+kv_cache: {block_tokens: 2, num_blocks: 32}
+prefix_cache: {enabled: true}
+apc_prefill_strategy: batched
+scenario_name: chunked-prefill-token-budget
+model_seed: 1600
+tick_seconds: 1.0
+executor_clock_step_seconds: 0.001
+max_ticks: 128
+output_dir: reports/chunked-prefill-token-budget/simulator
+vocab_size: 32
+model: {block_size: 16, n_layer: 2, n_head: 2, n_embd: 16, dropout: 0.0, bias: false}
+prefill: {max_batch_size: 4, max_batch_tokens: 16, max_padding_ratio: 1.0}
+scheduler: {max_active_requests: 4, max_cached_tokens: 64, max_scheduled_tokens: 16, prefill_chunk_tokens: 2}
+requests:
+  - {request_id: prime-prefix, arrival_time: 0.0, prompt_tokens: [1, 2, 3, 4, 5, 6, 7, 8], prompt_length: null, max_new_tokens: 1, temperature: 1.0, top_k: null, seed: 1601, cancellation_time: null}
+  - {request_id: short-decode, arrival_time: 10.0, prompt_tokens: [11, 12], prompt_length: null, max_new_tokens: 4, temperature: 1.0, top_k: null, seed: 1610, cancellation_time: null}
+  - {request_id: apc-suffix, arrival_time: 10.0, prompt_tokens: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], prompt_length: null, max_new_tokens: 2, temperature: 1.0, top_k: null, seed: 1611, cancellation_time: null}
+  - {request_id: long-miss, arrival_time: 10.0, prompt_tokens: [20, 21, 22, 23, 24, 25, 26], prompt_length: null, max_new_tokens: 2, temperature: 1.0, top_k: null, seed: 1612, cancellation_time: null}

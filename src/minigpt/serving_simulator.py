@@ -24,6 +24,7 @@ from minigpt.paged_kv_cache import (
     PrefixCacheNamespace,
 )
 from minigpt.serving import (
+    APCPrefillStrategy,
     ContinuousDecodeExecutor,
     ContinuousExecutor,
     EngineConfig,
@@ -34,6 +35,8 @@ from minigpt.serving import (
     PagedAttentionExecutor,
     PrefillBatchConfig,
     PrefillBatchEvent,
+    PrefillBatchObservation,
+    PrefillExecutionMode,
     ReferenceExecutor,
     RequestMetrics,
     RequestStatus,
@@ -55,6 +58,7 @@ _TOP_LEVEL_KEYS = frozenset(
         "kv_cache_backend",
         "kv_cache",
         "prefix_cache",
+        "apc_prefill_strategy",
         "scenario_name",
         "model_seed",
         "tick_seconds",
@@ -74,9 +78,18 @@ _REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {
     "kv_cache_backend",
     "kv_cache",
     "prefix_cache",
+    "apc_prefill_strategy",
 }
 _MODEL_KEYS = frozenset({"block_size", "n_layer", "n_head", "n_embd", "dropout", "bias"})
-_SCHEDULER_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
+_SCHEDULER_KEYS = frozenset(
+    {
+        "max_active_requests",
+        "max_cached_tokens",
+        "max_scheduled_tokens",
+        "prefill_chunk_tokens",
+    }
+)
+_SCHEDULER_REQUIRED_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
 _PREFILL_KEYS = frozenset({"max_batch_size", "max_batch_tokens", "max_padding_ratio"})
 _KV_CACHE_KEYS = frozenset({"block_tokens", "num_blocks"})
 _PREFIX_CACHE_KEYS = frozenset({"enabled"})
@@ -121,6 +134,7 @@ class SimulatorConfig:
     kv_cache_backend: KVCacheBackend
     paged_kv_cache: PagedKVCacheConfig | None
     prefix_cache_enabled: bool
+    apc_prefill_strategy: APCPrefillStrategy
     scenario_name: str
     model_seed: int
     tick_seconds: float
@@ -147,6 +161,7 @@ class SimulationResult:
     admission_order: tuple[str, ...]
     events: tuple[EngineEvent, ...]
     prefill_events: tuple[PrefillBatchEvent, ...]
+    prefill_observations: tuple[PrefillBatchObservation, ...]
 
 
 class SimulatorExecutor(StrEnum):
@@ -196,6 +211,16 @@ class PrefixCacheEquivalenceResult:
 
     direct: SimulationResult
     automatic_prefix_cache: SimulationResult
+    equivalent: bool
+    checked_contracts: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CacheAwarePrefillEquivalenceResult:
+    """Return sequential/batched APC runs after logical-contract validation."""
+
+    sequential: SimulationResult
+    batched: SimulationResult
     equivalent: bool
     checked_contracts: tuple[str, ...]
 
@@ -336,10 +361,27 @@ def _model(document: ConfigMapping, source: Path, *, vocab_size: int) -> GPTConf
 
 def _scheduler(document: ConfigMapping, source: Path) -> SchedulerConfig:
     raw = _mapping(document["scheduler"], source, "scheduler")
-    _exact_keys(raw, _SCHEDULER_KEYS, source, "scheduler")
+    missing = _SCHEDULER_REQUIRED_KEYS - set(raw)
+    unexpected = set(raw) - _SCHEDULER_KEYS
+    if missing:
+        _invalid(source, f"scheduler missing key {min(missing)!r}")
+    if unexpected:
+        _invalid(source, f"scheduler has unexpected key {min(unexpected)!r}")
+    max_scheduled = (
+        _integer(raw, "max_scheduled_tokens", source, positive=True)
+        if "max_scheduled_tokens" in raw
+        else None
+    )
+    chunk_size = (
+        _integer(raw, "prefill_chunk_tokens", source, positive=True)
+        if "prefill_chunk_tokens" in raw
+        else None
+    )
     return SchedulerConfig(
         max_active_requests=_integer(raw, "max_active_requests", source, positive=True),
         max_cached_tokens=_integer(raw, "max_cached_tokens", source, positive=True),
+        max_scheduled_tokens=max_scheduled,
+        prefill_chunk_tokens=chunk_size,
     )
 
 
@@ -392,6 +434,17 @@ def _prefix_cache_enabled(
     ):
         _invalid(source, "enabled prefix_cache requires paged_attention with paged KV cache")
     return enabled
+
+
+def _apc_prefill_strategy(document: ConfigMapping, source: Path) -> APCPrefillStrategy:
+    raw = document.get("apc_prefill_strategy", APCPrefillStrategy.SEQUENTIAL.value)
+    if not isinstance(raw, str):
+        _invalid(source, "apc_prefill_strategy must be a string")
+    try:
+        return APCPrefillStrategy(raw)
+    except ValueError:
+        choices = ", ".join(strategy.value for strategy in APCPrefillStrategy)
+        _invalid(source, f"apc_prefill_strategy must be one of: {choices}")
 
 
 def _optional_integer(document: ConfigMapping, key: str, source: Path) -> int | None:
@@ -485,17 +538,39 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
     executor = _executor(document, source)
     if executor is SimulatorExecutor.PAGED_ATTENTION and backend is not KVCacheBackend.PAGED:
         _invalid(source, "paged_attention executor requires paged kv_cache_backend")
+    prefix_cache_enabled = _prefix_cache_enabled(
+        document,
+        source,
+        backend=backend,
+        executor=executor,
+    )
+    paged_kv_cache = _paged_kv_cache(document, source, backend=backend)
+    model = _model(document, source, vocab_size=vocab_size)
+    scheduler = _scheduler(document, source)
+    if scheduler.prefill_chunk_tokens is not None:
+        if (
+            executor is not SimulatorExecutor.PAGED_ATTENTION
+            or backend is not KVCacheBackend.PAGED
+            or paged_kv_cache is None
+        ):
+            _invalid(source, "chunked prefill requires paged_attention with paged KV cache")
+        if scheduler.prefill_chunk_tokens % paged_kv_cache.block_tokens:
+            _invalid(source, "prefill_chunk_tokens must align to kv_cache.block_tokens")
+        minimum_budget = max(
+            model.block_size, scheduler.max_active_requests - 1 + paged_kv_cache.block_tokens
+        )
+        if (
+            scheduler.max_scheduled_tokens is None
+            or scheduler.max_scheduled_tokens < minimum_budget
+        ):
+            _invalid(source, "max_scheduled_tokens is too small for chunked prefill")
     return SimulatorConfig(
         schema_version=schema_version,
         executor=executor,
         kv_cache_backend=backend,
-        paged_kv_cache=_paged_kv_cache(document, source, backend=backend),
-        prefix_cache_enabled=_prefix_cache_enabled(
-            document,
-            source,
-            backend=backend,
-            executor=executor,
-        ),
+        paged_kv_cache=paged_kv_cache,
+        prefix_cache_enabled=prefix_cache_enabled,
+        apc_prefill_strategy=_apc_prefill_strategy(document, source),
         scenario_name=_string(document, "scenario_name", source),
         model_seed=_integer(document, "model_seed", source, non_negative=True),
         tick_seconds=_number(document, "tick_seconds", source, positive=True),
@@ -507,8 +582,8 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
         ),
         max_ticks=_integer(document, "max_ticks", source, positive=True),
         output_dir=Path(_string(document, "output_dir", source)),
-        model=_model(document, source, vocab_size=vocab_size),
-        scheduler=_scheduler(document, source),
+        model=model,
+        scheduler=scheduler,
         prefill=_prefill(document, source),
         requests=_requests(document, source, vocab_size=vocab_size),
     )
@@ -557,20 +632,23 @@ def _prefix_cache_namespace(config: SimulatorConfig, model: GPT) -> PrefixCacheN
 
 
 def _event_document(event: EngineEvent) -> dict[str, JsonValue]:
-    return {
-        "sequence": event.sequence,
-        "timestamp": event.timestamp,
-        "event_type": event.event_type.value,
-        "request_id": event.request_id,
-        "status": event.status.value,
-        "token_id": event.token_id,
-        "detail": event.detail,
-        "used_fallback": event.used_fallback,
-        "active_requests": event.active_requests,
-        "waiting_requests": event.waiting_requests,
-        "cached_tokens": event.cached_tokens,
-        "reserved_cache_tokens": event.reserved_cache_tokens,
-    }
+    return cast(
+        "dict[str, JsonValue]",
+        {
+            "sequence": event.sequence,
+            "timestamp": event.timestamp,
+            "event_type": event.event_type.value,
+            "request_id": event.request_id,
+            "status": event.status.value,
+            "token_id": event.token_id,
+            "detail": event.detail,
+            "used_fallback": event.used_fallback,
+            "active_requests": event.active_requests,
+            "waiting_requests": event.waiting_requests,
+            "cached_tokens": event.cached_tokens,
+            "reserved_cache_tokens": event.reserved_cache_tokens,
+        },
+    )
 
 
 def _request_document(engine: ServingEngine, request_id: str) -> dict[str, JsonValue]:
@@ -603,7 +681,55 @@ def _request_document(engine: ServingEngine, request_id: str) -> dict[str, JsonV
     )
 
 
-def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[str, JsonValue]:
+def _cache_aware_prefill_summary(
+    observations: tuple[PrefillBatchObservation, ...],
+) -> dict[str, JsonValue]:
+    suffix_modes = {
+        PrefillExecutionMode.SEQUENTIAL_APC_SUFFIX,
+        PrefillExecutionMode.BATCHED_APC_SUFFIX,
+    }
+    apc = tuple(
+        item
+        for item in observations
+        if item.execution_mode in {*suffix_modes, PrefillExecutionMode.EXACT_CACHE_HIT}
+    )
+    suffix = tuple(item for item in apc if item.execution_mode in suffix_modes)
+    batched = tuple(
+        item for item in suffix if item.execution_mode is PrefillExecutionMode.BATCHED_APC_SUFFIX
+    )
+    batch_sizes = [item.batch_size for item in suffix]
+    useful_tokens = sum(item.useful_prompt_tokens for item in suffix)
+    padded_tokens = sum(item.padded_prompt_tokens for item in suffix)
+    return cast(
+        "dict[str, JsonValue]",
+        {
+            "cache_aware_prefill_batches": len(batched),
+            "cache_aware_prefill_model_calls": sum(item.model_calls for item in apc),
+            "suffix_prefill_batch_sizes": batch_sizes,
+            "average_suffix_prefill_batch_size": (
+                sum(batch_sizes) / len(batch_sizes) if batch_sizes else 0.0
+            ),
+            "max_suffix_prefill_batch_size": max(batch_sizes, default=0),
+            "suffix_useful_tokens": useful_tokens,
+            "suffix_padded_tokens": padded_tokens,
+            "suffix_padding_waste_ratio": (
+                (padded_tokens - useful_tokens) / padded_tokens if padded_tokens else 0.0
+            ),
+            "exact_cache_hit_requests": sum(
+                item.batch_size
+                for item in apc
+                if item.execution_mode is PrefillExecutionMode.EXACT_CACHE_HIT
+            ),
+            "batched_suffix_requests": sum(item.batch_size for item in batched),
+        },
+    )
+
+
+def _summary_document(
+    config: SimulatorConfig,
+    metrics: EngineMetrics,
+    observations: tuple[PrefillBatchObservation, ...],
+) -> dict[str, JsonValue]:
     document = cast("dict[str, JsonValue]", asdict(metrics))
     document.update(
         {
@@ -613,6 +739,7 @@ def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[s
             "executor": config.executor.value,
             "kv_cache_backend": config.kv_cache_backend.value,
             "prefix_cache_enabled": config.prefix_cache_enabled,
+            "apc_prefill_strategy": config.apc_prefill_strategy.value,
             "scheduling_level": (
                 "iteration-level with tensor-level prefill and block-aware decode batching"
                 if config.executor is SimulatorExecutor.PAGED_ATTENTION
@@ -630,6 +757,7 @@ def _summary_document(config: SimulatorConfig, metrics: EngineMetrics) -> dict[s
             "max_cached_tokens": config.scheduler.max_cached_tokens,
         }
     )
+    document.update(_cache_aware_prefill_summary(observations))
     return document
 
 
@@ -663,6 +791,25 @@ def _write_prefill_events(path: Path, events: tuple[PrefillBatchEvent, ...]) -> 
             sort_keys=True,
         )
         for event in events
+    ]
+    _ = path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def _write_prefill_observations(
+    path: Path,
+    observations: tuple[PrefillBatchObservation, ...],
+) -> None:
+    lines = [
+        json.dumps(
+            {
+                **asdict(observation),
+                "request_ids": list(observation.request_ids),
+                "execution_mode": observation.execution_mode.value,
+                "padding_waste_ratio": observation.padding_waste_ratio,
+            },
+            sort_keys=True,
+        )
+        for observation in observations
     ]
     _ = path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
@@ -743,7 +890,11 @@ def _write_timeline(
     _ = path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
-def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -> SimulationResult:
+def run_simulation(  # noqa: C901, PLR0915
+    config: SimulatorConfig,
+    *,
+    output_dir: Path | None = None,
+) -> SimulationResult:
     """Run arrivals on logical time and write four deterministic artifacts."""
     destination = config.output_dir if output_dir is None else output_dir
     destination.mkdir(parents=True, exist_ok=True)
@@ -766,6 +917,7 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
             model,
             paged_pool,
             prefill_config=config.prefill,
+            prefix_prefill_strategy=config.apc_prefill_strategy,
             clock=executor_clock,
             telemetry_clock=telemetry_clock,
         )
@@ -819,17 +971,22 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
     events_path = destination / "events.jsonl"
     requests_path = destination / "requests.csv"
     summary_path = destination / "summary.json"
+    prefill_observations = engine.prefill_observations
     timeline_path = destination / "timeline.md"
     _write_events(events_path, engine.events)
     _write_requests(requests_path, engine, config.requests)
     metrics = engine.metrics()
-    _write_json(summary_path, _summary_document(config, metrics))
+    _write_json(summary_path, _summary_document(config, metrics, prefill_observations))
     _write_timeline(timeline_path, engine.events, config.scenario_name, config.executor)
     output_paths = [events_path, requests_path, summary_path, timeline_path]
     if config.prefill is not None:
         prefill_events_path = destination / "prefill_events.jsonl"
         _write_prefill_events(prefill_events_path, engine.prefill_events)
         output_paths.append(prefill_events_path)
+    if config.prefill is not None or config.prefix_cache_enabled:
+        prefill_observations_path = destination / "prefill_observations.jsonl"
+        _write_prefill_observations(prefill_observations_path, prefill_observations)
+        output_paths.append(prefill_observations_path)
     generated = {
         request.request_id: tuple(engine.request_state(request.request_id).generated_tokens)
         for request in config.requests
@@ -860,6 +1017,7 @@ def run_simulation(config: SimulatorConfig, *, output_dir: Path | None = None) -
         admission_order=admission_order,
         events=engine.events,
         prefill_events=engine.prefill_events,
+        prefill_observations=prefill_observations,
     )
 
 
@@ -881,7 +1039,7 @@ def run_executor_equivalence(
         replace(config, executor=SimulatorExecutor.CONTINUOUS),
         output_dir=output_dir / SimulatorExecutor.CONTINUOUS.value,
     )
-    comparisons = {
+    comparisons: dict[str, bool] = {
         "generated_tokens": (
             reference.generated_tokens
             == continuous_decode.generated_tokens
@@ -1104,6 +1262,66 @@ def run_prefix_cache_equivalence(
     return PrefixCacheEquivalenceResult(
         direct=direct,
         automatic_prefix_cache=automatic_prefix_cache,
+        equivalent=True,
+        checked_contracts=tuple(comparisons),
+    )
+
+
+def _stage15_event_semantics(events: tuple[EngineEvent, ...]) -> tuple[EngineEvent, ...]:
+    return tuple(
+        replace(event, sequence=index, timestamp=0.0) for index, event in enumerate(events)
+    )
+
+
+def run_cache_aware_prefill_equivalence(
+    config: SimulatorConfig,
+    *,
+    output_dir: Path,
+) -> CacheAwarePrefillEquivalenceResult:
+    """Compare Stage 14 sequential APC with Stage 15 batched APC."""
+    if config.paged_kv_cache is None:
+        _invalid(Path("<equivalence>"), "cache-aware prefill requires paged KV cache config")
+    common = replace(
+        config,
+        executor=SimulatorExecutor.PAGED_ATTENTION,
+        kv_cache_backend=KVCacheBackend.PAGED,
+        prefix_cache_enabled=True,
+    )
+    sequential = run_simulation(
+        replace(common, apc_prefill_strategy=APCPrefillStrategy.SEQUENTIAL),
+        output_dir=output_dir / "apc_sequential",
+    )
+    batched = run_simulation(
+        replace(common, apc_prefill_strategy=APCPrefillStrategy.BATCHED),
+        output_dir=output_dir / "apc_batched",
+    )
+    comparisons: dict[str, bool] = {
+        "generated_tokens": sequential.generated_tokens == batched.generated_tokens,
+        "rng_state": sequential.generator_state_hashes == batched.generator_state_hashes,
+        "request_terminal_states_and_cancellation": (
+            sequential.request_statuses == batched.request_statuses
+        ),
+        "fifo_admission_order": sequential.admission_order == batched.admission_order,
+        "prefix_identity_and_logical_events": (
+            _stage15_event_semantics(sequential.events) == _stage15_event_semantics(batched.events)
+        ),
+        "terminal_cache_ownership": (
+            sequential.metrics.active_shared_references
+            == batched.metrics.active_shared_references
+            == 0
+            and sequential.metrics.reserved_blocks == batched.metrics.reserved_blocks == 0
+            and sequential.metrics.prefix_cache_blocks == batched.metrics.prefix_cache_blocks
+            and sequential.metrics.allocated_blocks == batched.metrics.allocated_blocks
+        ),
+    }
+    failed = tuple(name for name, matches in comparisons.items() if not matches)
+    if failed:
+        _invalid(
+            Path("<equivalence>"), f"cache-aware prefill contracts differ: {', '.join(failed)}"
+        )
+    return CacheAwarePrefillEquivalenceResult(
+        sequential=sequential,
+        batched=batched,
         equivalent=True,
         checked_contracts=tuple(comparisons),
     )

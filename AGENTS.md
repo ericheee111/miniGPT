@@ -30,7 +30,13 @@ implements:
   lifecycle cleanup, invariant stress evidence, and a Stage 13B block-aware decode executor that
   avoids normal-path dense historical K/V materialization;
 - namespace-bound Automatic Prefix Caching for immutable complete prompt blocks, longest-prefix
-  suffix prefill, active refcounts, deterministic zero-ref LRU eviction, and Stage 14 evidence.
+  suffix prefill, active refcounts, deterministic zero-ref LRU eviction, and Stage 14 evidence;
+- cache-aware batched paged suffix prefill with variable per-row history/suffix lengths, absolute
+  learned positions, exact-hit zero-compute scatter, explicit sequential-reference mode, and Stage
+  15 structural/performance evidence;
+- optional Stage 16 block-aligned chunked prefill with a useful-token budget per tick, decode-first
+  interleaving, intermediate chunks that do not sample or advance request RNG, partial final prompt
+  tails, APC preservation, deterministic stress, and hash-bound structural evidence.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -92,12 +98,20 @@ dataset remain gitignored.
   block-aware decode path. Initial/overflow prefill remains dense; do not describe it as an all-path
   paged kernel or claim speedup from descriptive single-machine evidence.
 - `--prefix-cache` additionally enables Stage 14 full-block APC. Partial tails remain private and
-  there is no partial-block COW. Prefix-hit suffix prefill is block-aware, but overflow rebuild stays
-  dense. The committed fresh-process benchmark has strict verdict `fail`; avoided prefill work is
-  evidence of skipped computation, not a wall-clock speedup claim.
-- Do not begin partial-block sharing/COW, chunked prefill, speculative decoding, BPE, GPU, LoRA,
-  distributed training,
-  `torch.compile`, or another optimization without an explicit stage decision.
+  there is no partial-block COW. Stage 15 can batch paged-history suffix rows by computed suffix
+  tokens, but SEQUENTIAL remains the production default because the aggregate strict benchmark is
+  `fail`; Stage 15/16 evidence configs opt into BATCHED explicitly. Exact hits still use boundary
+  logits and overflow rebuild stays dense. Historical K/V is not materialized on the normal suffix
+  path, and model-call reduction alone does not imply a wall-clock performance improvement claim.
+- `configs/serving_chunked_prefill.yaml` opts into Stage 16 by setting `max_scheduled_tokens` and
+  `prefill_chunk_tokens`. Normal paged decode costs one model-work unit; learned-position overflow
+  costs the actual dense rebuild context length. Work that does not fit the remaining tick budget is
+  deferred rather than executed over budget, and the deterministic fairness cursor alternates
+  deferred decode/prefill work to avoid starvation. Stage 16 evidence is structural/descriptive only
+  and makes no wall-clock speedup claim.
+- Do not begin partial-block sharing/COW, KV-pressure preemption, speculative decoding, BPE, GPU,
+  LoRA, distributed training, `torch.compile`, or another optimization without an explicit stage
+  decision.
 
 ## Quality gates
 

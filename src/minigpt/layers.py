@@ -252,6 +252,81 @@ class CausalSelfAttention(nn.Module):
         output = cast("Tensor", self.residual_dropout(projected))
         return output, LayerKVCache(key=key.detach(), value=value.detach())
 
+    def forward_paged_prefill_batch(
+        self,
+        hidden_states: Tensor,
+        cache_views: Sequence[PagedLayerKVCacheView | None],
+        new_token_lengths: Tensor,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Prefill variable token segments against optional paged history in one projection."""
+        query, key, value = self._project_qkv(hidden_states)
+        batch_size, _, padded_length, _ = query.shape
+        if len(cache_views) != batch_size:
+            reason = "paged cache view count must equal batch size"
+            raise ValueError(reason)
+        if new_token_lengths.shape != (batch_size,):
+            reason = "new token lengths must have shape [batch]"
+            raise ValueError(reason)
+
+        contexts: list[Tensor] = []
+        for row, cache_view in enumerate(cache_views):
+            row_length = int(new_token_lengths[row].item())
+            row_context = self._attend_paged_prefill_row(
+                query[row : row + 1, :, :row_length, :],
+                key[row : row + 1, :, :row_length, :],
+                value[row : row + 1, :, :row_length, :],
+                cache_view,
+            )
+            contexts.append(functional.pad(row_context, (0, 0, 0, padded_length - row_length)))
+        context = torch.cat(contexts, dim=0)
+        context = (
+            context.transpose(1, 2)
+            .contiguous()
+            .view(
+                batch_size,
+                padded_length,
+                self.n_embd,
+            )
+        )
+        projected = cast("Tensor", self.output_projection(context))
+        output = cast("Tensor", self.residual_dropout(projected))
+        return output, LayerKVCache(key=key.detach(), value=value.detach())
+
+    def _attend_paged_prefill_row(
+        self,
+        query: Tensor,
+        current_key: Tensor,
+        current_value: Tensor,
+        view: PagedLayerKVCacheView | None,
+    ) -> Tensor:
+        """Attend one suffix over physical history blocks plus its causal suffix."""
+        blocks = () if view is None else self._validate_paged_view(query, view)
+        score_chunks = [query @ key_block.unsqueeze(0).transpose(-2, -1) for key_block, _ in blocks]
+        suffix_scores = query @ current_key.transpose(-2, -1)
+        suffix_length = query.shape[2]
+        suffix_causal = torch.ones(
+            (suffix_length, suffix_length),
+            dtype=torch.bool,
+            device=query.device,
+        ).tril()
+        score_chunks.append(
+            suffix_scores.masked_fill(
+                ~suffix_causal.view(1, 1, suffix_length, suffix_length),
+                -torch.inf,
+            )
+        )
+        scores = torch.cat(score_chunks, dim=-1) / math.sqrt(self.head_size)
+        weights = cast("Tensor", self.attention_dropout(functional.softmax(scores, dim=-1)))
+        context = torch.zeros_like(query)
+        position = 0
+        for _, value_block in blocks:
+            block_length = value_block.shape[1]
+            context = context + weights[
+                ..., position : position + block_length
+            ] @ value_block.unsqueeze(0)
+            position += block_length
+        return context + weights[..., position:] @ current_value
+
     def _attend_paged_row(
         self,
         query: Tensor,
@@ -481,6 +556,24 @@ class TransformerBlock(nn.Module):
         attention_output, cache_delta = self.attention.forward_paged_prefill(
             attention_input,
             cache_view,
+        )
+        hidden_states = hidden_states + attention_output
+        mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
+        output = hidden_states + cast("Tensor", self.mlp(mlp_input))
+        return output, cache_delta
+
+    def forward_paged_prefill_batch(
+        self,
+        hidden_states: Tensor,
+        cache_views: Sequence[PagedLayerKVCacheView | None],
+        new_token_lengths: Tensor,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Apply a paged-history multi-token forward to every request row."""
+        attention_input = cast("Tensor", self.attention_norm(hidden_states))
+        attention_output, cache_delta = self.attention.forward_paged_prefill_batch(
+            attention_input,
+            cache_views,
+            new_token_lengths,
         )
         hidden_states = hidden_states + attention_output
         mlp_input = cast("Tensor", self.mlp_norm(hidden_states))
