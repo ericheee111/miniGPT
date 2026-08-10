@@ -764,6 +764,5 @@ def _readme(
             "and new HTTP request APIs remain outside Stage 17.",
             "",
             f"Source commit: {summary['source_commit']}.",
-            "",
         )
     ) + chr(10)

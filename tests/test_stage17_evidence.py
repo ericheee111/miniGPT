@@ -87,6 +87,9 @@ def test_stage17_package_binds_pressure_contracts_and_exact_hashes(tmp_path: Pat
     assert summary["wall_clock_performance_improvement"] is False
     assert summary["dynamic_kv_reservation"] is False
     assert summary["cpu_swap"] is False
+    readme = (package / "README.md").read_text(encoding="utf-8")
+    assert readme.endswith("\n")
+    assert not readme.endswith("\n\n")
 
     correctness_copy = package / "evidence" / "correctness.json"
     _ = correctness_copy.write_text(
