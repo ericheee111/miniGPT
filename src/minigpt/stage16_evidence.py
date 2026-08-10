@@ -143,12 +143,10 @@ def _engine(
         SchedulerConfig(
             max_active_requests=max_active_requests,
             max_cached_tokens=max_cached,
-            **{
-                _BUDGET_FIELD: max(
-                    model.config.block_size, max_active_requests + paged.block_tokens
-                ),
-                _CHUNK_FIELD: 2,
-            },
+            max_scheduled_tokens=max(
+                model.config.block_size, max_active_requests + paged.block_tokens
+            ),
+            prefill_chunk_tokens=2,
         )
         if chunked
         else SchedulerConfig(

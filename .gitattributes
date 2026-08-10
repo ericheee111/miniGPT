@@ -46,3 +46,6 @@ docs/results/cache-aware-batched-prefill/** text eol=lf
 
 # Stage 16 chunked prefill token budget evidence binds exact UTF-8/LF checkout bytes.
 docs/results/chunked-prefill-token-budget/** text eol=lf
+
+# Stage 17 KV-pressure preemption evidence binds exact UTF-8/LF checkout bytes.
+docs/results/kv-pressure-preemption/** text eol=lf

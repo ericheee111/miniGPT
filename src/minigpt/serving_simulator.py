@@ -87,6 +87,7 @@ _SCHEDULER_KEYS = frozenset(
         "max_cached_tokens",
         "max_scheduled_tokens",
         "prefill_chunk_tokens",
+        "kv_preemption",
     }
 )
 _SCHEDULER_REQUIRED_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
@@ -377,11 +378,15 @@ def _scheduler(document: ConfigMapping, source: Path) -> SchedulerConfig:
         if "prefill_chunk_tokens" in raw
         else None
     )
+    preemption = raw.get("kv_preemption", False)
+    if not isinstance(preemption, bool):
+        _invalid(source, "scheduler kv_preemption must be a boolean")
     return SchedulerConfig(
         max_active_requests=_integer(raw, "max_active_requests", source, positive=True),
         max_cached_tokens=_integer(raw, "max_cached_tokens", source, positive=True),
         max_scheduled_tokens=max_scheduled,
         prefill_chunk_tokens=chunk_size,
+        kv_preemption=preemption,
     )
 
 
@@ -547,6 +552,8 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
     paged_kv_cache = _paged_kv_cache(document, source, backend=backend)
     model = _model(document, source, vocab_size=vocab_size)
     scheduler = _scheduler(document, source)
+    if scheduler.kv_preemption and scheduler.prefill_chunk_tokens is None:
+        _invalid(source, "kv_preemption requires chunked prefill scheduling")
     if scheduler.prefill_chunk_tokens is not None:
         if (
             executor is not SimulatorExecutor.PAGED_ATTENTION
@@ -755,6 +762,7 @@ def _summary_document(
             ),
             "max_active_requests": config.scheduler.max_active_requests,
             "max_cached_tokens": config.scheduler.max_cached_tokens,
+            "kv_preemption": config.scheduler.kv_preemption,
         }
     )
     document.update(_cache_aware_prefill_summary(observations))

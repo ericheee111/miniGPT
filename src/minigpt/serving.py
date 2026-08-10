@@ -51,6 +51,8 @@ class RequestStatus(StrEnum):
     WAITING = "waiting"
     PREFILLING = "prefilling"
     DECODING = "decoding"
+    PREEMPTED = "preempted"
+    RECOMPUTING = "recomputing"
     FINISHED = "finished"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -66,6 +68,9 @@ class EngineEventType(StrEnum):
     PREFILL_STARTED = "prefill_started"
     PREFILL_CHUNK_STARTED = "PREFILL_CHUNK_STARTED"
     PREFILL_CHUNK_FINISHED = "PREFILL_CHUNK_FINISHED"
+    PREEMPTED = "PREEMPTED"
+    RECOMPUTE_STARTED = "RECOMPUTE_STARTED"
+    RESUMED = "RESUMED"
     TOKEN = "token"  # noqa: S105
     FINISHED = "finished"
     FAILED = "failed"
@@ -194,6 +199,7 @@ class SchedulerConfig:
     max_cached_tokens: int
     max_scheduled_tokens: int | None = None
     prefill_chunk_tokens: int | None = None
+    kv_preemption: bool = False
 
     def __post_init__(self) -> None:
         """Require usable positive serving capacity."""
@@ -212,6 +218,9 @@ class SchedulerConfig:
         ):
             if value is not None and (isinstance(value, bool) or value <= 0):
                 _invalid(f"{name} must be a positive integer")
+        raw_preemption = cast("object", self.kv_preemption)
+        if not isinstance(raw_preemption, bool):
+            _invalid("kv_preemption must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +262,11 @@ class RequestState:
     decode_latencies_seconds: list[float] = field(default_factory=list)
     token_timestamps: list[float] = field(default_factory=list)
     failure_reason: str | None = None
+    preemption_count: int = 0
+    resume_count: int = 0
+    recompute_tokens: int = 0
+    last_recompute_time: float | None = None
+    last_decode_tick: float | None = None
     prefix_hit_blocks: int = 0
     prefix_hit_tokens: int = 0
     prefix_miss_tokens: int = 0
@@ -263,6 +277,22 @@ class RequestState:
     def all_tokens(self) -> tuple[int, ...]:
         """Return the immutable prompt followed by generated tokens."""
         return self.request.prompt_tokens + tuple(self.generated_tokens)
+
+
+@dataclass(frozen=True, slots=True)
+class CacheRecomputeResult:
+    """Return one cache-only recomputation outcome without sampling."""
+
+    request_id: str
+    cache: KVCache | None
+    cache_length: int
+    latency_seconds: float
+    error: str | None
+
+    @classmethod
+    def failure(cls, request_id: str, error: str, latency_seconds: float) -> Self:
+        """Build a failed cache-only recomputation result."""
+        return cls(request_id, None, 0, latency_seconds, error)
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,6 +387,7 @@ class PrefillExecutionMode(StrEnum):
     EXACT_CACHE_HIT = "exact_cache_hit"
     OVERFLOW_DENSE_REBUILD = "overflow_dense_rebuild"
     CHUNKED_PAGED_PREFILL = "chunked_paged_prefill"
+    PREEMPTION_RECOMPUTE = "preemption_recompute"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1874,6 +1905,106 @@ class PagedAttentionExecutor:
             )
         )
 
+    def recompute_model_work(self, state: RequestState) -> int:
+        """Return dense cache-only history work for one preempted request."""
+        history = state.all_tokens[:-1][-self.block_size :]
+        return len(history)
+
+    def recompute_cache(self, state: RequestState) -> CacheRecomputeResult:
+        """Rebuild resident history without sampling or advancing request RNG."""
+        logical_start = self._clock()
+        executor_start = self._telemetry_clock()
+        history = state.all_tokens[:-1][-self.block_size :]
+        if not history or not state.generated_tokens:
+            return CacheRecomputeResult.failure(
+                state.request.request_id,
+                "recompute requires generated output and non-empty history",
+                _logical_elapsed(self._clock, logical_start),
+            )
+        assembly_seconds = 0.0
+        model_seconds = 0.0
+        model_calls = 0
+        try:
+            assembly_start = self._telemetry_clock()
+            inputs = torch.tensor(
+                (history,),
+                dtype=torch.long,
+                device=self._model.token_embedding.weight.device,
+            )
+            assembly_seconds = max(0.0, self._telemetry_clock() - assembly_start)
+            model_start = self._telemetry_clock()
+            model_calls = 1
+            _logits, cache = self._model.prefill(inputs)
+            model_seconds = max(0.0, self._telemetry_clock() - model_start)
+        except Exception as error:  # noqa: BLE001
+            elapsed = _logical_elapsed(self._clock, logical_start)
+            self._record_recompute(
+                state,
+                history_length=len(history),
+                logical_start=logical_start,
+                elapsed=elapsed,
+                executor_start=executor_start,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                model_calls=model_calls,
+                failed=True,
+            )
+            return CacheRecomputeResult.failure(
+                state.request.request_id,
+                f"{type(error).__name__}: {error}",
+                elapsed,
+            )
+        elapsed = _logical_elapsed(self._clock, logical_start)
+        self._record_recompute(
+            state,
+            history_length=len(history),
+            logical_start=logical_start,
+            elapsed=elapsed,
+            executor_start=executor_start,
+            assembly_seconds=assembly_seconds,
+            model_seconds=model_seconds,
+            model_calls=model_calls,
+            failed=False,
+        )
+        return CacheRecomputeResult(
+            request_id=state.request.request_id,
+            cache=cache,
+            cache_length=len(history),
+            latency_seconds=elapsed,
+            error=None,
+        )
+
+    def _record_recompute(  # noqa: PLR0913
+        self,
+        state: RequestState,
+        *,
+        history_length: int,
+        logical_start: float,
+        elapsed: float,
+        executor_start: float,
+        assembly_seconds: float,
+        model_seconds: float,
+        model_calls: int,
+        failed: bool,
+    ) -> None:
+        self._prefix_prefill_observations.append(
+            PrefillBatchObservation(
+                request_ids=(state.request.request_id,),
+                batch_size=1,
+                padded_prompt_tokens=history_length,
+                useful_prompt_tokens=history_length,
+                assembly_seconds=assembly_seconds,
+                model_seconds=model_seconds,
+                scatter_seconds=0.0,
+                executor_seconds=max(0.0, self._telemetry_clock() - executor_start),
+                started_at=logical_start,
+                finished_at=logical_start + elapsed,
+                batch_failed=failed,
+                execution_mode=PrefillExecutionMode.PREEMPTION_RECOMPUTE,
+                model_calls=model_calls,
+            )
+        )
+
     def decode(self, active_requests: Sequence[RequestState]) -> tuple[ExecutionResult, ...]:
         """Isolate invalid/overflow rows and directly batch all other block views."""
         results: dict[str, ExecutionResult] = {}
@@ -2094,6 +2225,9 @@ class RequestMetrics:
     prefix_hit_tokens: int
     prefix_miss_tokens: int
     prefill_tokens_computed: int
+    preemption_count: int
+    resume_count: int
+    recompute_tokens: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -2176,6 +2310,9 @@ class EngineMetrics:
     avoided_prefill_tokens: int
     prefix_hit_request_ratio: float
     prefix_hit_token_ratio: float
+    preemptions: int
+    resumes: int
+    recompute_tokens: int
 
 
 def _validate_chunked_engine(
@@ -2186,6 +2323,8 @@ def _validate_chunked_engine(
     direct_paged_decode: bool,
 ) -> None:
     chunk_size = cast("int | None", getattr(config.scheduler, "prefill_chunk_" + "tokens"))
+    if config.scheduler.kv_preemption and chunk_size is None:
+        _invalid("kv_preemption requires Stage 16 token-budget scheduling")
     if chunk_size is None:
         return
     if not direct_paged_decode or paged_cache_pool is None:
@@ -2346,6 +2485,7 @@ class ServingEngine:
         self._last_tick_time = tick_time
         if self.config.scheduler.prefill_chunk_tokens is not None:
             self._tick_chunked(tick_time)
+            self._maybe_preempt_for_pressure(tick_time)
             self._update_peaks()
             return
         prefill_ids = tuple(
@@ -2393,7 +2533,8 @@ class ServingEngine:
         decode_ids = tuple(
             request_id
             for request_id in self._active
-            if self._states[request_id].status is RequestStatus.DECODING
+            if self._states[request_id].status
+            in {RequestStatus.DECODING, RequestStatus.RECOMPUTING}
         )
         self._apply_cancellations(tick_time)
         self._admit(tick_time)
@@ -2406,7 +2547,8 @@ class ServingEngine:
         live_decode = tuple(
             request_id
             for request_id in decode_ids
-            if self._states[request_id].status is RequestStatus.DECODING
+            if self._states[request_id].status
+            in {RequestStatus.DECODING, RequestStatus.RECOMPUTING}
         )
         if self._chunk_schedule_cursor in live_prefill:
             self._run_chunked_prefill_first(
@@ -2473,6 +2615,12 @@ class ServingEngine:
         normal_batch: list[str] = []
         for request_id in request_ids:
             state = self._states[request_id]
+            if state.status is RequestStatus.RECOMPUTING:
+                if normal_batch:
+                    self._execute(tuple(normal_batch), tick_time=tick_time, prefill=False)
+                    normal_batch.clear()
+                self._execute_recompute(state, tick_time=tick_time)
+                continue
             work = executor.decode_model_work(state)
             if work == 1:
                 normal_batch.append(request_id)
@@ -2483,6 +2631,48 @@ class ServingEngine:
             self._execute((request_id,), tick_time=tick_time, prefill=False)
         if normal_batch:
             self._execute(tuple(normal_batch), tick_time=tick_time, prefill=False)
+
+    def _execute_recompute(self, state: RequestState, *, tick_time: float) -> None:
+        executor = self._executor
+        pool = self._paged_cache_pool
+        if not isinstance(executor, PagedAttentionExecutor) or pool is None:
+            _invalid("preemption recompute requires the direct paged executor")
+        if state.status is not RequestStatus.RECOMPUTING:
+            _invalid("recompute requires a RECOMPUTING request")
+        self._emit(
+            event_type=EngineEventType.RECOMPUTE_STARTED,
+            state=state,
+            timestamp=tick_time,
+        )
+        result = executor.recompute_cache(state)
+        if result.error is not None or result.cache is None:
+            self._fail_state(
+                state,
+                tick_time + result.latency_seconds,
+                result.error or "recompute failed",
+            )
+            return
+        try:
+            pool.write_prefill(state.request.request_id, result.cache)
+        except Exception as error:  # noqa: BLE001
+            self._fail_state(
+                state,
+                tick_time + result.latency_seconds,
+                f"{type(error).__name__}: {error}",
+            )
+            return
+        state.kv_cache = ()
+        state.cached_tokens = result.cache_length
+        state.recompute_tokens += result.cache_length
+        state.resume_count += 1
+        state.last_recompute_time = tick_time
+        state.status = RequestStatus.DECODING
+        self._emit(
+            event_type=EngineEventType.RESUMED,
+            state=state,
+            timestamp=tick_time + result.latency_seconds,
+            detail=f"recompute_tokens={result.cache_length}",
+        )
 
     def _run_chunked_prefill_first(
         self,
@@ -2528,7 +2718,11 @@ class ServingEngine:
         deferred: str | None = None
         for request_id in ordered:
             state = self._states[request_id]
-            work = executor.decode_model_work(state)
+            work = (
+                executor.recompute_model_work(state)
+                if state.status is RequestStatus.RECOMPUTING
+                else executor.decode_model_work(state)
+            )
             if work > budget - used:
                 deferred = request_id
                 break
@@ -2673,6 +2867,9 @@ class ServingEngine:
             prefix_hit_tokens=state.prefix_hit_tokens,
             prefix_miss_tokens=state.prefix_miss_tokens,
             prefill_tokens_computed=state.prefill_tokens_computed,
+            preemption_count=state.preemption_count,
+            resume_count=state.resume_count,
+            recompute_tokens=state.recompute_tokens,
         )
 
     def metrics(self) -> EngineMetrics:
@@ -2872,6 +3069,9 @@ class ServingEngine:
             avoided_prefill_tokens=avoided_prefill_tokens,
             prefix_hit_request_ratio=hit_request_ratio,
             prefix_hit_token_ratio=hit_token_ratio,
+            preemptions=sum(state.preemption_count for state in states),
+            resumes=sum(state.resume_count for state in states),
+            recompute_tokens=sum(state.recompute_tokens for state in states),
         )
 
     def _apply_cancellations(self, tick_time: float) -> None:
@@ -2898,6 +3098,7 @@ class ServingEngine:
         scheduler = self.config.scheduler
         while self._waiting and len(self._active) < scheduler.max_active_requests:
             state = self._states[self._waiting[0]]
+            resuming = state.status is RequestStatus.PREEMPTED
             required = self._reservation_for(state.request)
             if required > scheduler.max_cached_tokens:
                 _ = self._waiting.popleft()
@@ -2941,13 +3142,14 @@ class ServingEngine:
                         reserved_blocks=required_blocks,
                         prompt_tokens=state.request.prompt_tokens,
                     )
-                    if pool.prefix_cache_enabled
+                    if pool.prefix_cache_enabled and not resuming
                     else pool.can_reserve(required_blocks)
                 )
                 if not fits:
                     break
             _ = self._waiting.popleft()
-            state.admission_time = tick_time
+            if not resuming:
+                state.admission_time = tick_time
             state.reserved_cache_tokens = required
             if state.request.max_new_tokens == 0:
                 state.status = RequestStatus.FINISHED
@@ -2966,7 +3168,7 @@ class ServingEngine:
                 continue
             if self._paged_cache_pool is not None:
                 pool = self._paged_cache_pool
-                if pool.prefix_cache_enabled:
+                if pool.prefix_cache_enabled and not resuming:
                     lookup = pool.reserve_with_prefix(
                         state.request.request_id,
                         reserved_blocks=required_blocks,
@@ -2978,6 +3180,10 @@ class ServingEngine:
                 else:
                     pool.reserve(state.request.request_id, required_blocks)
                 state.reserved_cache_blocks = required_blocks
+            if resuming:
+                state.status = RequestStatus.RECOMPUTING
+                self._active.append(state.request.request_id)
+                continue
             state.status = RequestStatus.PREFILLING
             self._active.append(state.request.request_id)
             if self._paged_cache_pool is not None and self._paged_cache_pool.prefix_cache_enabled:
@@ -3004,6 +3210,66 @@ class ServingEngine:
                 state=state,
                 timestamp=tick_time,
             )
+
+    def _waiting_head_needs_kv(self) -> bool:
+        if not self._waiting:
+            return False
+        state = self._states[self._waiting[0]]
+        required = self._reservation_for(state.request)
+        scheduler = self.config.scheduler
+        if self._reserved_cache_tokens() + required > scheduler.max_cached_tokens:
+            return True
+        pool = self._paged_cache_pool
+        if pool is None:
+            return False
+        required_blocks = pool.required_blocks(required)
+        if state.status is RequestStatus.PREEMPTED or not pool.prefix_cache_enabled:
+            return not pool.can_reserve(required_blocks)
+        return not pool.can_reserve_with_prefix(
+            reserved_blocks=required_blocks,
+            prompt_tokens=state.request.prompt_tokens,
+        )
+
+    def _maybe_preempt_for_pressure(self, tick_time: float) -> None:
+        if not self.config.scheduler.kv_preemption or not self._waiting_head_needs_kv():
+            return
+        for request_id in tuple(self._active):
+            state = self._states[request_id]
+            if state.status is not RequestStatus.DECODING:
+                continue
+            if state.last_decode_tick != tick_time or state.last_recompute_time == tick_time:
+                continue
+            self._preempt_state(state, tick_time)
+            return
+
+    def _preempt_state(self, state: RequestState, tick_time: float) -> None:
+        request_id = state.request.request_id
+        pool = self._paged_cache_pool
+        if pool is None or not pool.has_request(request_id):
+            _invalid("KV preemption requires a resident paged request")
+        if state.status is not RequestStatus.DECODING:
+            _invalid("only DECODING requests may be preempted")
+        pool.release(request_id)
+        self._active.remove(request_id)
+        state.kv_cache = None
+        state.cached_tokens = 0
+        state.reserved_cache_tokens = 0
+        state.reserved_cache_blocks = 0
+        state.prefill_logits_chunks.clear()
+        state.preemption_count += 1
+        state.status = RequestStatus.PREEMPTED
+        self._waiting.append(request_id)
+        if self._chunk_schedule_cursor == request_id:
+            self._chunk_schedule_cursor = None
+        if self._chunk_resume_decode == request_id:
+            self._chunk_resume_decode = None
+        preempt_time = state.token_timestamps[-1] if state.token_timestamps else tick_time
+        self._emit(
+            event_type=EngineEventType.PREEMPTED,
+            state=state,
+            timestamp=max(tick_time, preempt_time),
+        )
+        pool.verify_invariants()
 
     def _execute_prefill_chunks(
         self,
@@ -3313,6 +3579,7 @@ class ServingEngine:
             state.prefill_logits_chunks.clear()
         else:
             state.decode_latencies_seconds.append(result.latency_seconds)
+            state.last_decode_tick = tick_time
         self._emit(
             event_type=EngineEventType.TOKEN,
             state=state,

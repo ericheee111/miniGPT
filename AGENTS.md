@@ -109,9 +109,15 @@ dataset remain gitignored.
   deferred rather than executed over budget, and the deterministic fairness cursor alternates
   deferred decode/prefill work to avoid starvation. Stage 16 evidence is structural/descriptive only
   and makes no wall-clock speedup claim.
-- Do not begin partial-block sharing/COW, KV-pressure preemption, speculative decoding, BPE, GPU,
-  LoRA, distributed training, `torch.compile`, or another optimization without an explicit stage
-  decision.
+- `configs/serving_kv_preemption.yaml` opts into Stage 17 whole-request KV-pressure preemption. Only
+  DECODING requests may yield resident paged KV; PREEMPTED requests later reserve private capacity,
+  rebuild cache-only history without sampling, and resume with request-local RNG intact. Recompute
+  model-token work is charged to the Stage 16 budget. APC shared refs are released on preemption and
+  are not reattached across sliding-position recompute. Stage 17 remains `descriptive_only`;
+  dynamic/lazy reservation and CPU swap are not implemented.
+- Do not begin dynamic/lazy KV reservation, CPU swap, partial-block sharing/COW, speculative decoding,
+  BPE, GPU, LoRA, distributed training, `torch.compile`, or another optimization without an explicit
+  stage decision.
 
 ## Quality gates
 
