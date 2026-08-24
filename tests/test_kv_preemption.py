@@ -65,13 +65,14 @@ def _namespace(model: GPT) -> PrefixCacheNamespace:
     )
 
 
-def _engine(
+def _engine(  # noqa: PLR0913
     model: GPT,
     *,
     pool_blocks: int,
     preemption: bool,
     prefix_cache: bool = False,
     max_active: int = 2,
+    max_cached_tokens: int | None = None,
 ) -> ServingEngine:
     paged = PagedKVCacheConfig(2, pool_blocks)
     pool = PagedKVCachePool.from_model(
@@ -81,7 +82,7 @@ def _engine(
     )
     scheduler = SchedulerConfig(
         max_active_requests=max_active,
-        max_cached_tokens=pool_blocks * 2,
+        max_cached_tokens=(pool_blocks * 2 if max_cached_tokens is None else max_cached_tokens),
         max_scheduled_tokens=model.config.block_size,
         prefill_chunk_tokens=2,
         kv_preemption=preemption,
@@ -411,3 +412,67 @@ def test_preemption_requires_stage16_token_budget_scheduler() -> None:
             executor=PagedAttentionExecutor(model, pool),
             paged_cache_pool=pool,
         )
+
+
+def test_logically_impossible_waiting_head_fails_without_preemption() -> None:
+    engine = _engine(
+        _model(),
+        pool_blocks=4,
+        preemption=True,
+        max_active=1,
+        max_cached_tokens=4,
+    )
+    engine.submit(GenerationRequest("viable", (1, 2), 3, seed=107))
+    engine.submit(
+        GenerationRequest(
+            "logical-oversized",
+            tuple(range(1, 9)),
+            2,
+            seed=109,
+        )
+    )
+
+    engine.tick(now=0.0)
+
+    viable = engine.request_state("viable")
+    oversized = engine.request_state("logical-oversized")
+    assert oversized.status is RequestStatus.FAILED
+    assert "exceeds budget 4" in (oversized.failure_reason or "")
+    assert viable.preemption_count == 0
+    assert engine.metrics().preemptions == 0
+    assert not any(event.event_type is EngineEventType.PREEMPTED for event in engine.events)
+    pool = engine.paged_cache_pool
+    assert pool is not None
+    pool.verify_invariants()
+
+
+def test_physically_impossible_waiting_head_fails_without_preemption() -> None:
+    engine = _engine(
+        _model(),
+        pool_blocks=3,
+        preemption=True,
+        max_active=1,
+        max_cached_tokens=8,
+    )
+    engine.submit(GenerationRequest("viable", (1, 2), 2, seed=113))
+    engine.submit(
+        GenerationRequest(
+            "physical-oversized",
+            tuple(range(1, 9)),
+            2,
+            seed=127,
+        )
+    )
+
+    engine.tick(now=0.0)
+
+    viable = engine.request_state("viable")
+    oversized = engine.request_state("physical-oversized")
+    assert oversized.status is RequestStatus.FAILED
+    assert "4 blocks exceeds pool 3" in (oversized.failure_reason or "")
+    assert viable.preemption_count == 0
+    assert engine.metrics().preemptions == 0
+    assert not any(event.event_type is EngineEventType.PREEMPTED for event in engine.events)
+    pool = engine.paged_cache_pool
+    assert pool is not None
+    pool.verify_invariants()

@@ -1,4 +1,4 @@
-"""Generate and verify hash-bound Stage 16 chunked-prefill evidence."""
+"""Generate and verify hash-bound Stage 17 KV-pressure preemption evidence."""
 
 from __future__ import annotations
 
@@ -43,14 +43,14 @@ _CANCELLATION_PROBABILITY = 0.08
 
 @dataclass(frozen=True, slots=True)
 class Stage17EvidenceVerificationError(ValueError):
-    """Report invalid Stage 16 evidence membership, hashes, or claims."""
+    """Report invalid Stage 17 evidence membership, hashes, or claims."""
 
     reason: str
 
     @override
     def __str__(self) -> str:
         """Render the evidence failure."""
-        return f"invalid Stage 16 evidence: {self.reason}"
+        return f"invalid Stage 17 evidence: {self.reason}"
 
 
 def _invalid(reason: str) -> Never:
@@ -117,13 +117,14 @@ def _namespace(model: GPT) -> PrefixCacheNamespace:
     )
 
 
-def _engine(
+def _engine(  # noqa: PLR0913
     model: GPT,
     *,
     pool_blocks: int,
     preemption: bool,
     prefix_cache: bool = False,
     max_active_requests: int = 2,
+    max_cached_tokens: int | None = None,
 ) -> ServingEngine:
     paged = PagedKVCacheConfig(block_tokens=2, num_blocks=pool_blocks)
     pool = PagedKVCachePool.from_model(
@@ -133,7 +134,9 @@ def _engine(
     )
     scheduler = SchedulerConfig(
         max_active_requests=max_active_requests,
-        max_cached_tokens=pool_blocks * paged.block_tokens,
+        max_cached_tokens=(
+            pool_blocks * paged.block_tokens if max_cached_tokens is None else max_cached_tokens
+        ),
         max_scheduled_tokens=model.config.block_size,
         prefill_chunk_tokens=2,
         kv_preemption=preemption,
@@ -399,6 +402,49 @@ def generate_stage17_apc(output_path: Path) -> Path:
     return output_path
 
 
+def _exercise_intrinsic_failure(
+    model: GPT,
+    *,
+    pool_blocks: int,
+    max_cached_tokens: int,
+    request_id: str,
+    expected_reason: str,
+) -> None:
+    """Prove an intrinsically impossible FIFO head fails without evicting useful KV."""
+    engine = _engine(
+        model,
+        pool_blocks=pool_blocks,
+        preemption=True,
+        max_active_requests=1,
+        max_cached_tokens=max_cached_tokens,
+    )
+    viable_id = f"{request_id}-viable"
+    engine.submit(GenerationRequest(viable_id, (1, 2), 3, seed=1731))
+    engine.submit(
+        GenerationRequest(
+            request_id=request_id,
+            prompt_tokens=tuple(range(1, 9)),
+            max_new_tokens=2,
+            seed=1733,
+        )
+    )
+    engine.tick(now=0.0)
+    viable = engine.request_state(viable_id)
+    impossible = engine.request_state(request_id)
+    if (
+        impossible.status is not RequestStatus.FAILED
+        or expected_reason not in (impossible.failure_reason or "")
+        or viable.preemption_count != 0
+        or engine.metrics().preemptions != 0
+    ):
+        _invalid("intrinsically impossible FIFO head triggered KV preemption")
+    _ = _run_until_idle(engine, start_tick=1)
+    if not _active_resources_released(engine):
+        _invalid("intrinsic admission failure witness leaked KV resources")
+    pool = cast("PagedKVCachePool", engine.paged_cache_pool)
+    pool.verify_invariants()
+
+
 def run_stage17_stress(
     *,
     operations: int = 1000,
@@ -466,9 +512,21 @@ def run_stage17_stress(
     )
     if not all_terminal or not resources_released or metrics.preemptions <= 0:
         _invalid("Stage 17 stress missed terminal/resource/progress contracts")
-    terminal = {
-        item: engine.request_state(item).status.value for item in sorted(request_ids)
-    }
+    _exercise_intrinsic_failure(
+        model,
+        pool_blocks=4,
+        max_cached_tokens=4,
+        request_id="stage17-logical-oversized",
+        expected_reason="exceeds budget 4",
+    )
+    _exercise_intrinsic_failure(
+        model,
+        pool_blocks=3,
+        max_cached_tokens=8,
+        request_id="stage17-physical-oversized",
+        expected_reason="4 blocks exceeds pool 3",
+    )
+    terminal = {item: engine.request_state(item).status.value for item in sorted(request_ids)}
     return cast(
         "EvidenceDocument",
         {
@@ -484,12 +542,14 @@ def run_stage17_stress(
             "all_requests_terminal": True,
             "all_resources_released": True,
             "terminal_prefill_logits_released": True,
+            "intrinsic_logical_failure_no_preemption": True,
+            "intrinsic_physical_failure_no_preemption": True,
         },
     )
 
 
 def write_stage17_stress(output_path: Path, *, operations: int = 1000) -> Path:
-    """Write deterministic Stage 16 stress evidence."""
+    """Write deterministic Stage 17 stress evidence."""
     _write_json(output_path, run_stage17_stress(operations=operations))
     return output_path
 
@@ -517,6 +577,12 @@ def generate_stage17_benchmark(
             "recompute_tokens": correctness["recompute_tokens"],
             "per_tick_budget_respected": scheduling["per_tick_budget_respected"],
             "stress_operations": stress["operations"],
+            "intrinsic_logical_failure_no_preemption": stress[
+                "intrinsic_logical_failure_no_preemption"
+            ],
+            "intrinsic_physical_failure_no_preemption": stress[
+                "intrinsic_physical_failure_no_preemption"
+            ],
         },
     )
     return output_path
@@ -572,6 +638,8 @@ def generate_stage17_evidence(  # noqa: PLR0913
         stress.get("all_requests_terminal"),
         stress.get("all_resources_released"),
         stress.get("terminal_prefill_logits_released"),
+        stress.get("intrinsic_logical_failure_no_preemption"),
+        stress.get("intrinsic_physical_failure_no_preemption"),
     )
     if not all(value is True for value in required_true):
         _invalid("Stage 17 evidence contracts did not all pass")
@@ -596,6 +664,8 @@ def generate_stage17_evidence(  # noqa: PLR0913
         "resume_uses_private_recompute": True,
         "no_starvation_finite_workload": True,
         "terminal_prefill_logits_released": True,
+        "intrinsic_logical_failure_no_preemption": True,
+        "intrinsic_physical_failure_no_preemption": True,
         "stress_operations": stress["operations"],
         "stress_passed": True,
         "lifecycle_passed": True,
@@ -680,6 +750,8 @@ def _verify_summary(summary: EvidenceDocument, source_commit: str) -> None:
         "resume_uses_private_recompute",
         "no_starvation_finite_workload",
         "terminal_prefill_logits_released",
+        "intrinsic_logical_failure_no_preemption",
+        "intrinsic_physical_failure_no_preemption",
         "stress_passed",
         "lifecycle_passed",
     ):
@@ -748,6 +820,7 @@ def _readme(
             ),
             f"Observed preemptions: {correctness['preemptions']}.",
             f"Observed recompute tokens: {correctness['recompute_tokens']}.",
+            "Intrinsically impossible logical/physical FIFO heads are rejected without preemption.",
             "",
             "APC shared references are released on preemption. Resume intentionally rebuilds",
             "private KV instead of reusing original-position prefix blocks across a sliding",

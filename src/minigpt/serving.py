@@ -3094,45 +3094,50 @@ class ServingEngine:
                 timestamp=tick_time,
             )
 
+    def _intrinsic_admission_failure(self, state: RequestState) -> str | None:
+        """Return why one FIFO head can never fit, independent of resident requests."""
+        required = self._reservation_for(state.request)
+        scheduler = self.config.scheduler
+        if required > scheduler.max_cached_tokens:
+            return (
+                f"required cache reservation {required} exceeds budget "
+                f"{scheduler.max_cached_tokens}"
+            )
+        pool = self._paged_cache_pool
+        if pool is None:
+            return None
+        required_blocks = pool.required_blocks(required)
+        if required_blocks > pool.config.num_blocks:
+            return (
+                f"required cache reservation {required_blocks} blocks exceeds pool "
+                f"{pool.config.num_blocks}"
+            )
+        return None
+
     def _admit(self, tick_time: float) -> None:  # noqa: C901, PLR0912, PLR0915
         scheduler = self.config.scheduler
-        while self._waiting and len(self._active) < scheduler.max_active_requests:
+        while self._waiting:
             state = self._states[self._waiting[0]]
-            resuming = state.status is RequestStatus.PREEMPTED
-            required = self._reservation_for(state.request)
-            if required > scheduler.max_cached_tokens:
+            failure_reason = self._intrinsic_admission_failure(state)
+            if failure_reason is not None:
                 _ = self._waiting.popleft()
-                state.failure_reason = (
-                    f"required cache reservation {required} exceeds budget "
-                    f"{scheduler.max_cached_tokens}"
-                )
+                state.failure_reason = failure_reason
                 state.status = RequestStatus.FAILED
                 state.finish_time = tick_time
                 self._emit(
                     event_type=EngineEventType.FAILED,
                     state=state,
                     timestamp=tick_time,
-                    detail=state.failure_reason,
+                    detail=failure_reason,
                 )
                 continue
+            if len(self._active) >= scheduler.max_active_requests:
+                break
+            resuming = state.status is RequestStatus.PREEMPTED
+            required = self._reservation_for(state.request)
             required_blocks = 0
             if self._paged_cache_pool is not None:
                 required_blocks = self._paged_cache_pool.required_blocks(required)
-                if required_blocks > self._paged_cache_pool.config.num_blocks:
-                    _ = self._waiting.popleft()
-                    state.failure_reason = (
-                        f"required cache reservation {required_blocks} blocks exceeds pool "
-                        f"{self._paged_cache_pool.config.num_blocks}"
-                    )
-                    state.status = RequestStatus.FAILED
-                    state.finish_time = tick_time
-                    self._emit(
-                        event_type=EngineEventType.FAILED,
-                        state=state,
-                        timestamp=tick_time,
-                        detail=state.failure_reason,
-                    )
-                    continue
             if self._reserved_cache_tokens() + required > scheduler.max_cached_tokens:
                 break
             if self._paged_cache_pool is not None:
@@ -3215,6 +3220,8 @@ class ServingEngine:
         if not self._waiting:
             return False
         state = self._states[self._waiting[0]]
+        if self._intrinsic_admission_failure(state) is not None:
+            return False
         required = self._reservation_for(state.request)
         scheduler = self.config.scheduler
         if self._reserved_cache_tokens() + required > scheduler.max_cached_tokens:

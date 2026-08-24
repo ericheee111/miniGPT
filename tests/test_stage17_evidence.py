@@ -42,6 +42,8 @@ def test_stage17_stress_is_deterministic_and_releases_resources() -> None:
     assert first["all_requests_terminal"] is True
     assert first["all_resources_released"] is True
     assert first["terminal_prefill_logits_released"] is True
+    assert first["intrinsic_logical_failure_no_preemption"] is True
+    assert first["intrinsic_physical_failure_no_preemption"] is True
 
 
 def test_stage17_package_binds_pressure_contracts_and_exact_hashes(tmp_path: Path) -> None:
@@ -83,6 +85,9 @@ def test_stage17_package_binds_pressure_contracts_and_exact_hashes(tmp_path: Pat
     assert summary["apc_shared_refs_released"] is True
     assert summary["resume_uses_private_recompute"] is True
     assert summary["no_starvation_finite_workload"] is True
+    assert summary["terminal_prefill_logits_released"] is True
+    assert summary["intrinsic_logical_failure_no_preemption"] is True
+    assert summary["intrinsic_physical_failure_no_preemption"] is True
     assert summary["benchmark_strict_verdict"] == "descriptive_only"
     assert summary["wall_clock_performance_improvement"] is False
     assert summary["dynamic_kv_reservation"] is False
