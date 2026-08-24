@@ -1,6 +1,8 @@
 {
   "all_requests_terminal": true,
   "all_resources_released": true,
+  "intrinsic_logical_failure_no_preemption": true,
+  "intrinsic_physical_failure_no_preemption": true,
   "operations": 1012,
   "preemptions": 121,
   "recompute_tokens": 413,

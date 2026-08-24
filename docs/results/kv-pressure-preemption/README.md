@@ -9,6 +9,7 @@ Per-request RNG equivalence: True.
 Per-tick actual model-work budget respected: True.
 Observed preemptions: 10.
 Observed recompute tokens: 68.
+Intrinsically impossible logical/physical FIFO heads are rejected without preemption.
 
 APC shared references are released on preemption. Resume intentionally rebuilds
 private KV instead of reusing original-position prefix blocks across a sliding
@@ -24,4 +25,4 @@ descriptive_only; no wall-clock performance improvement is claimed.
 Dynamic/lazy KV reservation, CPU swap, partial-block COW, GPU/CUDA, fused kernels,
 and new HTTP request APIs remain outside Stage 17.
 
-Source commit: 551dd247d11befd1f971b90640d31163c865cdef.
+Source commit: 5cb003a97086ea9257ca91a79758b6a40eb697f3.

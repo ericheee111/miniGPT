@@ -1,4 +1,6 @@
 {
+  "intrinsic_logical_failure_no_preemption": true,
+  "intrinsic_physical_failure_no_preemption": true,
   "per_tick_budget_respected": true,
   "preemptions": 10,
   "recompute_tokens": 68,
