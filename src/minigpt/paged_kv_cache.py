@@ -226,6 +226,8 @@ class PagedKVCacheMetrics:
     prefix_hit_blocks: int = 0
     prefix_hit_tokens: int = 0
     prefix_miss_tokens: int = 0
+    reservation_growth_count: int = 0
+    reservation_growth_blocks: int = 0
 
 
 @final
@@ -292,6 +294,8 @@ class PagedKVCachePool:
         self._prefix_hit_blocks = 0
         self._prefix_hit_tokens = 0
         self._prefix_miss_tokens = 0
+        self._reservation_growth_count = 0
+        self._reservation_growth_blocks = 0
 
     @classmethod
     def from_model(
@@ -384,28 +388,42 @@ class PagedKVCachePool:
         """Return whether a request currently owns a reservation table."""
         return request_id in self._tables
 
-    def reserve(self, request_id: str, reserved_blocks: int) -> None:
-        """Create an empty request table while protecting future allocation capacity."""
+    def _resolve_max_blocks(self, reserved_blocks: int, max_blocks: int | None) -> int:
+        """Validate current protection and its immutable lifetime upper bound."""
+        if isinstance(reserved_blocks, bool) or reserved_blocks < 0:
+            _invalid("reserved_blocks must be a non-negative integer")
+        resolved = reserved_blocks if max_blocks is None else max_blocks
+        if isinstance(resolved, bool) or resolved < 0:
+            _invalid("max_blocks must be a non-negative integer")
+        if reserved_blocks > resolved:
+            _invalid("reserved_blocks must not exceed max_blocks")
+        if resolved > self.config.num_blocks:
+            _capacity(f"request lifetime reservation {resolved} blocks exceeds pool size")
+        return resolved
+
+    def reserve(
+        self,
+        request_id: str,
+        reserved_blocks: int,
+        *,
+        max_blocks: int | None = None,
+    ) -> None:
+        """Create a table with current protection and a lifetime allocation upper bound."""
         if not request_id:
             _invalid("request_id must be non-empty")
         if request_id in self._tables:
             _ownership(f"request {request_id!r} already has a reservation")
-        if isinstance(reserved_blocks, bool) or reserved_blocks < 0:
-            _invalid("reserved_blocks must be a non-negative integer")
-        if reserved_blocks > self.config.num_blocks:
-            reason = f"request {request_id!r} requires {reserved_blocks} blocks"
-            reason += f" but pool has {self.config.num_blocks}"
-            _capacity(reason)
+        resolved_max = self._resolve_max_blocks(reserved_blocks, max_blocks)
         if not self.can_reserve(reserved_blocks):
             available = self.config.num_blocks - self.metrics().reserved_blocks
-            reason = f"request {request_id!r} requires {reserved_blocks} blocks"
+            reason = f"request {request_id!r} requires {reserved_blocks} protected blocks"
             reason += f" with {available} available"
             _capacity(reason)
         self._tables[request_id] = _MutableRequestCache(
             request_id=request_id,
             reserved_blocks=reserved_blocks,
             block_ids=[],
-            max_blocks=reserved_blocks,
+            max_blocks=resolved_max,
         )
         self._update_peaks()
         self.verify_invariants()
@@ -416,18 +434,16 @@ class PagedKVCachePool:
         *,
         reserved_blocks: int,
         prompt_tokens: tuple[int, ...],
+        max_blocks: int | None = None,
     ) -> PrefixCacheLookup:
-        """Atomically attach the longest cached prefix and reserve private growth."""
+        """Attach cached prefix blocks under current and lifetime reservation bounds."""
         if not self.prefix_cache_enabled:
             _invalid("prefix cache lookup requires a configured namespace")
         if not request_id:
             _invalid("request_id must be non-empty")
         if request_id in self._tables:
             _ownership(f"request {request_id!r} already has a reservation")
-        if isinstance(reserved_blocks, bool) or reserved_blocks < 0:
-            _invalid("reserved_blocks must be a non-negative integer")
-        if reserved_blocks > self.config.num_blocks:
-            _capacity(f"request {request_id!r} reservation exceeds pool size")
+        resolved_max = self._resolve_max_blocks(reserved_blocks, max_blocks)
         block_ids, prefix_hashes = self._longest_prefix(prompt_tokens)
         newly_active = sum(self._blocks[block_id].active_refcount == 0 for block_id in block_ids)
         private_reservation = reserved_blocks - len(block_ids)
@@ -444,7 +460,7 @@ class PagedKVCachePool:
             reserved_blocks=private_reservation,
             block_ids=list(block_ids),
             cache_length=hit_tokens,
-            max_blocks=reserved_blocks,
+            max_blocks=resolved_max,
         )
         self._prefix_lookup_requests += 1
         if block_ids:
@@ -463,6 +479,48 @@ class PagedKVCachePool:
             prefix_miss_tokens=miss_tokens,
             evicted_prefix_hashes=self.take_recent_evictions(),
         )
+
+    def current_total_reserved_blocks(self, request_id: str) -> int:
+        """Return current private protection plus active shared prefix blocks."""
+        table = self._table(request_id)
+        return table.reserved_blocks + self._shared_count(table)
+
+    def can_grow_reservation(self, request_id: str, target_total_blocks: int) -> bool:
+        """Return whether current protection can grow to a total-block target."""
+        if isinstance(target_total_blocks, bool) or target_total_blocks < 0:
+            _invalid("target_total_blocks must be a non-negative integer")
+        table = self._table(request_id)
+        current = table.reserved_blocks + self._shared_count(table)
+        if target_total_blocks <= current:
+            return True
+        if target_total_blocks > table.max_blocks:
+            return False
+        return self._protected_blocks() + target_total_blocks - current <= self.config.num_blocks
+
+    def grow_reservation(self, request_id: str, target_total_blocks: int) -> int:
+        """Grow private protection transactionally without allocating physical cache blocks."""
+        if isinstance(target_total_blocks, bool) or target_total_blocks < 0:
+            _invalid("target_total_blocks must be a non-negative integer")
+        table = self._table(request_id)
+        current = table.reserved_blocks + self._shared_count(table)
+        if target_total_blocks <= current:
+            return 0
+        if target_total_blocks > table.max_blocks:
+            _capacity(
+                f"request {request_id!r} growth target {target_total_blocks} exceeds max {table.max_blocks}"
+            )
+        delta = target_total_blocks - current
+        if self._protected_blocks() + delta > self.config.num_blocks:
+            available = self.config.num_blocks - self.metrics().reserved_blocks
+            _capacity(
+                f"request {request_id!r} growth requires {delta} blocks with {available} available"
+            )
+        table.reserved_blocks += delta
+        self._reservation_growth_count += 1
+        self._reservation_growth_blocks += delta
+        self._update_peaks()
+        self.verify_invariants()
+        return delta
 
     def request_cache(self, request_id: str) -> PagedRequestCache:
         """Return an immutable snapshot of one request block table."""
@@ -688,9 +746,10 @@ class PagedKVCachePool:
         if not self.prefix_cache_enabled:
             self._rebuild_private_cache(table, cache, cache_length=cache_length, required=required)
             return
-        if required > table.max_blocks:
+        current_total = table.reserved_blocks + self._shared_count(table)
+        if required > current_total:
             _capacity(
-                f"overflow rebuild requires {required} blocks but request max is {table.max_blocks}"
+                f"overflow rebuild requires {required} blocks but current protection is {current_total}"
             )
         metadata_snapshot = self._metadata_snapshot()
         table_snapshot = self._table_snapshot(table)
@@ -702,7 +761,7 @@ class PagedKVCachePool:
             self._release_table_blocks(table)
             table.block_ids = []
             table.cache_length = 0
-            table.reserved_blocks = table.max_blocks
+            table.reserved_blocks = current_total
             candidate = self._acquire_blocks(required, owner_request_id=request_id)
             self._write_cache(cache, candidate, cache_length)
             table.block_ids = candidate
@@ -883,6 +942,8 @@ class PagedKVCachePool:
             prefix_hit_blocks=self._prefix_hit_blocks,
             prefix_hit_tokens=self._prefix_hit_tokens,
             prefix_miss_tokens=self._prefix_miss_tokens,
+            reservation_growth_count=self._reservation_growth_count,
+            reservation_growth_blocks=self._reservation_growth_blocks,
         )
 
     def verify_invariants(self) -> None:  # noqa: C901, PLR0912, PLR0915
@@ -938,8 +999,8 @@ class PagedKVCachePool:
             shared_count = self._shared_count(table)
             if private_count > table.reserved_blocks:
                 _ownership(f"request {table.request_id!r} allocation exceeds reservation")
-            if table.reserved_blocks + shared_count != table.max_blocks:
-                _ownership(f"request {table.request_id!r} reservation/shared accounting differs")
+            if table.reserved_blocks + shared_count > table.max_blocks:
+                _ownership(f"request {table.request_id!r} current reservation exceeds lifetime max")
             if (
                 table.cache_length % self.config.block_tokens
                 and table.block_ids
