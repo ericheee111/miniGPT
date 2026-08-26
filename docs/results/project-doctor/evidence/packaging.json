@@ -1,0 +1,14 @@
+{
+  "console_script_passed": true,
+  "fresh_install_passed": true,
+  "module_entrypoint_passed": true,
+  "project_version": "0.1.0",
+  "required_command_modules_present": true,
+  "root_help_passed": true,
+  "schema_version": 1,
+  "sdist_built": true,
+  "sdist_sha256": "a601f2acda39fa2a479977b0d257cbc0b62c57134d89929a5c16ac607b7f9edc",
+  "stage": "20",
+  "wheel_built": true,
+  "wheel_sha256": "06ef5aa0673339979e8a16c499bcf45900ea5382847bd1d20cfca53d74e5fcea"
+}

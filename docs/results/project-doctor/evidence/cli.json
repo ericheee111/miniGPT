@@ -1,0 +1,18 @@
+{
+  "commands": [
+    "prepare-data",
+    "train",
+    "generate",
+    "simulate",
+    "serve",
+    "verify"
+  ],
+  "http_modules_loaded_by_version": [],
+  "lazy_optional_imports": true,
+  "module_entrypoint": true,
+  "project_version": "0.1.0",
+  "schema_version": 1,
+  "stable_root_help": true,
+  "stage": "20",
+  "version_matches_source": true
+}

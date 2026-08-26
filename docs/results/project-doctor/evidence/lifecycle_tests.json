@@ -1,0 +1,7 @@
+{
+  "command": "python -m pytest -q tests/test_cli.py tests/test_project_doctor.py tests/test_serving_runtime.py tests/test_serve_subprocess.py tests/test_stage19_evidence.py tests/test_http_server.py tests/test_engine_runner.py",
+  "exit_code": 0,
+  "schema_version": 1,
+  "stderr": "",
+  "stdout": ".....................................................................    [100%]\n69 passed in 16.13s\n"
+}

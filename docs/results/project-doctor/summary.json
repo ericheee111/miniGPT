@@ -1,0 +1,19 @@
+{
+  "benchmark_strict_verdict": "descriptive_only",
+  "canonical_runtime_smoke": true,
+  "evidence_registry_stage7a_through_19": true,
+  "fresh_install_passed": true,
+  "lazy_optional_imports": true,
+  "lifecycle_passed": true,
+  "project_doctor_ci": true,
+  "project_doctor_quick": true,
+  "project_version": "0.1.0",
+  "schema_version": 1,
+  "sdist_built": true,
+  "source_ancestry_verified": true,
+  "source_commit": "7dcbbc2e2670cb6bd8393770598523c6b20c1393",
+  "stage": "20",
+  "unified_cli": true,
+  "wall_clock_performance_improvement": false,
+  "wheel_built": true
+}
