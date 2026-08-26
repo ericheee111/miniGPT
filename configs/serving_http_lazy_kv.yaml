@@ -1,0 +1,30 @@
+# Stage 19 canonical HTTP lazy-KV serving example (serve.py flags, not a simulator scenario).
+# Mirrors the wiring proven by tests/test_serve_subprocess.py and the Stage 19 evidence package:
+#   python serve.py \
+#     --checkpoint checkpoints/reference.pt \
+#     --tokenizer data/processed/tinyshakespeare_char/tokenizer.json \
+#     --executor paged_attention --kv-cache-backend paged \
+#     --kv-block-tokens 16 --kv-num-blocks 64 \
+#     --max-active-requests 4 --max-cached-tokens 512 \
+#     --max-scheduled-tokens 128 --prefill-chunk-tokens 16 \
+#     --kv-preemption --lazy-kv-reservation --kv-overcommit-ratio 2.0 \
+#     --runtime-manifest outputs/stage19-runtime-manifest.json
+#
+# Rules: chunked scheduling requires direct paged attention and block-aligned chunks;
+# preemption requires Stage 16; lazy reservation requires preemption; the overcommit
+# ratio is finite, >= 1.0, and exactly 1.0 outside lazy mode. This is a descriptive
+# configuration example with no wall-clock performance claim.
+schema_version: 1
+purpose: http-lazy-kv-serving-example
+executor: paged_attention
+kv_cache_backend: paged
+kv_block_tokens: 16
+kv_num_blocks: 64
+max_active_requests: 4
+max_cached_tokens: 512
+max_scheduled_tokens: 128
+prefill_chunk_tokens: 16
+kv_preemption: true
+lazy_kv_reservation: true
+kv_overcommit_ratio: 2.0
+runtime_manifest: outputs/stage19-runtime-manifest.json

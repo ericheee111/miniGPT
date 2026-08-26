@@ -232,6 +232,17 @@ Stage 18 将“full lifetime demand”和“current protected capacity”分离�
 
 若 growth 失败，模型不执行，请求 token、RNG、cache 和 lifecycle 均不推进。scheduler 记录 blocked request/target，并可抢占另一个 decoder；释放后立即无模型工作的重试 growth，避免 victim 下一个 tick 重新入驻并抢回容量。legacy full reservation 仍是默认行为，Stage 18 是 opt-in reference feature。
 
+### 4.16 真实服务配置与 Runtime Manifest
+
+Stage 19 将 Stage 15–18 的可选策略接入真实 HTTP 进程。`serve.py` 仍是兼容入口，但参数解析与
+runtime 构造集中在 `src/minigpt/serving_runtime.py`：APC batching、token-budget chunking、KV
+preemption、lazy reservation 和 overcommit 必须满足与 simulator 相同的严格组合合同。
+
+可选 runtime manifest 在 engine/allocator/runner 成功构造后原子写入，绑定 checkpoint 与 tokenizer
+SHA-256、模型配置、线程数、executor、paged pool、scheduler 和 runner。manifest 不含输入绝对路径、
+时间戳、PID 或环境变量，因此同一输入产生稳定字节，可直接纳入 evidence hash。HTTP completion
+request schema 保持不变，Stage 19 也不把配置 wiring 描述成性能提升。
+
 ---
 
 ## 5. Stage 1–18 演进
@@ -261,6 +272,7 @@ Stage 18 将“full lifetime demand”和“current protected capacity”分离�
 | 16 | Chunked Prefill & Token Budget | 对长 prompt 分块，按实际 model work 计费，提供 decode/prefill fairness，并清理终态 intermediate logits。 |
 | 17 | KV-pressure Preemption | 实现 whole-request preemption、资源释放、无采样 recompute resume、RNG 等价和 learned-position overflow 等价；hotfix 阻止 intrinsically impossible head 误触发抢占。 |
 | 18 | Lazy KV Reservation | admission 只保护当前容量，full lifetime demand 受 bounded overcommit 管理；模型工作前 growth，growth pressure 使用 Stage 17 抢占作为 correctness fallback。 |
+| 19 | Production Serving Configuration | 将 Stage 15–18 进程级策略接入真实 HTTP runtime，集中严格验证，并原子输出可复核 runtime manifest。 |
 
 ---
 

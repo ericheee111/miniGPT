@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import socket
 import subprocess
 import sys
@@ -10,6 +12,7 @@ from typing import cast
 import httpx
 import numpy as np
 import pytest
+import serve
 import torch
 
 from minigpt.batching import TokenBatcher
@@ -103,6 +106,166 @@ def test_serve_cli_starts_uvicorn_and_exits_on_localhost(
         process.terminate()
         _ = process.wait(timeout=10.0)
     assert process.returncode is not None
+
+
+def test_build_runtime_wires_real_lazy_scheduler_and_manifest(tmp_path: Path) -> None:
+    # Given: a real checkpoint/tokenizer and Stage 19 lazy serving options.
+    checkpoint_path, tokenizer_path = _write_service_checkpoint(tmp_path)
+    manifest_path = tmp_path / "runtime-manifest.json"
+    arguments = serve.build_parser().parse_args(
+        [
+            "--checkpoint",
+            str(checkpoint_path),
+            "--tokenizer",
+            str(tokenizer_path),
+            "--executor",
+            "paged_attention",
+            "--kv-cache-backend",
+            "paged",
+            "--kv-block-tokens",
+            "2",
+            "--kv-num-blocks",
+            "4",
+            "--max-active-requests",
+            "2",
+            "--max-cached-tokens",
+            "8",
+            "--max-scheduled-tokens",
+            "8",
+            "--prefill-chunk-tokens",
+            "2",
+            "--kv-preemption",
+            "--lazy-kv-reservation",
+            "--kv-overcommit-ratio",
+            "2",
+            "--runtime-manifest",
+            str(manifest_path),
+        ]
+    )
+
+    # When: the same path used by Uvicorn builds an in-process app.
+    app, runner = serve.build_runtime(arguments)
+
+    async def _scenario() -> httpx.Response:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://stage19-lazy",
+            ) as client,
+        ):
+            response = await client.post(
+                "/v1/completions",
+                json={
+                    "model": "minigpt-char",
+                    "prompt": "A",
+                    "max_tokens": 2,
+                    "temperature": 1.0,
+                    "stream": False,
+                    "seed": 1919,
+                },
+            )
+            metrics = runner.metrics()
+            assert metrics.lazy_kv_reservation_enabled is True
+            return response
+
+    response = asyncio.run(_scenario())
+
+    # Then: the real HTTP lifecycle completes and the manifest proves wiring.
+    assert response.status_code == 200
+    document = cast(
+        "dict[str, object]",
+        json.loads(manifest_path.read_text(encoding="utf-8")),
+    )
+    assert document["executor"] == "paged_attention"
+    assert document["kv_cache_backend"] == "paged"
+    scheduler = cast("dict[str, object]", document["scheduler"])
+    assert scheduler["lazy_kv_reservation"] is True
+    assert scheduler["kv_preemption"] is True
+    assert scheduler["kv_overcommit_ratio"] == 2.0
+    assert str(tmp_path) not in manifest_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the canonical subprocess runtime")
+def test_serve_cli_lazy_kv_runtime_starts_and_exits_on_localhost(tmp_path: Path) -> None:
+    # Given: a tiny real checkpoint and a lazy-growth paged service.
+    checkpoint_path, tokenizer_path = _write_service_checkpoint(tmp_path)
+    manifest_path = tmp_path / "localhost-runtime.json"
+    port = _free_port()
+    project_root = Path(__file__).resolve().parents[1]
+    command = [
+        sys.executable,
+        str(project_root / "serve.py"),
+        "--checkpoint",
+        str(checkpoint_path),
+        "--tokenizer",
+        str(tokenizer_path),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--executor",
+        "paged_attention",
+        "--kv-cache-backend",
+        "paged",
+        "--kv-block-tokens",
+        "2",
+        "--kv-num-blocks",
+        "4",
+        "--max-active-requests",
+        "2",
+        "--max-cached-tokens",
+        "8",
+        "--max-scheduled-tokens",
+        "8",
+        "--prefill-chunk-tokens",
+        "2",
+        "--kv-preemption",
+        "--lazy-kv-reservation",
+        "--kv-overcommit-ratio",
+        "2",
+        "--runtime-manifest",
+        str(manifest_path),
+        "--log-level",
+        "warning",
+    ]
+
+    # When: Uvicorn starts in a separate process and serves one completion.
+    process = subprocess.Popen(  # noqa: S603
+        command,
+        cwd=project_root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        _wait_for_health(process, port)
+        response = httpx.post(
+            f"http://127.0.0.1:{port}/v1/completions",
+            json={
+                "model": "minigpt-char",
+                "prompt": "A",
+                "max_tokens": 3,
+                "temperature": 1.0,
+                "stream": False,
+                "seed": 1919,
+            },
+            timeout=5.0,
+        )
+    finally:
+        process.terminate()
+        _ = process.wait(timeout=10.0)
+
+    # Then: the real subprocess completes and publishes the portable manifest.
+    assert response.status_code == 200
+    assert manifest_path.is_file()
+    document = cast(
+        "dict[str, object]",
+        json.loads(manifest_path.read_text(encoding="utf-8")),
+    )
+    scheduler = cast("dict[str, object]", document["scheduler"])
+    assert scheduler["lazy_kv_reservation"] is True
+    assert document["executor"] == "paged_attention"
 
 
 def _write_service_checkpoint(tmp_path: Path) -> tuple[Path, Path]:

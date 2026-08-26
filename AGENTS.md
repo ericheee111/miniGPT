@@ -43,7 +43,10 @@ implements:
   needless preemption;
 - optional Stage 18 lazy KV growth reservation with distinct current/lifetime demand, bounded
   overcommit, growth-before-model-work enforcement, deterministic growth-pressure preemption,
-  simulator/evidence coverage, and the Stage 17 recompute path as its correctness fallback.
+  simulator/evidence coverage, and the Stage 17 recompute path as its correctness fallback;
+- Stage 19 production serving configuration that exposes APC strategy, token-budget chunking,
+  preemption, lazy reservation, bounded overcommit, and a deterministic atomic runtime manifest on
+  the real HTTP process while preserving all legacy defaults.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -128,6 +131,15 @@ dataset remain gitignored.
   whole-request preemption of another decoder followed by an immediate growth retry. Legacy full
   reservation remains the default; Stage 18 evidence is `descriptive_only` and makes no wall-clock
   speedup claim.
+- Stage 19 exposes these policies on `serve.py` through strict process-level flags.
+  `--apc-prefill-strategy batched` remains opt-in, Stage 16 fields must be configured together, and
+  `--runtime-manifest` writes a deterministic SHA-bound JSON description without absolute input paths.
+  Typed policy resolution, runtime construction, and manifest writing live in
+  `src/minigpt/serving_runtime.py`; `serve.py` stays a thin parser/Uvicorn boundary and the HTTP
+  request schema is unchanged. `configs/serving_http_lazy_kv.yaml` records the canonical flag example,
+  `generate_stage19_evidence.py --source-commit <sha>` builds the hash-bound evidence package under
+  `docs/results/serving-runtime-configuration/`, and the Stage 19 verdict is `descriptive_only` with
+  no wall-clock improvement and no public-production security-readiness claim.
 - Do not begin CPU swap, partial-block sharing/COW, speculative decoding, BPE, GPU, LoRA, distributed
   training, `torch.compile`, scheduler priorities, or another optimization without an explicit stage
   decision.

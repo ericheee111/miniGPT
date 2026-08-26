@@ -535,6 +535,41 @@ evictions、实际 prefill tokens、avoided prefill tokens、TTFT、E2E、req/s�
 只证明计算工作被跳过。实现仍是 Python/PyTorch reference，不是 fused PagedAttention kernel。
 完整 hash-bound 证据见 [Stage 14 证据包](docs/results/automatic-prefix-caching/README.md)。
 
+### Stage 19 production serving configuration + runtime manifest
+
+Stage 19 把 Stage 15–18 的 scheduler 与 paged-cache 控制项作为显式、经过校验的 `serve.py`
+输入暴露给真实 HTTP 进程，同时保持 legacy dense/continuous 服务不变：默认没有 token budget、
+没有 preemption、没有 lazy reservation、ratio 固定为 `1.0`，APC prefill 默认 sequential。completion
+请求 schema 完全不变，`serve.py` 保持为薄 parser/Uvicorn 边界；typed policy 解析、
+SchedulerConfig/paged pool/APC strategy/executor/engine/runner 构造、确定性 runtime manifest 构造
+与原子 UTF-8/LF manifest 写入由 `src/minigpt/serving_runtime.py` 拥有。
+
+```powershell
+python serve.py `
+  --checkpoint checkpoints/reference.pt `
+  --tokenizer data/processed/tinyshakespeare_char/tokenizer.json `
+  --executor paged_attention `
+  --kv-cache-backend paged `
+  --kv-block-tokens 16 `
+  --kv-num-blocks 64 `
+  --max-scheduled-tokens 128 `
+  --prefill-chunk-tokens 16 `
+  --kv-preemption `
+  --lazy-kv-reservation `
+  --kv-overcommit-ratio 2.0 `
+  --runtime-manifest outputs/stage19-runtime-manifest.json
+```
+
+校验复用 simulator 使用的 scheduler/engine invariants：budget 与 chunk 必须成对出现；chunked
+scheduling 要求 direct paged attention、block 对齐和最小 budget；preemption 要求 Stage 16；lazy
+reservation 要求 preemption 与 direct paged attention；overcommit ratio 必须是有限的、不小于 `1.0`
+且在 lazy mode 之外恒为 `1.0`；prefix caching 要求 direct paged attention；batched APC prefill
+要求 prefix cache 且保持 opt-in。runtime manifest 是确定性、portable 的 JSON（不含绝对路径、
+时间戳、hostname、PID 或 secrets），只在 runtime 构造成功后原子替换写入。
+[示例配置](configs/serving_http_lazy_kv.yaml) 记录了同样的 flag 组合；证据生成入口是
+`python generate_stage19_evidence.py --source-commit <sha>`。Stage 19 verdict 为
+`descriptive_only`，不声称 wall-clock 性能提升，也不声称生产环境安全就绪。
+
 ### Compare compatible v2 evidence
 
 用 [`compare_benchmarks.py`](compare_benchmarks.py) 比较两个完成的 `run_manifest.json`：
@@ -623,7 +658,8 @@ miniGPT/
 │   ├── trainer.py           # 训练编排与可观测性
 │   ├── benchmark_*.py       # 训练 benchmark、报告与 workload
 │   ├── inference_*.py       # KV-cache inference benchmark 与 profiler
-│   ├── serving_*.py         # serving engine、simulator、benchmark 与证据
+│   ├── serving_*.py         # serving engine、simulator、runtime policy 与证据
+│   ├── stage19_evidence.py  # Stage 19 serving runtime 配置证据
 │   ├── engine_runner.py     # 单模型执行 owner 与请求 channel
 │   └── http_server.py       # 可选 OpenAI-compatible HTTP/SSE 边界
 ├── tests/
@@ -642,7 +678,8 @@ miniGPT/
 ├── generate_stage11b_evidence.py
 ├── serve.py
 ├── benchmark_server.py
-└── generate_stage12_evidence.py
+├── generate_stage12_evidence.py
+└── generate_stage19_evidence.py
 ```
 
 阶段 5 的设计与实施依据见
@@ -680,6 +717,7 @@ python generate_stage11b_evidence.py --help
 python serve.py --help
 python benchmark_server.py --help
 python generate_stage12_evidence.py --help
+python generate_stage19_evidence.py --help
 ```
 
 测试遵循 Given/When/Then 结构；HTTP 合同优先使用 ASGI/in-process 测试，仅以少量真实 localhost
