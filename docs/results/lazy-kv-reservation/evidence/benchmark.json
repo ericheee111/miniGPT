@@ -1,0 +1,14 @@
+{
+  "full_initial_active_requests": 1,
+  "growth_pressure_preemptions": 1,
+  "growth_work_free": true,
+  "initial_current_reserved_tokens": 8,
+  "initial_lifetime_reserved_tokens": 16,
+  "lazy_initial_active_requests": 2,
+  "per_tick_budget_respected": true,
+  "schema_version": 1,
+  "stage": "18",
+  "stress_operations": 1021,
+  "strict_verdict": "descriptive_only",
+  "wall_clock_performance_improvement": false
+}

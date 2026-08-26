@@ -1,0 +1,18 @@
+{
+  "all_requests_terminal": true,
+  "all_resources_released": true,
+  "growth_pressure_preemptions": 66,
+  "operations": 1021,
+  "preemptions": 201,
+  "recompute_tokens": 806,
+  "requests": 113,
+  "reservation_growth_blocked": 88,
+  "reservation_growth_tokens": 258,
+  "reservation_growths": 258,
+  "resumes": 160,
+  "schema_version": 1,
+  "stage": "18",
+  "stress_seed": 1818,
+  "terminal_prefill_logits_released": true,
+  "terminal_state_sha256": "cb8f60e9363818de4595ab2979d0afe5a5d5e3d54499acee6532c6c4c942bdb2"
+}

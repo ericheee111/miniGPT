@@ -1,0 +1,48 @@
+{
+  "active_resources_released": true,
+  "configured_overcommit_ratio": 2.0,
+  "equivalent": true,
+  "full_initial_active_requests": 1,
+  "growth_pressure_preemptions": 1,
+  "initial_current_reserved_tokens": 8,
+  "initial_lifetime_reserved_tokens": 16,
+  "intrinsic_impossible_heads_rejected": true,
+  "lazy_initial_active_requests": 2,
+  "overflow_observed": true,
+  "overflow_sliding_window_equivalence": true,
+  "peak_overcommitted_cache_tokens": 8,
+  "per_request": {
+    "first": {
+      "generated_token_match": true,
+      "preemptions": 5,
+      "recompute_tokens": 34,
+      "reservation_growth_blocked": 1,
+      "reservation_growth_tokens": 4,
+      "reservation_growths": 4,
+      "resumes": 5,
+      "rng_match": true,
+      "status": "finished"
+    },
+    "second": {
+      "generated_token_match": true,
+      "preemptions": 6,
+      "recompute_tokens": 38,
+      "reservation_growth_blocked": 0,
+      "reservation_growth_tokens": 4,
+      "reservation_growths": 4,
+      "resumes": 6,
+      "rng_match": true,
+      "status": "finished"
+    }
+  },
+  "per_request_rng_equivalence": true,
+  "preemptions": 11,
+  "recompute_tokens": 72,
+  "reservation_growth_blocked": 1,
+  "reservation_growth_tokens": 8,
+  "reservation_growths": 8,
+  "resumes": 11,
+  "same_pool_full_reservation_equivalent": true,
+  "schema_version": 1,
+  "stage": "18"
+}

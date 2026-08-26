@@ -1,0 +1,8 @@
+{
+  "active_resources_released": true,
+  "growth_after_apc_safe": true,
+  "resume_uses_private_recompute": true,
+  "schema_version": 1,
+  "shared_refs_released_on_preempt": true,
+  "stage": "18"
+}

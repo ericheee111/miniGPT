@@ -1,0 +1,7 @@
+{
+  "command": "python -m pytest -q tests/test_lazy_kv_allocator.py tests/test_lazy_kv_reservation.py tests/test_lazy_kv_reservation_simulator.py tests/test_kv_preemption.py tests/test_kv_preemption_simulator.py tests/test_chunked_prefill.py tests/test_serving_simulator.py tests/test_prefix_serving.py tests/test_paged_serving.py tests/test_http_lifecycle.py tests/test_engine_runner.py",
+  "exit_code": 0,
+  "schema_version": 1,
+  "stderr": "",
+  "stdout": "........................................................................ [ 63%]\n..........................................                               [100%]\n114 passed in 3.92s\n"
+}

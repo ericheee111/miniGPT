@@ -1,0 +1,398 @@
+{
+  "growth_blocked_observed": true,
+  "growth_observed": true,
+  "growth_pressure_preemptions": 1,
+  "growth_work_free": true,
+  "overflow_rebuild_work_observed": true,
+  "per_tick": [
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 0
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 4,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 4,
+      "tick": 1
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 4,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 4,
+      "tick": 2
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 1,
+      "reservation_growth_events": 1,
+      "scheduled_model_work": 0,
+      "tick": 3
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 1,
+      "tick": 4
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 5
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 4,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 4,
+      "tick": 6
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 1,
+      "scheduled_model_work": 1,
+      "tick": 7
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 8
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 5,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 5,
+      "tick": 9
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 1,
+      "scheduled_model_work": 1,
+      "tick": 10
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 11
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 5,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 5,
+      "tick": 12
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 1,
+      "scheduled_model_work": 1,
+      "tick": 13
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 14
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 6,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 6,
+      "tick": 15
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 1,
+      "scheduled_model_work": 1,
+      "tick": 16
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 17
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 6,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 6,
+      "tick": 18
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 1,
+      "scheduled_model_work": 1,
+      "tick": 19
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 20
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 7,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 7,
+      "tick": 21
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 1,
+      "scheduled_model_work": 1,
+      "tick": 22
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 23
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 7,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 7,
+      "tick": 24
+    },
+    {
+      "normal_decode_work": 1,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 1,
+      "scheduled_model_work": 1,
+      "tick": 25
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 26
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 8,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 8,
+      "tick": 27
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 8,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 8,
+      "tick": 28
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 29
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 8,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 8,
+      "tick": 30
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 8,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 8,
+      "tick": 31
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 32
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 8,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 8,
+      "tick": 33
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 8,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 8,
+      "tick": 34
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 0,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 0,
+      "tick": 35
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 8,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 8,
+      "tick": 36
+    },
+    {
+      "normal_decode_work": 0,
+      "overflow_rebuild_work": 8,
+      "preemption_recompute_work": 0,
+      "prefill_chunk_work": 0,
+      "reservation_growth_blocked_events": 0,
+      "reservation_growth_events": 0,
+      "scheduled_model_work": 8,
+      "tick": 37
+    }
+  ],
+  "per_tick_budget_respected": true,
+  "recompute_work_observed": true,
+  "reservation_growth_blocks": 4,
+  "reservation_growth_model_work_tokens": 0,
+  "reservation_growth_tokens": 8,
+  "reservation_growths": 8,
+  "scheduled_budget": 8,
+  "schema_version": 1,
+  "stage": "18"
+}

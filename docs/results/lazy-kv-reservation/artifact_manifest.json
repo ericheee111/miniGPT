@@ -1,0 +1,47 @@
+{
+  "artifacts": [
+    {
+      "bytes": 197,
+      "path": "evidence/apc.json",
+      "sha256": "252df777677791a417cb488c8197ee0d0498d769b360d53aa0796bf736fb795c"
+    },
+    {
+      "bytes": 416,
+      "path": "evidence/benchmark.json",
+      "sha256": "0caf070d8f6819e15982917b6aeb1b05c0c9ca9051353f2e9716dc210f2b743c"
+    },
+    {
+      "bytes": 1356,
+      "path": "evidence/correctness.json",
+      "sha256": "9ce7a6eb98b77d350288a8ac258775103841bb621da6d78287d2be309ebed407"
+    },
+    {
+      "bytes": 647,
+      "path": "evidence/lifecycle_tests.json",
+      "sha256": "70eebf8676ef72abe4e52f2b8d242c8e3273805ccc03f9178cafe87f6ce87dcb"
+    },
+    {
+      "bytes": 11137,
+      "path": "evidence/scheduling.json",
+      "sha256": "a6d3ba1108bd2740d080b1b2252092fa4d8b628fceb1ea327499083168b8afac"
+    },
+    {
+      "bytes": 519,
+      "path": "evidence/stress.json",
+      "sha256": "86b14f84a2e5c8cc6f63e8bd783cec45299d617017d19bba14d7bcb0790a0bb4"
+    },
+    {
+      "bytes": 1076,
+      "path": "README.md",
+      "sha256": "9ff6c8aa8978f48c4edd24e791ded52549c350d0e129c29a2119e9d4db699017"
+    },
+    {
+      "bytes": 1006,
+      "path": "summary.json",
+      "sha256": "5d17ccbe67c8cec8cedb2a92edba67d8837c2d806d86aba93029168edb543d38"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "58c919f8cacff48c6d94d24e18b76290c3de7a2e",
+  "stage": "18"
+}
