@@ -1,0 +1,21 @@
+{
+  "atomic_manifest_replacement": true,
+  "benchmark_strict_verdict": "descriptive_only",
+  "checkpoint_tokenizer_identity_bound": true,
+  "deterministic_manifest_bytes": true,
+  "http_schema_unchanged": true,
+  "implementation": "Python/PyTorch reference implementation",
+  "legacy_defaults_preserved": true,
+  "lifecycle_passed": true,
+  "public_production_security_readiness": false,
+  "runtime_manifest": true,
+  "schema_version": 1,
+  "source_commit": "92032f14ed493967997bdf9ea779fb233679d65e",
+  "stage": "19",
+  "stage15_apc_prefill_strategy_flag": true,
+  "stage16_token_budget_flags": true,
+  "stage17_preemption_flag": true,
+  "stage18_lazy_reservation_flag": true,
+  "typed_policy_validation": true,
+  "wall_clock_performance_improvement": false
+}

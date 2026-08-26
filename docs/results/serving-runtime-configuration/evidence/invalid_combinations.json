@@ -1,0 +1,15 @@
+{
+  "all_rejected": true,
+  "rejected_combinations": {
+    "batched_apc_without_prefix_cache": "invalid serving runtime: batched APC prefill requires prefix_cache",
+    "chunked_budget_on_dense_executor": "invalid serving runtime: token-budget scheduling requires direct paged_attention serving",
+    "half_configured_token_budget": "invalid serving runtime: max_scheduled_tokens and prefill_chunk_tokens must be configured together",
+    "lazy_reservation_without_preemption": "invalid serving runtime: lazy_kv_reservation requires kv_preemption",
+    "overcommit_ratio_outside_lazy_mode": "invalid serving runtime: kv_overcommit_ratio must be 1.0 when lazy reservation is disabled",
+    "paged_attention_without_paged_backend": "invalid serving runtime: paged_attention executor requires the paged KV-cache backend",
+    "preemption_without_token_budget": "invalid serving runtime: kv_preemption requires token-budget scheduling",
+    "prefix_cache_without_direct_paged": "invalid serving runtime: prefix_cache requires direct paged_attention serving"
+  },
+  "schema_version": 1,
+  "stage": "19"
+}

@@ -1,0 +1,12 @@
+{
+  "atomic_replacement": true,
+  "claim_policy_bounded": true,
+  "deterministic_bytes": true,
+  "lf_only": true,
+  "manifest_bytes_sha256": "7ed3fa4df355808d06c4a6622202d94b2e7f3810604d23575aca2bfaa78fefea",
+  "no_absolute_paths": true,
+  "no_temporary_leftovers": true,
+  "no_timestamps": true,
+  "schema_version": 1,
+  "stage": "19"
+}

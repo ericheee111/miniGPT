@@ -1,0 +1,32 @@
+{
+  "apc_prefill_strategy": "sequential",
+  "batched_apc_wired": true,
+  "executor": "PagedAttentionExecutor",
+  "idle_resources_released": true,
+  "lazy_pool_dimensions": {
+    "block_tokens": 2,
+    "num_blocks": 4
+  },
+  "lazy_scheduler_resolved": {
+    "kv_overcommit_ratio": 2.0,
+    "kv_preemption": true,
+    "lazy_kv_reservation": true,
+    "max_active_requests": 2,
+    "max_cached_tokens": 8,
+    "max_scheduled_tokens": 8,
+    "prefill_chunk_tokens": 2
+  },
+  "legacy_defaults_preserved": true,
+  "legacy_scheduler_defaults": {
+    "kv_preemption": false,
+    "lazy_kv_reservation": false,
+    "max_scheduled_tokens": null,
+    "prefill_chunk_tokens": null
+  },
+  "runner_queue_sizes": {
+    "command_queue_size": 64,
+    "stream_buffer_size": 8
+  },
+  "schema_version": 1,
+  "stage": "19"
+}

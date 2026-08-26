@@ -1,0 +1,42 @@
+{
+  "artifacts": [
+    {
+      "bytes": 250,
+      "path": "evidence/identity.json",
+      "sha256": "5db3a332d4a3b1449d893aa09eab6336cf26c9c2dc3709c72652c9a9deee9b32"
+    },
+    {
+      "bytes": 1100,
+      "path": "evidence/invalid_combinations.json",
+      "sha256": "d993d79006a9e9de4d52427635bd427744a0b1097fd10358fdcbc1058418ca43"
+    },
+    {
+      "bytes": 392,
+      "path": "evidence/lifecycle_tests.json",
+      "sha256": "924d9dc490efe3d64436ff34ba5806f226229486457838db67bbaeb8a6e3a9b4"
+    },
+    {
+      "bytes": 338,
+      "path": "evidence/manifest.json",
+      "sha256": "88a7ceca9e53efc903cef0656c16aa35648e349a7d684cd6f7ca97b1e8792c44"
+    },
+    {
+      "bytes": 803,
+      "path": "evidence/runtime_wiring.json",
+      "sha256": "65fad1f39d68bec3a7bb6058afbd234e66ffced7372acc86565a75d0f7109622"
+    },
+    {
+      "bytes": 1114,
+      "path": "README.md",
+      "sha256": "1755957318a68f3e43fe7639fd2274cc12f0aecbe7231e593f5ff9f69ce9524a"
+    },
+    {
+      "bytes": 761,
+      "path": "summary.json",
+      "sha256": "0f5e16669b99d5fa0a651b0f15362a0d722c497bed6526f127442309ed8ad2cb"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "92032f14ed493967997bdf9ea779fb233679d65e",
+  "stage": "19"
+}
