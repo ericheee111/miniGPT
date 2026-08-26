@@ -8,6 +8,7 @@ import pytest
 from minigpt import __version__
 from minigpt.stage21_evidence import (
     Stage21EvidenceVerificationError,
+    _verify_portable_external_document,  # pyright: ignore[reportPrivateUsage]
     generate_stage21_evidence,
     generate_stage21_registry_evidence,
     generate_stage21_runtime_evidence,
@@ -18,6 +19,8 @@ from minigpt.stage21_evidence import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from minigpt.data import JsonValue
+
 
 def _write(path: Path, document: dict[str, object]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -27,6 +30,20 @@ def _write(path: Path, document: dict[str, object]) -> Path:
         newline="\n",
     )
     return path
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        [r"C:\\review-host\\venv\\Scripts\\python.exe", "-m", "pytest"],
+        ["/opt/review-host/venv/bin/python", "-m", "pytest"],
+    ],
+)
+def test_stage21_external_gate_evidence_rejects_absolute_command_paths(
+    command: list[str],
+) -> None:
+    with pytest.raises(Stage21EvidenceVerificationError, match="absolute host path"):
+        _verify_portable_external_document(cast("JsonValue", {"command": command}))
 
 
 def test_stage21_version_registry_and_runtime_use_real_release_contracts(tmp_path: Path) -> None:

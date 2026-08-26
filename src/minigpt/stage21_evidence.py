@@ -5,13 +5,12 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Never, TypeAlias, cast
 
 import torch
@@ -81,6 +80,29 @@ def _write_json(path: Path, document: EvidenceDocument) -> Path:
         newline="\n",
     )
     return path
+
+
+def _absolute_command_token(token: str) -> bool:
+    return PurePosixPath(token).is_absolute() or PureWindowsPath(token).is_absolute()
+
+
+def _verify_portable_external_document(value: JsonValue) -> None:
+    """Reject host-specific absolute command tokens before packaging external gate output."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "command":
+                if isinstance(child, str):
+                    tokens = (child,)
+                elif isinstance(child, list) and all(isinstance(item, str) for item in child):
+                    tokens = tuple(cast("list[str]", child))
+                else:
+                    _invalid("external evidence command must be a string or string list")
+                if any(_absolute_command_token(token) for token in tokens):
+                    _invalid("external evidence command contains an absolute host path")
+            _verify_portable_external_document(child)
+    elif isinstance(value, list):
+        for item in value:
+            _verify_portable_external_document(item)
 
 
 def _run(command: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -330,7 +352,9 @@ def generate_stage21_evidence(  # noqa: PLR0913
     evidence_root = package_root / "evidence"
     evidence_root.mkdir(parents=True, exist_ok=True)
     for name, path in inputs.items():
-        _ = shutil.copyfile(path, evidence_root / name)
+        document = _read_json(path)
+        _verify_portable_external_document(cast("JsonValue", document))
+        _ = _write_json(evidence_root / name, document)
     version = _read_json(evidence_root / "version.json")
     registry = _read_json(evidence_root / "registry.json")
     release = _read_json(evidence_root / "release.json")
