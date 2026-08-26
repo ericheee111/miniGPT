@@ -1,5 +1,7 @@
-"""Public package metadata for miniGPT."""
+"""CPU-first GPT training, inference, serving, and evidence lab."""
 
-from typing import Final
+from __future__ import annotations
 
-__version__: Final = "0.1.0"
+from minigpt._version import __version__
+
+__all__ = ["__version__"]

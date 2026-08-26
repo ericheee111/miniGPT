@@ -58,3 +58,6 @@ docs/results/serving-runtime-configuration/** text eol=lf
 
 # Stage 19 real serving-runtime configuration evidence binds exact UTF-8/LF checkout bytes.
 docs/results/serving-runtime-configuration/** text eol=lf
+
+# Stage 20 project-doctor evidence binds exact UTF-8/LF checkout bytes.
+docs/results/project-doctor/** text eol=lf

@@ -243,9 +243,15 @@ SHA-256、模型配置、线程数、executor、paged pool、scheduler 和 runne
 时间戳、PID 或环境变量，因此同一输入产生稳定字节，可直接纳入 evidence hash。HTTP completion
 request schema 保持不变，Stage 19 也不把配置 wiring 描述成性能提升。
 
+### 4.17 统一 CLI 与 Project Doctor
+
+Stage 20 提供 `minigpt` / `python -m minigpt` 单一安装入口，并保持原有脚本 parser 为各命令的语义来源。命令模块按需导入，因此 help/version 不依赖 HTTP extras。
+
+Project doctor 通过显式 Stage 7A–20 registry 验证 package membership、SHA-256、stage-specific contract 和 source provenance。对历史 squash merge，registry 必须显式记录 reviewed source SHA 与进入 `main` 的 merge SHA；`quick` 模式检查静态 release contracts，`ci` 模式还执行 Stage 18 canonical simulation、Stage 19 real runtime smoke 和 installed CLI subprocess。输出 JSON 固定使用相对 repository identity，不记录机器路径或 timing。
+
 ---
 
-## 5. Stage 1–18 演进
+## 5. Stage 1–20 演进
 
 > Stage 5 以后有正式 design/plan/evidence 文档。Stage 1–4 没有同样格式的阶段规格，下面的命名依据早期 Git 提交顺序与现有代码职责归纳，不把未记录的验收数字写成事实。
 
@@ -273,6 +279,7 @@ request schema 保持不变，Stage 19 也不把配置 wiring 描述成性能提
 | 17 | KV-pressure Preemption | 实现 whole-request preemption、资源释放、无采样 recompute resume、RNG 等价和 learned-position overflow 等价；hotfix 阻止 intrinsically impossible head 误触发抢占。 |
 | 18 | Lazy KV Reservation | admission 只保护当前容量，full lifetime demand 受 bounded overcommit 管理；模型工作前 growth，growth pressure 使用 Stage 17 抢占作为 correctness fallback。 |
 | 19 | Production Serving Configuration | 将 Stage 15–18 进程级策略接入真实 HTTP runtime，集中严格验证，并原子输出可复核 runtime manifest。 |
+| 20 | Unified CLI + Project Doctor | 提供可安装命令入口、Stage 7A–20 evidence registry、provenance/config/runtime 自检和 CI release gate。 |
 
 ---
 

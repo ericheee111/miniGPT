@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "minitrain-gpt"
-version = "0.1.0"
+dynamic = ["version"]
 description = "CPU-first GPT training and profiling lab"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -28,6 +28,7 @@ report = [
     "matplotlib>=3.10",
 ]
 dev = [
+    "build>=1.2",
     "basedpyright>=1.39.9",
     "fastapi>=0.116",
     "httpx>=0.28",
@@ -37,8 +38,16 @@ dev = [
     "uvicorn>=0.35",
 ]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[project.scripts]
+minigpt = "minigpt.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "minigpt._version.__version__"}
+
+[tool.setuptools]
+packages = ["minigpt"]
+package-dir = {minigpt = "src/minigpt"}
+py-modules = ["prepare_data", "train", "generate", "simulate_serving", "serve"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

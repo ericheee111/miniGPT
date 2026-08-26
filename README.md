@@ -768,3 +768,28 @@ English resume bullets:
   optimizer phases.
 - Enforced Python 3.11–3.14 quality gates with Ruff ALL, basedpyright all, strict pytest,
   Windows/Linux CI, and typed validation at YAML, JSON, tensor, and checkpoint boundaries.
+
+## 统一 CLI 与项目自检（Stage 20）
+
+安装项目后，可以通过单一入口访问原有命令：
+
+```powershell
+minigpt --version
+minigpt prepare-data --help
+minigpt train --help
+minigpt generate --help
+minigpt simulate --help
+minigpt serve --help
+minigpt verify --mode quick
+```
+
+`python -m minigpt` 与 console script 等价。根级帮助和版本查询采用 lazy import，不要求安装 HTTP 可选依赖；只有选择 `serve` 时才加载 FastAPI、HTTPX 和 Uvicorn。
+
+Stage 19 将 Stage 15–18 的 cache/scheduler 选项接入真实 HTTP runtime，并可通过 `--runtime-manifest` 原子写出不含绝对路径和 secret 的确定性运行身份。Stage 20 的 project doctor 验证安装版本、canonical config、Stage 7A–19 evidence hash/contract、显式 squash-merge provenance 和真实 runtime wiring：
+
+```powershell
+minigpt verify --mode quick
+minigpt verify --mode ci
+```
+
+CI 模式会在临时目录执行 Stage 18 canonical simulation，并构造 Stage 19 paged/lazy runtime；这些检查用于 release correctness，不构成 wall-clock 性能声明。

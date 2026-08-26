@@ -140,6 +140,17 @@ dataset remain gitignored.
   `generate_stage19_evidence.py --source-commit <sha>` builds the hash-bound evidence package under
   `docs/results/serving-runtime-configuration/`, and the Stage 19 verdict is `descriptive_only` with
   no wall-clock improvement and no public-production security-readiness claim.
+- Stage 20 unified installable CLI is available as `minigpt` and `python -m minigpt`. Root help/version
+  must remain lazy and must not import FastAPI/Uvicorn. Existing command parsers remain authoritative
+  behind typed forwarding subcommands.
+- `minigpt verify --mode quick|ci` uses an explicit Stage 7A–20 registry. Modern packages retain their
+  stage-specific verifiers; Stage 7A alone may declare its historical uncommitted checkpoint while all
+  committed package files remain exact hash-bound members. Historical squash merges require an
+  explicit registry mapping from reviewed source SHA to the merged `main` commit; ancestry checks may
+  not be silently disabled.
+- Evidence provenance requires a non-shallow repository and full commit objects. GitHub Actions must
+  fetch full history before the doctor gate. Stage 20 is release hardening and makes no wall-clock
+  speedup claim.
 - Do not begin CPU swap, partial-block sharing/COW, speculative decoding, BPE, GPU, LoRA, distributed
   training, `torch.compile`, scheduler priorities, or another optimization without an explicit stage
   decision.

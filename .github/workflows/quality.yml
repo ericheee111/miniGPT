@@ -44,5 +44,7 @@ jobs:
         run: ruff check src tests
       - name: Type check
         run: basedpyright
+      - name: Project doctor
+        run: python -m minigpt verify --mode ci
       - name: Test
         run: pytest
