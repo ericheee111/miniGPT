@@ -32,6 +32,7 @@ from minigpt.serving import (
     EngineEventType,
     EngineMetrics,
     GenerationRequest,
+    InvalidServingConfigError,
     PagedAttentionExecutor,
     PrefillBatchConfig,
     PrefillBatchEvent,
@@ -88,6 +89,8 @@ _SCHEDULER_KEYS = frozenset(
         "max_scheduled_tokens",
         "prefill_chunk_tokens",
         "kv_preemption",
+        "lazy_kv_reservation",
+        "kv_overcommit_ratio",
     }
 )
 _SCHEDULER_REQUIRED_KEYS = frozenset({"max_active_requests", "max_cached_tokens"})
@@ -381,13 +384,27 @@ def _scheduler(document: ConfigMapping, source: Path) -> SchedulerConfig:
     preemption = raw.get("kv_preemption", False)
     if not isinstance(preemption, bool):
         _invalid(source, "scheduler kv_preemption must be a boolean")
-    return SchedulerConfig(
-        max_active_requests=_integer(raw, "max_active_requests", source, positive=True),
-        max_cached_tokens=_integer(raw, "max_cached_tokens", source, positive=True),
-        max_scheduled_tokens=max_scheduled,
-        prefill_chunk_tokens=chunk_size,
-        kv_preemption=preemption,
-    )
+    lazy = raw.get("lazy_kv_reservation", False)
+    if not isinstance(lazy, bool):
+        _invalid(source, "scheduler lazy_kv_reservation must be a boolean")
+    raw_ratio = raw.get("kv_overcommit_ratio", 1.0)
+    if isinstance(raw_ratio, bool) or not isinstance(raw_ratio, (int, float)):
+        _invalid(source, "scheduler kv_overcommit_ratio must be a number")
+    ratio = float(raw_ratio)
+    if not math.isfinite(ratio) or ratio < 1.0:
+        _invalid(source, "scheduler kv_overcommit_ratio must be finite and at least 1.0")
+    try:
+        return SchedulerConfig(
+            max_active_requests=_integer(raw, "max_active_requests", source, positive=True),
+            max_cached_tokens=_integer(raw, "max_cached_tokens", source, positive=True),
+            max_scheduled_tokens=max_scheduled,
+            prefill_chunk_tokens=chunk_size,
+            kv_preemption=preemption,
+            lazy_kv_reservation=lazy,
+            kv_overcommit_ratio=ratio,
+        )
+    except InvalidServingConfigError as error:
+        _invalid(source, str(error))
 
 
 def _prefill(document: ConfigMapping, source: Path) -> PrefillBatchConfig | None:
@@ -554,6 +571,12 @@ def load_simulator_config(source: Path) -> SimulatorConfig:
     scheduler = _scheduler(document, source)
     if scheduler.kv_preemption and scheduler.prefill_chunk_tokens is None:
         _invalid(source, "kv_preemption requires chunked prefill scheduling")
+    if scheduler.lazy_kv_reservation and (
+        executor is not SimulatorExecutor.PAGED_ATTENTION
+        or backend is not KVCacheBackend.PAGED
+        or paged_kv_cache is None
+    ):
+        _invalid(source, "lazy_kv_reservation requires paged_attention with paged KV cache")
     if scheduler.prefill_chunk_tokens is not None:
         if (
             executor is not SimulatorExecutor.PAGED_ATTENTION
@@ -684,6 +707,12 @@ def _request_document(engine: ServingEngine, request_id: str) -> dict[str, JsonV
             "prefix_hit_tokens": metrics.prefix_hit_tokens,
             "prefix_miss_tokens": metrics.prefix_miss_tokens,
             "prefill_tokens_computed": metrics.prefill_tokens_computed,
+            "preemption_count": metrics.preemption_count,
+            "resume_count": metrics.resume_count,
+            "recompute_tokens": metrics.recompute_tokens,
+            "reservation_growth_count": metrics.reservation_growth_count,
+            "reservation_growth_tokens": metrics.reservation_growth_tokens,
+            "reservation_growth_blocked_count": metrics.reservation_growth_blocked_count,
         },
     )
 
@@ -763,8 +792,17 @@ def _summary_document(
             "max_active_requests": config.scheduler.max_active_requests,
             "max_cached_tokens": config.scheduler.max_cached_tokens,
             "kv_preemption": config.scheduler.kv_preemption,
+            "lazy_kv_reservation": config.scheduler.lazy_kv_reservation,
+            "kv_overcommit_ratio": config.scheduler.kv_overcommit_ratio,
         }
     )
+    if config.scheduler.lazy_kv_reservation:
+        document.update(
+            {
+                "benchmark_strict_verdict": "descriptive_only",
+                "wall_clock_performance_improvement": False,
+            }
+        )
     document.update(_cache_aware_prefill_summary(observations))
     return document
 
@@ -848,6 +886,12 @@ def _write_requests(
         "prefix_hit_tokens",
         "prefix_miss_tokens",
         "prefill_tokens_computed",
+        "preemption_count",
+        "resume_count",
+        "recompute_tokens",
+        "reservation_growth_count",
+        "reservation_growth_tokens",
+        "reservation_growth_blocked_count",
     ]
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")

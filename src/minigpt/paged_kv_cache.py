@@ -507,7 +507,12 @@ class PagedKVCachePool:
             return 0
         if target_total_blocks > table.max_blocks:
             _capacity(
-                f"request {request_id!r} growth target {target_total_blocks} exceeds max {table.max_blocks}"
+                "".join(
+                    (
+                        f"request {request_id!r} growth target {target_total_blocks}",
+                        f" exceeds max {table.max_blocks}",
+                    )
+                )
             )
         delta = target_total_blocks - current
         if self._protected_blocks() + delta > self.config.num_blocks:
@@ -749,7 +754,12 @@ class PagedKVCachePool:
         current_total = table.reserved_blocks + self._shared_count(table)
         if required > current_total:
             _capacity(
-                f"overflow rebuild requires {required} blocks but current protection is {current_total}"
+                "".join(
+                    (
+                        f"overflow rebuild requires {required} blocks",
+                        f" but current protection is {current_total}",
+                    )
+                )
             )
         metadata_snapshot = self._metadata_snapshot()
         table_snapshot = self._table_snapshot(table)

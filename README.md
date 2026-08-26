@@ -12,6 +12,8 @@ Transformer 模型，而是从张量运算开始实现 LayerNorm、因果多头�
 Transformer Block、语言模型损失与自回归采样，并把数据、训练、断点恢复、指标、
 TensorBoard、基准测试和 PyTorch Profiler 串成一条可验证的工程链路。
 
+完整的项目背景、系统架构、模块说明和 Stage 1–18 演进见 [项目技术白皮书](docs/PROJECT_OVERVIEW.md)。
+
 项目优先解决三个问题：
 
 - **模型原理可解释**：关键网络结构均在 `src/minigpt/` 内实现，张量形状与因果遮罩清晰可查。

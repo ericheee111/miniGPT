@@ -71,6 +71,8 @@ class EngineEventType(StrEnum):
     PREEMPTED = "PREEMPTED"
     RECOMPUTE_STARTED = "RECOMPUTE_STARTED"
     RESUMED = "RESUMED"
+    RESERVATION_GROWN = "RESERVATION_GROWN"
+    RESERVATION_GROWTH_BLOCKED = "RESERVATION_GROWTH_BLOCKED"
     TOKEN = "token"  # noqa: S105
     FINISHED = "finished"
     FAILED = "failed"
@@ -200,8 +202,10 @@ class SchedulerConfig:
     max_scheduled_tokens: int | None = None
     prefill_chunk_tokens: int | None = None
     kv_preemption: bool = False
+    lazy_kv_reservation: bool = False
+    kv_overcommit_ratio: float = 1.0
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901
         """Require usable positive serving capacity."""
         if isinstance(self.max_active_requests, bool) or self.max_active_requests <= 0:
             _invalid("max_active_requests must be a positive integer")
@@ -221,6 +225,21 @@ class SchedulerConfig:
         raw_preemption = cast("object", self.kv_preemption)
         if not isinstance(raw_preemption, bool):
             _invalid("kv_preemption must be a boolean")
+        raw_lazy = cast("object", self.lazy_kv_reservation)
+        if not isinstance(raw_lazy, bool):
+            _invalid("lazy_kv_reservation must be a boolean")
+        raw_ratio = cast("object", self.kv_overcommit_ratio)
+        if (
+            isinstance(raw_ratio, bool)
+            or not isinstance(raw_ratio, (int, float))
+            or not math.isfinite(raw_ratio)
+            or raw_ratio < 1.0
+        ):
+            _invalid("kv_overcommit_ratio must be finite and at least 1.0")
+        if not self.lazy_kv_reservation and raw_ratio != 1.0:
+            _invalid("kv_overcommit_ratio must be 1.0 when lazy reservation is disabled")
+        if self.lazy_kv_reservation and not self.kv_preemption:
+            _invalid("lazy_kv_reservation requires kv_preemption")
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +286,9 @@ class RequestState:
     recompute_tokens: int = 0
     last_recompute_time: float | None = None
     last_decode_tick: float | None = None
+    reservation_growth_count: int = 0
+    reservation_growth_tokens: int = 0
+    reservation_growth_blocked_count: int = 0
     prefix_hit_blocks: int = 0
     prefix_hit_tokens: int = 0
     prefix_miss_tokens: int = 0
@@ -2228,6 +2250,9 @@ class RequestMetrics:
     preemption_count: int
     resume_count: int
     recompute_tokens: int
+    reservation_growth_count: int
+    reservation_growth_tokens: int
+    reservation_growth_blocked_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -2313,6 +2338,17 @@ class EngineMetrics:
     preemptions: int
     resumes: int
     recompute_tokens: int
+    lazy_kv_reservation_enabled: bool
+    kv_overcommit_ratio: float
+    lifetime_reserved_cache_tokens: int
+    overcommitted_cache_tokens: int
+    peak_lifetime_reserved_cache_tokens: int
+    peak_overcommitted_cache_tokens: int
+    reservation_growths: int
+    reservation_growth_tokens: int
+    reservation_growth_blocked: int
+    reservation_growth_blocks: int
+    growth_pressure_preemptions: int
 
 
 def _validate_chunked_engine(
@@ -2325,6 +2361,8 @@ def _validate_chunked_engine(
     chunk_size = cast("int | None", getattr(config.scheduler, "prefill_chunk_" + "tokens"))
     if config.scheduler.kv_preemption and chunk_size is None:
         _invalid("kv_preemption requires Stage 16 token-budget scheduling")
+    if config.scheduler.lazy_kv_reservation and not config.scheduler.kv_preemption:
+        _invalid("lazy KV reservation requires Stage 17 preemption")
     if chunk_size is None:
         return
     if not direct_paged_decode or paged_cache_pool is None:
@@ -2371,6 +2409,10 @@ class ServingEngine:
         direct_paged_decode = isinstance(executor, PagedAttentionExecutor)
         if direct_paged_decode and executor.paged_cache_pool is not paged_cache_pool:
             _invalid("paged attention executor and engine must share one cache pool")
+        if config.scheduler.lazy_kv_reservation and (
+            not direct_paged_decode or paged_cache_pool is None
+        ):
+            _invalid("lazy KV reservation requires the direct paged executor")
         _validate_chunked_engine(
             config,
             executor,
@@ -2392,8 +2434,13 @@ class ServingEngine:
         self._peak_waiting = 0
         self._peak_cached = 0
         self._peak_reserved = 0
+        self._peak_lifetime_reserved = 0
+        self._peak_overcommitted = 0
         self._chunk_schedule_cursor: str | None = None
         self._chunk_resume_decode: str | None = None
+        self._growth_blocked_request_id: str | None = None
+        self._growth_blocked_target_tokens = 0
+        self._growth_pressure_preemptions = 0
 
     @property
     def events(self) -> tuple[EngineEvent, ...]:
@@ -2414,6 +2461,16 @@ class ServingEngine:
     def paged_cache_pool(self) -> PagedKVCachePool | None:
         """Expose the optional storage backend for owner-thread diagnostics."""
         return self._paged_cache_pool
+
+    @property
+    def growth_blocked_request_id(self) -> str | None:
+        """Expose the current reservation-growth blocker for owner-thread diagnostics."""
+        return self._growth_blocked_request_id
+
+    @property
+    def growth_blocked_target_tokens(self) -> int:
+        """Expose the protected-token target associated with the current growth blocker."""
+        return self._growth_blocked_target_tokens
 
     @property
     def is_idle(self) -> bool:
@@ -2440,6 +2497,8 @@ class ServingEngine:
         self._pending_cancellations.clear()
         self._chunk_schedule_cursor = None
         self._chunk_resume_decode = None
+        self._growth_blocked_request_id = None
+        self._growth_blocked_target_tokens = 0
 
     def submit(self, request: GenerationRequest) -> None:
         """Append a validated request to the FIFO waiting queue."""
@@ -2518,6 +2577,7 @@ class ServingEngine:
             or not isinstance(executor, PagedAttentionExecutor)
         ):
             _invalid("chunked prefill configuration is incomplete")
+        self._clear_growth_blocked()
         block_size = pool.config.block_tokens
         if chunk_size % block_size:
             _invalid("prefill chunk size must align to paged blocks")
@@ -2559,7 +2619,7 @@ class ServingEngine:
             )
             return
         selected_decode, decode_work, deferred_decode = self._select_chunked_decode(
-            live_decode, budget=budget
+            live_decode, budget=budget, tick_time=tick_time
         )
         if selected_decode:
             self._execute_chunked_decode_fifo(selected_decode, tick_time=tick_time)
@@ -2707,7 +2767,7 @@ class ServingEngine:
         return (*request_ids[index:], *request_ids[:index])
 
     def _select_chunked_decode(
-        self, request_ids: tuple[str, ...], *, budget: int
+        self, request_ids: tuple[str, ...], *, budget: int, tick_time: float
     ) -> tuple[tuple[str, ...], int, str | None]:
         executor = self._executor
         if not isinstance(executor, PagedAttentionExecutor):
@@ -2724,6 +2784,9 @@ class ServingEngine:
                 else executor.decode_model_work(state)
             )
             if work > budget - used:
+                deferred = request_id
+                break
+            if not self._ensure_operation_reservation(state, tick_time=tick_time):
                 deferred = request_id
                 break
             selected.append(request_id)
@@ -2870,6 +2933,9 @@ class ServingEngine:
             preemption_count=state.preemption_count,
             resume_count=state.resume_count,
             recompute_tokens=state.recompute_tokens,
+            reservation_growth_count=state.reservation_growth_count,
+            reservation_growth_tokens=state.reservation_growth_tokens,
+            reservation_growth_blocked_count=state.reservation_growth_blocked_count,
         )
 
     def metrics(self) -> EngineMetrics:
@@ -2956,6 +3022,8 @@ class ServingEngine:
         )
         lookup_tokens = cache_metrics.prefix_hit_tokens + cache_metrics.prefix_miss_tokens
         hit_token_ratio = cache_metrics.prefix_hit_tokens / lookup_tokens if lookup_tokens else 0.0
+        lifetime_reserved = self._lifetime_reserved_cache_tokens()
+        overcommitted = self._overcommitted_cache_tokens()
         return EngineMetrics(
             total_requests=len(states),
             completed_requests=completed,
@@ -3072,6 +3140,19 @@ class ServingEngine:
             preemptions=sum(state.preemption_count for state in states),
             resumes=sum(state.resume_count for state in states),
             recompute_tokens=sum(state.recompute_tokens for state in states),
+            lazy_kv_reservation_enabled=self.config.scheduler.lazy_kv_reservation,
+            kv_overcommit_ratio=self.config.scheduler.kv_overcommit_ratio,
+            lifetime_reserved_cache_tokens=lifetime_reserved,
+            overcommitted_cache_tokens=overcommitted,
+            peak_lifetime_reserved_cache_tokens=self._peak_lifetime_reserved,
+            peak_overcommitted_cache_tokens=self._peak_overcommitted,
+            reservation_growths=sum(state.reservation_growth_count for state in states),
+            reservation_growth_tokens=sum(state.reservation_growth_tokens for state in states),
+            reservation_growth_blocked=sum(
+                state.reservation_growth_blocked_count for state in states
+            ),
+            reservation_growth_blocks=cache_metrics.reservation_growth_blocks,
+            growth_pressure_preemptions=self._growth_pressure_preemptions,
         )
 
     def _apply_cancellations(self, tick_time: float) -> None:
@@ -3114,6 +3195,41 @@ class ServingEngine:
             )
         return None
 
+    def _current_reservation_for(self, state: RequestState) -> int:
+        """Return cache tokens that must be protected at this admission boundary."""
+        lifetime = self._reservation_for(state.request)
+        if not self.config.scheduler.lazy_kv_reservation:
+            return lifetime
+        if state.request.max_new_tokens == 0:
+            return 0
+        if state.status is RequestStatus.PREEMPTED:
+            return len(state.all_tokens[:-1][-self.config.block_size :])
+        return min(len(state.request.prompt_tokens), self.config.block_size)
+
+    def _reservation_limits(self, state: RequestState) -> tuple[int, int, int, int]:
+        """Return current/lifetime token and block reservations for one request."""
+        current_tokens = self._current_reservation_for(state)
+        lifetime_tokens = self._reservation_for(state.request)
+        pool = self._paged_cache_pool
+        if pool is None:
+            return current_tokens, lifetime_tokens, 0, 0
+        return (
+            current_tokens,
+            lifetime_tokens,
+            pool.required_blocks(current_tokens),
+            pool.required_blocks(lifetime_tokens),
+        )
+
+    def _lifetime_reservation_cap(self) -> int:
+        scheduler = self.config.scheduler
+        return math.floor(scheduler.max_cached_tokens * scheduler.kv_overcommit_ratio)
+
+    def _lifetime_reserved_cache_tokens(self) -> int:
+        return sum(self._reservation_for(self._states[item].request) for item in self._active)
+
+    def _overcommitted_cache_tokens(self) -> int:
+        return max(0, self._lifetime_reserved_cache_tokens() - self._reserved_cache_tokens())
+
     def _admit(self, tick_time: float) -> None:  # noqa: C901, PLR0912, PLR0915
         scheduler = self.config.scheduler
         while self._waiting:
@@ -3134,28 +3250,33 @@ class ServingEngine:
             if len(self._active) >= scheduler.max_active_requests:
                 break
             resuming = state.status is RequestStatus.PREEMPTED
-            required = self._reservation_for(state.request)
-            required_blocks = 0
-            if self._paged_cache_pool is not None:
-                required_blocks = self._paged_cache_pool.required_blocks(required)
-            if self._reserved_cache_tokens() + required > scheduler.max_cached_tokens:
+            current_tokens, lifetime_tokens, current_blocks, lifetime_blocks = (
+                self._reservation_limits(state)
+            )
+            if self._reserved_cache_tokens() + current_tokens > scheduler.max_cached_tokens:
                 break
-            if self._paged_cache_pool is not None:
-                pool = self._paged_cache_pool
+            if (
+                scheduler.lazy_kv_reservation
+                and self._lifetime_reserved_cache_tokens() + lifetime_tokens
+                > self._lifetime_reservation_cap()
+            ):
+                break
+            pool = self._paged_cache_pool
+            if pool is not None:
                 fits = (
                     pool.can_reserve_with_prefix(
-                        reserved_blocks=required_blocks,
+                        reserved_blocks=current_blocks,
                         prompt_tokens=state.request.prompt_tokens,
                     )
                     if pool.prefix_cache_enabled and not resuming
-                    else pool.can_reserve(required_blocks)
+                    else pool.can_reserve(current_blocks)
                 )
                 if not fits:
                     break
             _ = self._waiting.popleft()
             if not resuming:
                 state.admission_time = tick_time
-            state.reserved_cache_tokens = required
+            state.reserved_cache_tokens = current_tokens
             if state.request.max_new_tokens == 0:
                 state.status = RequestStatus.FINISHED
                 state.finish_time = tick_time
@@ -3171,27 +3292,31 @@ class ServingEngine:
                     timestamp=tick_time,
                 )
                 continue
-            if self._paged_cache_pool is not None:
-                pool = self._paged_cache_pool
+            if pool is not None:
                 if pool.prefix_cache_enabled and not resuming:
                     lookup = pool.reserve_with_prefix(
                         state.request.request_id,
-                        reserved_blocks=required_blocks,
+                        reserved_blocks=current_blocks,
+                        max_blocks=lifetime_blocks,
                         prompt_tokens=state.request.prompt_tokens,
                     )
                     state.prefix_hit_blocks = lookup.prefix_hit_blocks
                     state.prefix_hit_tokens = lookup.prefix_hit_tokens
                     state.prefix_miss_tokens = lookup.prefix_miss_tokens
                 else:
-                    pool.reserve(state.request.request_id, required_blocks)
-                state.reserved_cache_blocks = required_blocks
+                    pool.reserve(
+                        state.request.request_id,
+                        current_blocks,
+                        max_blocks=lifetime_blocks,
+                    )
+                state.reserved_cache_blocks = current_blocks
             if resuming:
                 state.status = RequestStatus.RECOMPUTING
                 self._active.append(state.request.request_id)
                 continue
             state.status = RequestStatus.PREFILLING
             self._active.append(state.request.request_id)
-            if self._paged_cache_pool is not None and self._paged_cache_pool.prefix_cache_enabled:
+            if pool is not None and pool.prefix_cache_enabled:
                 self._emit(
                     event_type=EngineEventType.PREFIX_LOOKUP,
                     state=state,
@@ -3216,29 +3341,153 @@ class ServingEngine:
                 timestamp=tick_time,
             )
 
-    def _waiting_head_needs_kv(self) -> bool:
+    def _waiting_head_needs_kv(self) -> bool:  # noqa: PLR0911
         if not self._waiting:
             return False
         state = self._states[self._waiting[0]]
         if self._intrinsic_admission_failure(state) is not None:
             return False
-        required = self._reservation_for(state.request)
+        current_tokens, lifetime_tokens, current_blocks, _lifetime_blocks = (
+            self._reservation_limits(state)
+        )
         scheduler = self.config.scheduler
-        if self._reserved_cache_tokens() + required > scheduler.max_cached_tokens:
+        if self._reserved_cache_tokens() + current_tokens > scheduler.max_cached_tokens:
+            return True
+        if (
+            scheduler.lazy_kv_reservation
+            and self._lifetime_reserved_cache_tokens() + lifetime_tokens
+            > self._lifetime_reservation_cap()
+        ):
             return True
         pool = self._paged_cache_pool
         if pool is None:
             return False
-        required_blocks = pool.required_blocks(required)
         if state.status is RequestStatus.PREEMPTED or not pool.prefix_cache_enabled:
-            return not pool.can_reserve(required_blocks)
+            return not pool.can_reserve(current_blocks)
         return not pool.can_reserve_with_prefix(
-            reserved_blocks=required_blocks,
+            reserved_blocks=current_blocks,
             prompt_tokens=state.request.prompt_tokens,
         )
 
+    def _operation_reservation_target(self, state: RequestState) -> int:
+        """Return cache occupancy that the selected model operation will commit."""
+        executor = self._executor
+        if not isinstance(executor, PagedAttentionExecutor):
+            _invalid("lazy reservation growth requires the direct paged executor")
+        if state.status is RequestStatus.RECOMPUTING:
+            return executor.recompute_model_work(state)
+        if state.status is not RequestStatus.DECODING:
+            _invalid("reservation growth requires DECODING or RECOMPUTING state")
+        if state.cached_tokens >= self.config.block_size:
+            return len(state.all_tokens[-self.config.block_size :])
+        return state.cached_tokens + 1
+
+    def _clear_growth_blocked(self, request_id: str | None = None) -> None:
+        if request_id is None or self._growth_blocked_request_id == request_id:
+            self._growth_blocked_request_id = None
+            self._growth_blocked_target_tokens = 0
+
+    def _ensure_operation_reservation(
+        self,
+        state: RequestState,
+        *,
+        tick_time: float,
+        record_blocked: bool = True,
+    ) -> bool:
+        """Grow current logical/physical protection before any selected model work."""
+        scheduler = self.config.scheduler
+        if not scheduler.lazy_kv_reservation:
+            return True
+        pool = self._paged_cache_pool
+        if pool is None:
+            _invalid("lazy reservation growth requires a paged cache pool")
+        target_tokens = self._operation_reservation_target(state)
+        lifetime_tokens = self._reservation_for(state.request)
+        if target_tokens > lifetime_tokens:
+            _invalid("reservation growth target exceeds request lifetime demand")
+        current_tokens = state.reserved_cache_tokens
+        if target_tokens <= current_tokens:
+            self._clear_growth_blocked(state.request.request_id)
+            return True
+        delta_tokens = target_tokens - current_tokens
+        target_blocks = pool.required_blocks(target_tokens)
+        logical_fits = self._reserved_cache_tokens() + delta_tokens <= scheduler.max_cached_tokens
+        physical_fits = pool.can_grow_reservation(state.request.request_id, target_blocks)
+        if not logical_fits or not physical_fits:
+            if record_blocked:
+                state.reservation_growth_blocked_count += 1
+                self._growth_blocked_request_id = state.request.request_id
+                self._growth_blocked_target_tokens = target_tokens
+                self._emit(
+                    event_type=EngineEventType.RESERVATION_GROWTH_BLOCKED,
+                    state=state,
+                    timestamp=tick_time,
+                    detail=(
+                        f"current_tokens={current_tokens};target_tokens={target_tokens};"
+                        f"logical_fits={logical_fits};physical_fits={physical_fits}"
+                    ),
+                )
+            return False
+        previous_blocks = state.reserved_cache_blocks
+        _ = pool.grow_reservation(state.request.request_id, target_blocks)
+        state.reserved_cache_tokens = target_tokens
+        state.reserved_cache_blocks = target_blocks
+        state.reservation_growth_count += 1
+        state.reservation_growth_tokens += delta_tokens
+        self._clear_growth_blocked(state.request.request_id)
+        self._emit(
+            event_type=EngineEventType.RESERVATION_GROWN,
+            state=state,
+            timestamp=tick_time,
+            detail=(
+                f"tokens={current_tokens}->{target_tokens};"
+                f"blocks={previous_blocks}->{target_blocks}"
+            ),
+        )
+        return True
+
+    def _maybe_preempt_growth_pressure(self, tick_time: float) -> bool:
+        blocked_id = self._growth_blocked_request_id
+        if blocked_id is None:
+            return False
+        blocked = self._states.get(blocked_id)
+        if (
+            blocked is None
+            or blocked_id not in self._active
+            or blocked.status not in {RequestStatus.DECODING, RequestStatus.RECOMPUTING}
+        ):
+            self._clear_growth_blocked(blocked_id)
+            return True
+        candidates = tuple(
+            self._states[item]
+            for item in self._active
+            if item != blocked_id
+            and self._states[item].status is RequestStatus.DECODING
+            and self._states[item].last_recompute_time != tick_time
+        )
+        victim = next(
+            (item for item in candidates if item.last_decode_tick == tick_time),
+            None,
+        )
+        if victim is None:
+            victim = next(iter(candidates), None)
+        if victim is None:
+            return True
+        self._preempt_state(victim, tick_time, pressure="reservation_growth")
+        self._growth_pressure_preemptions += 1
+        _ = self._ensure_operation_reservation(
+            blocked,
+            tick_time=tick_time,
+            record_blocked=False,
+        )
+        return True
+
     def _maybe_preempt_for_pressure(self, tick_time: float) -> None:
-        if not self.config.scheduler.kv_preemption or not self._waiting_head_needs_kv():
+        if not self.config.scheduler.kv_preemption:
+            return
+        if self._maybe_preempt_growth_pressure(tick_time):
+            return
+        if not self._waiting_head_needs_kv():
             return
         for request_id in tuple(self._active):
             state = self._states[request_id]
@@ -3246,10 +3495,16 @@ class ServingEngine:
                 continue
             if state.last_decode_tick != tick_time or state.last_recompute_time == tick_time:
                 continue
-            self._preempt_state(state, tick_time)
+            self._preempt_state(state, tick_time, pressure="waiting_head")
             return
 
-    def _preempt_state(self, state: RequestState, tick_time: float) -> None:
+    def _preempt_state(
+        self,
+        state: RequestState,
+        tick_time: float,
+        *,
+        pressure: str = "waiting_head",
+    ) -> None:
         request_id = state.request.request_id
         pool = self._paged_cache_pool
         if pool is None or not pool.has_request(request_id):
@@ -3270,11 +3525,13 @@ class ServingEngine:
             self._chunk_schedule_cursor = None
         if self._chunk_resume_decode == request_id:
             self._chunk_resume_decode = None
+        self._clear_growth_blocked(request_id)
         preempt_time = state.token_timestamps[-1] if state.token_timestamps else tick_time
         self._emit(
             event_type=EngineEventType.PREEMPTED,
             state=state,
             timestamp=max(tick_time, preempt_time),
+            detail=f"pressure={pressure}",
         )
         pool.verify_invariants()
 
@@ -3634,6 +3891,7 @@ class ServingEngine:
         state.cached_tokens = 0
         state.reserved_cache_tokens = 0
         state.reserved_cache_blocks = 0
+        self._clear_growth_blocked(request_id)
 
     def _reservation_for(self, request: GenerationRequest) -> int:
         if request.max_new_tokens == 0:
@@ -3677,6 +3935,14 @@ class ServingEngine:
         self._peak_waiting = max(self._peak_waiting, len(self._waiting))
         self._peak_cached = max(self._peak_cached, self._cached_tokens())
         self._peak_reserved = max(self._peak_reserved, self._reserved_cache_tokens())
+        self._peak_lifetime_reserved = max(
+            self._peak_lifetime_reserved,
+            self._lifetime_reserved_cache_tokens(),
+        )
+        self._peak_overcommitted = max(
+            self._peak_overcommitted,
+            self._overcommitted_cache_tokens(),
+        )
 
     def _cached_tokens(self) -> int:
         return sum(self._states[request_id].cached_tokens for request_id in self._active)

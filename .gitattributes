@@ -49,3 +49,6 @@ docs/results/chunked-prefill-token-budget/** text eol=lf
 
 # Stage 17 KV-pressure preemption evidence binds exact UTF-8/LF checkout bytes.
 docs/results/kv-pressure-preemption/** text eol=lf
+
+# Stage 18 lazy KV reservation evidence binds exact UTF-8/LF checkout bytes.
+docs/results/lazy-kv-reservation/** text eol=lf

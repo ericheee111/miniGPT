@@ -36,7 +36,14 @@ implements:
   15 structural/performance evidence;
 - optional Stage 16 block-aligned chunked prefill with a useful-token budget per tick, decode-first
   interleaving, intermediate chunks that do not sample or advance request RNG, partial final prompt
-  tails, APC preservation, deterministic stress, and hash-bound structural evidence.
+  tails, APC preservation, deterministic stress, and hash-bound structural evidence;
+- Stage 17 whole-request KV-pressure preemption with immediate ownership/refcount cleanup, FIFO
+  requeue, cache-only recompute resume, request-local RNG preservation, learned-position overflow
+  equivalence, and admission classification that rejects intrinsically impossible heads without
+  needless preemption;
+- optional Stage 18 lazy KV growth reservation with distinct current/lifetime demand, bounded
+  overcommit, growth-before-model-work enforcement, deterministic growth-pressure preemption,
+  simulator/evidence coverage, and the Stage 17 recompute path as its correctness fallback.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.
@@ -113,11 +120,17 @@ dataset remain gitignored.
   DECODING requests may yield resident paged KV; PREEMPTED requests later reserve private capacity,
   rebuild cache-only history without sampling, and resume with request-local RNG intact. Recompute
   model-token work is charged to the Stage 16 budget. APC shared refs are released on preemption and
-  are not reattached across sliding-position recompute. Stage 17 remains `descriptive_only`;
-  dynamic/lazy reservation and CPU swap are not implemented.
-- Do not begin dynamic/lazy KV reservation, CPU swap, partial-block sharing/COW, speculative decoding,
-  BPE, GPU, LoRA, distributed training, `torch.compile`, or another optimization without an explicit
-  stage decision.
+  are not reattached across sliding-position recompute. Stage 17 remains `descriptive_only`.
+- `configs/serving_lazy_kv_reservation.yaml` opts into Stage 18 lazy KV growth reservation and bounded
+  lifetime-demand overcommit. New requests protect prompt capacity, resumed requests protect their
+  recompute history, and every decode/recompute operation grows logical and physical protection before
+  model work. Growth blockage executes no model work and may trigger deterministic Stage 17
+  whole-request preemption of another decoder followed by an immediate growth retry. Legacy full
+  reservation remains the default; Stage 18 evidence is `descriptive_only` and makes no wall-clock
+  speedup claim.
+- Do not begin CPU swap, partial-block sharing/COW, speculative decoding, BPE, GPU, LoRA, distributed
+  training, `torch.compile`, scheduler priorities, or another optimization without an explicit stage
+  decision.
 
 ## Quality gates
 
