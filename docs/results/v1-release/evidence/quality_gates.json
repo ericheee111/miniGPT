@@ -1,0 +1,52 @@
+{
+  "exit_code": 0,
+  "results": [
+    {
+      "command": [
+        "python",
+        "-m",
+        "pip",
+        "check"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "No broken requirements found.\n"
+    },
+    {
+      "command": [
+        "python",
+        "-m",
+        "ruff",
+        "format",
+        "--check",
+        "src",
+        "tests"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "139 files already formatted\n"
+    },
+    {
+      "command": [
+        "python",
+        "-m",
+        "ruff",
+        "check",
+        "src",
+        "tests"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "All checks passed!\n"
+    },
+    {
+      "command": [
+        "basedpyright"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "0 errors, 0 warnings, 0 notes\n"
+    }
+  ],
+  "schema_version": 1
+}

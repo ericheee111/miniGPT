@@ -1,0 +1,135 @@
+{
+  "console_script_passed": true,
+  "fresh_install_passed": true,
+  "fresh_quick_doctor_passed": true,
+  "module_entrypoint_passed": true,
+  "pip_check_passed": true,
+  "release_doctor_passed": true,
+  "release_report": {
+    "checks": [
+      {
+        "detail": "source and installed metadata equal 1.0.0",
+        "name": "package-version",
+        "status": "pass"
+      },
+      {
+        "detail": "v1.0 release documentation covers Stage 19-21",
+        "name": "release-documentation",
+        "status": "pass"
+      },
+      {
+        "detail": "reference-training: hashes/contracts valid; legacy contract",
+        "name": "evidence-stage-7A",
+        "status": "pass"
+      },
+      {
+        "detail": "batcher-optimization: hashes/contracts valid; source 3d6ae83e5c0b",
+        "name": "evidence-stage-8",
+        "status": "pass"
+      },
+      {
+        "detail": "kv-cache-generation: hashes/contracts valid; legacy contract",
+        "name": "evidence-stage-9",
+        "status": "pass"
+      },
+      {
+        "detail": "serving-control-plane: hashes/contracts valid; source 44df659faffc",
+        "name": "evidence-stage-10",
+        "status": "pass"
+      },
+      {
+        "detail": "decode-continuous-batching: hashes/contracts valid; source c86962eeb8d7",
+        "name": "evidence-stage-11A",
+        "status": "pass"
+      },
+      {
+        "detail": "batched-prefill: hashes/contracts valid; source e4db900d8c86",
+        "name": "evidence-stage-11B",
+        "status": "pass"
+      },
+      {
+        "detail": "http-serving: hashes/contracts valid; source 8b58089b7e31",
+        "name": "evidence-stage-12",
+        "status": "pass"
+      },
+      {
+        "detail": "paged-kv-cache-manager: hashes/contracts valid; source f55d4dda24cd",
+        "name": "evidence-stage-13A",
+        "status": "pass"
+      },
+      {
+        "detail": "paged-attention: hashes/contracts valid; source 598e90dcc405",
+        "name": "evidence-stage-13B",
+        "status": "pass"
+      },
+      {
+        "detail": "automatic-prefix-caching: hashes/contracts valid; source b248bff1166c",
+        "name": "evidence-stage-14",
+        "status": "pass"
+      },
+      {
+        "detail": "cache-aware-batched-prefill: hashes/contracts valid; source 9ab44bef0114",
+        "name": "evidence-stage-15",
+        "status": "pass"
+      },
+      {
+        "detail": "chunked-prefill-token-budget: hashes/contracts valid; source 9ab44bef0114",
+        "name": "evidence-stage-16",
+        "status": "pass"
+      },
+      {
+        "detail": "kv-pressure-preemption: hashes/contracts valid; source 5cb003a97086",
+        "name": "evidence-stage-17",
+        "status": "pass"
+      },
+      {
+        "detail": "lazy-kv-reservation: hashes/contracts valid; source 58c919f8cacf",
+        "name": "evidence-stage-18",
+        "status": "pass"
+      },
+      {
+        "detail": "serving-runtime-configuration: hashes/contracts valid; source 92032f14ed49",
+        "name": "evidence-stage-19",
+        "status": "pass"
+      },
+      {
+        "detail": "project-doctor: hashes/contracts valid; source 7dcbbc2e2670",
+        "name": "evidence-stage-20",
+        "status": "pass"
+      },
+      {
+        "detail": "Stage 18 simulation and Stage 19 runtime configs validate",
+        "name": "canonical-configs",
+        "status": "pass"
+      },
+      {
+        "detail": "canonical simulation and real runtime wiring completed",
+        "name": "runtime-smoke",
+        "status": "pass"
+      },
+      {
+        "detail": "python -m minigpt reports 1.0.0",
+        "name": "installed-cli",
+        "status": "pass"
+      },
+      {
+        "detail": "version 1.0.0; wheel 00e7bc71a7fe",
+        "name": "release-artifacts",
+        "status": "pass"
+      }
+    ],
+    "mode": "release",
+    "passed": true,
+    "project_version": "1.0.0",
+    "repository_root": ".",
+    "schema_version": 1
+  },
+  "release_version": "1.0.0",
+  "required_modules_present": true,
+  "schema_version": 1,
+  "sdist_built": true,
+  "sdist_sha256": "94c77e78263347293dca57ca6d01c6eaf589f7752299ae0d3cec0fbd991dc6c0",
+  "stage": "21",
+  "wheel_built": true,
+  "wheel_sha256": "511d2af348479471a672b6061a69b6887ed189a57f7ae8f76485be8a7e885932"
+}

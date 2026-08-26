@@ -1,0 +1,132 @@
+{
+  "all_modern_sources_are_ancestors": true,
+  "all_packages_passed": true,
+  "doctor_report": {
+    "checks": [
+      {
+        "detail": "source and installed metadata equal 1.0.0",
+        "name": "package-version",
+        "status": "pass"
+      },
+      {
+        "detail": "v1.0 release documentation covers Stage 19-21",
+        "name": "release-documentation",
+        "status": "pass"
+      },
+      {
+        "detail": "reference-training: hashes/contracts valid; legacy contract",
+        "name": "evidence-stage-7A",
+        "status": "pass"
+      },
+      {
+        "detail": "batcher-optimization: hashes/contracts valid; source 3d6ae83e5c0b",
+        "name": "evidence-stage-8",
+        "status": "pass"
+      },
+      {
+        "detail": "kv-cache-generation: hashes/contracts valid; legacy contract",
+        "name": "evidence-stage-9",
+        "status": "pass"
+      },
+      {
+        "detail": "serving-control-plane: hashes/contracts valid; source 44df659faffc",
+        "name": "evidence-stage-10",
+        "status": "pass"
+      },
+      {
+        "detail": "decode-continuous-batching: hashes/contracts valid; source c86962eeb8d7",
+        "name": "evidence-stage-11A",
+        "status": "pass"
+      },
+      {
+        "detail": "batched-prefill: hashes/contracts valid; source e4db900d8c86",
+        "name": "evidence-stage-11B",
+        "status": "pass"
+      },
+      {
+        "detail": "http-serving: hashes/contracts valid; source 8b58089b7e31",
+        "name": "evidence-stage-12",
+        "status": "pass"
+      },
+      {
+        "detail": "paged-kv-cache-manager: hashes/contracts valid; source f55d4dda24cd",
+        "name": "evidence-stage-13A",
+        "status": "pass"
+      },
+      {
+        "detail": "paged-attention: hashes/contracts valid; source 598e90dcc405",
+        "name": "evidence-stage-13B",
+        "status": "pass"
+      },
+      {
+        "detail": "automatic-prefix-caching: hashes/contracts valid; source b248bff1166c",
+        "name": "evidence-stage-14",
+        "status": "pass"
+      },
+      {
+        "detail": "cache-aware-batched-prefill: hashes/contracts valid; source 9ab44bef0114",
+        "name": "evidence-stage-15",
+        "status": "pass"
+      },
+      {
+        "detail": "chunked-prefill-token-budget: hashes/contracts valid; source 9ab44bef0114",
+        "name": "evidence-stage-16",
+        "status": "pass"
+      },
+      {
+        "detail": "kv-pressure-preemption: hashes/contracts valid; source 5cb003a97086",
+        "name": "evidence-stage-17",
+        "status": "pass"
+      },
+      {
+        "detail": "lazy-kv-reservation: hashes/contracts valid; source 58c919f8cacf",
+        "name": "evidence-stage-18",
+        "status": "pass"
+      },
+      {
+        "detail": "serving-runtime-configuration: hashes/contracts valid; source 92032f14ed49",
+        "name": "evidence-stage-19",
+        "status": "pass"
+      },
+      {
+        "detail": "project-doctor: hashes/contracts valid; source 7dcbbc2e2670",
+        "name": "evidence-stage-20",
+        "status": "pass"
+      },
+      {
+        "detail": "Stage 18 simulation and Stage 19 runtime configs validate",
+        "name": "canonical-configs",
+        "status": "pass"
+      }
+    ],
+    "mode": "quick",
+    "passed": true,
+    "project_version": "1.0.0",
+    "repository_root": ".",
+    "schema_version": 1
+  },
+  "non_shallow_history_required": true,
+  "registered_stages": [
+    "7A",
+    "8",
+    "9",
+    "10",
+    "11A",
+    "11B",
+    "12",
+    "13A",
+    "13B",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "20"
+  ],
+  "registry_first_stage": "7A",
+  "registry_last_stage": "20",
+  "registry_packages": 16,
+  "schema_version": 1,
+  "stage": "21"
+}

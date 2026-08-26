@@ -1,0 +1,13 @@
+{
+  "runtime_executor": "paged_attention",
+  "runtime_kv_overcommit_ratio": 2.0,
+  "runtime_lazy_kv_reservation": true,
+  "runtime_prefix_cache": true,
+  "runtime_resources_released": true,
+  "schema_version": 1,
+  "simulation_completed_requests": 2,
+  "simulation_failed_requests": 0,
+  "stage": "21",
+  "stage18_canonical_simulation_passed": true,
+  "stage19_real_runtime_passed": true
+}

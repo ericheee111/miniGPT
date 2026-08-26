@@ -1,0 +1,25 @@
+{
+  "exit_code": 0,
+  "results": [
+    {
+      "command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_serving_runtime.py",
+        "tests/test_serve_subprocess.py",
+        "tests/test_cli.py",
+        "tests/test_project_doctor.py",
+        "tests/test_release_validation.py",
+        "tests/test_stage19_evidence.py",
+        "tests/test_stage20_evidence.py",
+        "tests/test_stage21_evidence.py"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": ".................................................................        [100%]\n65 passed in 46.30s\n"
+    }
+  ],
+  "schema_version": 1
+}
