@@ -12,6 +12,7 @@ import torch
 import yaml
 
 import minigpt.serving_runtime as runtime_module
+from minigpt import __version__
 from minigpt.model import GPT
 from minigpt.paged_kv_cache import KVCacheBackend
 from minigpt.serving import APCPrefillStrategy, PagedAttentionExecutor
@@ -285,7 +286,7 @@ def test_runtime_manifest_is_deterministic_portable_and_lf(tmp_path: Path) -> No
     document = cast("dict[str, object]", json.loads(first))
     assert document["schema_version"] == 1
     assert document["stage"] == "19"
-    assert document["project_version"] == "0.1.0"
+    assert document["project_version"] == __version__
     assert document["checkpoint_sha256"] == _digest("checkpoint")
     assert document["tokenizer_sha256"] == _digest("tokenizer")
 

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 
 import torch
 
+from minigpt import release_validation
 from minigpt._version import __version__
 from minigpt.evidence_registry import EvidencePackage, evidence_registry
 from minigpt.model import GPT
@@ -127,9 +128,12 @@ def _check_version() -> CheckResult:
 
 def _check_docs(root: Path) -> CheckResult:
     required = {
-        root / "README.md": ("PROJECT_OVERVIEW.md", "Stage 19", "Stage 20"),
-        root / "AGENTS.md": ("Stage 19", "Stage 20"),
-        root / "docs" / "PROJECT_OVERVIEW.md": ("Stage 19", "Stage 20"),
+        root / "README.md": ("PROJECT_OVERVIEW.md", "Stage 19", "Stage 20", "Stage 21"),
+        root / "AGENTS.md": ("Stage 19", "Stage 20", "Stage 21"),
+        root / "CHANGELOG.md": ("1.0.0", "Stage 21"),
+        root / "docs" / "PROJECT_OVERVIEW.md": ("Stage 19", "Stage 20", "Stage 21"),
+        root / "docs" / "PROJECT_COMPLETION.md": ("v1.0.0", "Stage 21"),
+        root / "docs" / "RELEASE_CHECKLIST.md": ("v1.0.0", "release"),
     }
     missing: list[str] = []
     for path, needles in required.items():
@@ -144,7 +148,7 @@ def _check_docs(root: Path) -> CheckResult:
         )
     if missing:
         return _fail("release-documentation", "missing: " + ", ".join(sorted(missing)))
-    return _pass("release-documentation", "README, AGENTS, and project overview cover Stage 19-20")
+    return _pass("release-documentation", "v1.0 release documentation covers Stage 19-21")
 
 
 def _source_commit(result: dict[str, object], package_root: Path) -> str | None:
@@ -303,6 +307,32 @@ def _check_runtime_smoke(root: Path) -> CheckResult:
     return _pass("runtime-smoke", "canonical simulation and real runtime wiring completed")
 
 
+def _check_release_artifacts(root: Path) -> CheckResult:
+    """Build and fresh-install release artifacts for the release doctor mode."""
+    try:
+        artifacts = release_validation.validate_release_artifacts(root)
+    except (OSError, TypeError, ValueError, RuntimeError) as error:
+        return _fail("release-artifacts", f"{type(error).__name__}: {error}")
+    required = (
+        artifacts.wheel_built,
+        artifacts.sdist_built,
+        artifacts.required_modules_present,
+        artifacts.fresh_install_passed,
+        artifacts.pip_check_passed,
+        artifacts.module_entrypoint_passed,
+        artifacts.console_script_passed,
+        artifacts.quick_doctor_passed,
+    )
+    if artifacts.project_version != __version__ or not all(required):
+        return _fail(
+            "release-artifacts", "release artifact validation returned an incomplete result"
+        )
+    return _pass(
+        "release-artifacts",
+        f"version {artifacts.project_version}; wheel {artifacts.wheel_sha256[:12]}",
+    )
+
+
 def _check_cli_subprocess(root: Path) -> CheckResult:
     environment = os.environ.copy()
     environment["PYTHONUTF8"] = "1"
@@ -346,6 +376,8 @@ def verify_project(
     checks.append(_check_canonical_configs(resolved))
     if mode in {DoctorMode.CI, DoctorMode.RELEASE}:
         checks.extend((_check_runtime_smoke(resolved), _check_cli_subprocess(resolved)))
+    if mode is DoctorMode.RELEASE:
+        checks.append(_check_release_artifacts(resolved))
     if require_clean:
         checks.append(_check_clean(resolved))
     return DoctorReport(mode=mode, project_version=__version__, checks=tuple(checks))

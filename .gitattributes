@@ -56,8 +56,8 @@ docs/results/lazy-kv-reservation/** text eol=lf
 # Stage 19 serving runtime-configuration evidence binds exact UTF-8/LF checkout bytes.
 docs/results/serving-runtime-configuration/** text eol=lf
 
-# Stage 19 real serving-runtime configuration evidence binds exact UTF-8/LF checkout bytes.
-docs/results/serving-runtime-configuration/** text eol=lf
-
 # Stage 20 project-doctor evidence binds exact UTF-8/LF checkout bytes.
 docs/results/project-doctor/** text eol=lf
+
+# Stage 21 v1 release evidence binds exact UTF-8/LF checkout bytes.
+docs/results/v1-release/** text eol=lf

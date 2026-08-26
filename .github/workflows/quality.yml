@@ -45,6 +45,6 @@ jobs:
       - name: Type check
         run: basedpyright
       - name: Project doctor
-        run: python -m minigpt verify --mode ci
+        run: python -m minigpt verify --mode release --require-clean
       - name: Test
         run: pytest

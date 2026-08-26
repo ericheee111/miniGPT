@@ -1,4 +1,5 @@
 import minigpt
+from minigpt._version import __version__
 
 
 def test_package_can_be_imported() -> None:
@@ -6,5 +7,5 @@ def test_package_can_be_imported() -> None:
     # When: Python imports the public package.
     package = minigpt
 
-    # Then: the package exposes its version metadata.
-    assert package.__version__ == "0.1.0"
+    # Then: the package exposes the single authored version value.
+    assert package.__version__ == __version__

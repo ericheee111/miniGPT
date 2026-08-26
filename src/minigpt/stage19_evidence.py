@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Never, TypeAlias, cast
 import torch
 from typing_extensions import override
 
+from minigpt import __version__
 from minigpt.data import JsonValue
 from minigpt.model import GPT
 from minigpt.paged_kv_cache import KVCacheBackend
@@ -418,7 +419,7 @@ def generate_stage19_manifest(
     if (
         legacy_document["stage"] != STAGE_NAME
         or legacy_document["schema_version"] != 1
-        or legacy_document["project_version"] != "0.1.0"
+        or legacy_document["project_version"] != __version__
         or claim["benchmark_strict_verdict"] != "descriptive_only"
         or claim["wall_clock_performance_improvement"] is not False
         or claim["public_production_security_readiness"] is not False

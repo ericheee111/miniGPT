@@ -28,5 +28,7 @@ runs/
 *.trace.json
 
 # Local tooling
+.ai-bridge/
+.omo/
 .codegraph/
 .worktrees/

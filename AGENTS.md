@@ -181,3 +181,13 @@ them.
 Commit source, configs, tests, schemas, design/implementation docs, and small fixed fixtures. Keep
 logical changes in separate commits, preserve unrelated user changes, and follow the repository's
 Chinese commit-message style unless the user requests otherwise.
+
+## Stage 21 v1.0 release closure
+
+- Stage 21 is the planned v1.0.0 closure point. Do not add another model/scheduler feature as part of release hardening.
+- `src/minigpt/_version.py` is the only authored version value. Setuptools metadata is dynamic; generated `*.egg-info` must remain ignored and untracked.
+- `minigpt verify --mode release` builds one wheel and one sdist, inspects wheel membership, fresh-installs the wheel, runs pip check and CLI help/version, then runs the installed quick doctor against the reviewed checkout.
+- The default doctor registry covers Stage 7A–20. Stage 21 capstone evidence is intentionally outside its own registry to avoid self-verification.
+- `CHANGELOG.md`, `docs/PROJECT_COMPLETION.md`, and `docs/RELEASE_CHECKLIST.md` are required release contracts.
+- The annotated `v1.0.0` tag may be created only after the exact main commit passes Windows/Python 3.14 and Linux/Python 3.11 GitHub Actions.
+- Post-v1 research features require a new explicit design and evidence policy. v1.0 makes no production-scale or universal wall-clock performance claim.

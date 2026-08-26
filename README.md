@@ -793,3 +793,15 @@ minigpt verify --mode ci
 ```
 
 CI 模式会在临时目录执行 Stage 18 canonical simulation，并构造 Stage 19 paged/lazy runtime；这些检查用于 release correctness，不构成 wall-clock 性能声明。
+
+## v1.0.0 结项与发布验证（Stage 21）
+
+miniGPT 在 Stage 21 达到本轮计划结项点，当前项目版本为 **1.0.0**。结项含义、范围边界和维护策略见 [`docs/PROJECT_COMPLETION.md`](docs/PROJECT_COMPLETION.md)，发布前逐项验收见 [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)，版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+Release doctor 会在 quick/CI 检查之外构建 wheel 与 sdist、检查 wheel 内容、创建 fresh environment、安装 wheel、运行 `pip check`、验证 module/console help/version，并从安装产物执行 quick doctor：
+
+```powershell
+minigpt verify --mode release --require-clean
+```
+
+v1.0.0 是 CPU/PyTorch reference lab 的功能和证据闭环，不是生产规模 throughput、GPU parity 或普遍 wall-clock speedup 声明。新的 BPE、COW、swap、speculative decoding、量化或高性能 kernel 将作为 post-v1 独立研究阶段，而不是本轮结项阻塞项。

@@ -430,3 +430,17 @@ miniGPT 展示了一个小型 GPT 项目如何沿着“模型实现—可恢复�
 - 性能结论不超过 evidence 能支持的范围。
 
 截至 Stage 18，项目已经形成一个完整的 CPU reference serving lab：请求可以共享 immutable prefix blocks、分块 prefill、按实际 token work 调度、在 KV 压力下抢占并无采样重算，也可以通过 bounded overcommit 延迟保护未来 KV 容量。与此同时，legacy 路径仍保留为默认 reference，所有新能力均通过 opt-in 配置、等价测试和 hash-bound evidence 接入。这种演进方式为未来引入更高性能 kernel、COW、swap、BPE 或 GPU backend 提供了清晰而可信的基线。
+
+### 4.18 v1.0 Release Closure（Stage 21）
+
+Stage 21 将项目从“功能完整的 repository”收口为“可安装、可审计、可发布的 v1.0.0”。版本由 `minigpt._version` 单一来源提供，setuptools 动态读取；generated egg-info 不再提交。Release validator 构建 wheel/sdist、检查 package 和 root command modules、fresh-install wheel、执行 dependency check、module/console help/version，并从安装产物运行 quick doctor。
+
+v1 capstone evidence 汇总 Stage 7A–20 registry、release doctor、Stage 18 canonical simulation、Stage 19 real runtime、checkpoint v2 exact resume 和 release lifecycle。Stage 21 自身不加入 doctor registry，以避免 verifier 对自身 package 形成循环信任；其 manifest/source ancestry 由独立 capstone verifier 和 fresh checkout gate验证。
+
+### Stage 21 演进补充
+
+| Stage | 主题 | 主要交付与意义 |
+|---|---|---|
+| 21 | v1.0 Release Closure | 单一版本源、wheel/sdist fresh install、release doctor、结项文档、capstone evidence、跨平台 CI 与 annotated tag。 |
+
+至此，本轮项目不再以“继续增加 Stage”作为完成标准。Bug fix、依赖兼容和 evidence hardening 进入 patch maintenance；BPE、COW、swap、speculative decoding、量化、GPU kernel 或分布式能力必须作为 post-v1 独立研究设计。
