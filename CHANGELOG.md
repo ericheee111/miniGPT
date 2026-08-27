@@ -2,7 +2,9 @@
 
 All notable project changes are documented here. miniGPT follows semantic versioning from the v1.0 release onward.
 
-## [1.0.0] — 2026-08-26
+> **Release status:** the v1.0.0 code, Evidence, packaging, independent review, and cross-platform CI baseline is complete on `main` as of 2026-08-27. The annotated `v1.0.0` Git tag has not yet been published.
+
+## 1.0.0 — 2026-08-27
 
 ### Added
 
@@ -51,5 +53,3 @@ Several stages demonstrate structural reductions or configuration improvements, 
 - Whole-request recompute instead of swap/offload.
 - Single-machine, small-model experimental workloads.
 - Completions API subset without public-service authentication or multi-tenant policy.
-
-[1.0.0]: https://github.com/ericheee111/miniGPT/releases/tag/v1.0.0

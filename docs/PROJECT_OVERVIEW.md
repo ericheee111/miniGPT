@@ -2,11 +2,11 @@
 
 ## 摘要
 
-miniGPT 是一个以 **CPU-first、correctness-first、evidence-first** 为核心原则的 GPT 工程实验室。项目从字符级 tokenizer 和手写 Transformer 起步，逐步建立可精确恢复的训练系统、隔离式 CPU benchmark、显式 KV cache、自回归推理、多请求 serving 控制面、张量级 continuous batching、OpenAI-compatible HTTP/SSE 服务、分页 KV 管理、Automatic Prefix Caching，以及面向 KV 压力的抢占和 lazy reservation。
+miniGPT 是一个以 **CPU-first、correctness-first、evidence-first** 为核心原则的 GPT 系统工程实验室。项目从字符级 tokenizer 和手写 Transformer 起步，逐步建立可精确恢复的训练系统、隔离式 CPU benchmark、显式 KV cache、自回归推理、多请求 serving 控制面、张量级 continuous batching、OpenAI-compatible HTTP/SSE 服务、分页 KV 管理、Automatic Prefix Caching、面向 KV 压力的抢占和 lazy reservation，并最终以真实 serving runtime、统一 CLI、Project Doctor、wheel/sdist fresh install 和 v1 capstone Evidence 完成发布闭环。
 
-该项目的重点不只是“实现一个能训练和生成文本的小型 GPT”，而是研究一个模型系统如何从算法原型演进为具有明确状态机、资源所有权、错误隔离、跨平台质量门禁和可审计证据链的完整工程。每个后续 Stage 都尽量把功能语义、性能结论和范围边界分开：正确性由 deterministic tests、reference equivalence 和资源 invariant 支撑；性能由 fresh-process raw evidence、环境身份和 strict comparison policy 支撑；无法建立严格结论时，报告会明确标记为 `not_comparable`、`fail` 或 `descriptive_only`，而不是把局部计时差异升级为普遍性能声明。
+该项目的重点不只是“实现一个能训练和生成文本的小型 GPT”，而是研究一个模型系统如何从算法原型演进为具有明确状态机、资源所有权、错误隔离、跨平台质量门禁、可安装分发物和可审计证据链的完整工程。每个后续 Stage 都尽量把功能语义、性能结论和范围边界分开：正确性由 deterministic tests、reference equivalence 和资源 invariant 支撑；性能由 fresh-process raw evidence、环境身份和 strict comparison policy 支撑；发布由 source ancestry、exact artifact membership、fresh-wheel isolation 和 Windows/Linux CI 支撑。无法建立严格结论时，报告会明确标记为 `not_comparable`、`fail` 或 `descriptive_only`，而不是把局部计时差异升级为普遍性能声明。
 
-**关键词：** GPT；Transformer；CPU 训练；精确断点恢复；KV Cache；Continuous Batching；Paged KV Cache；Automatic Prefix Caching；请求抢占；Lazy Reservation；可复现实验；证据链
+**关键词：** GPT；Transformer；CPU 训练；精确断点恢复；KV Cache；Continuous Batching；Paged KV Cache；Automatic Prefix Caching；请求抢占；Lazy Reservation；HTTP/SSE；Project Doctor；Release Verification；可复现实验；证据链
 
 ---
 
@@ -30,12 +30,13 @@ miniGPT 以这些问题为主线。它坚持在单机 CPU、小模型和 Python/
 
 ### 2.1 总体目标
 
-miniGPT 的目标可以概括为四层：
+miniGPT 的目标可以概括为五层：
 
 - **模型层：** 从基础 PyTorch 张量和模块构建字符级 GPT，保持因果性、位置语义、loss 和采样行为可测试。
 - **训练层：** 建立可恢复、可观测、可复现的 CPU 训练运行时，严格绑定配置、数据身份和随机状态。
 - **推理与服务层：** 从单请求 KV cache 演进到多请求调度、continuous batching、HTTP/SSE、paged KV、prefix sharing、抢占和 lazy growth。
 - **证据层：** 为功能和性能结论保存 raw evidence、环境、配置、来源 commit、artifact membership 和 SHA-256，阻止结果与代码脱钩。
+- **发布层：** 通过统一 CLI、Project Doctor、deterministic runtime manifest、wheel/sdist、隔离 fresh install 和跨平台 CI，使 reviewed checkout 可以被重新安装和验证。
 
 ### 2.2 CPU-first 的含义
 
@@ -58,6 +59,10 @@ CPU-first 并不表示项目假定 CPU 比 GPU 更适合大模型，而是表示
 - CPU/GPU swap、partial-block copy-on-write；
 - speculative decoding、beam search、量化；
 - 动态优先级、租户配额或面向公网的完整 API 安全体系。
+
+### 2.4 当前结项状态
+
+截至 Stage 21 / v1.0.0，既定 CPU reference scope 已完成：功能分支和 `main` 均通过 Windows/Python 3.14 与 Linux/Python 3.11 质量门禁，完整 pytest、Stage 7A–21 Evidence、source ancestry、fresh checkout、wheel/sdist 和 release doctor 均已验证。项目因此进入维护模式；未创建 annotated `v1.0.0` tag 只表示尚未发布 Git tag，不构成功能或证据闭环的缺口。
 
 ---
 
@@ -82,13 +87,19 @@ flowchart LR
 
     L --> O[PagedKVCachePool]
     O --> P[Automatic Prefix Cache]
-    O --> Q[Preemption + Recompute]
-    O --> R[Lazy Growth Reservation]
+    O --> Q[Chunked Prefill / Token Budget]
+    O --> R[Preemption + Recompute]
+    O --> S[Lazy Growth Reservation]
 
-    F --> S[Benchmark / Profiler]
-    J --> S
-    K --> S
-    S --> T[Raw Evidence + Manifest + SHA-256]
+    F --> T[Benchmark / Profiler]
+    J --> T
+    K --> T
+    T --> U[Raw Evidence + Manifest + SHA-256]
+
+    V[Unified minigpt CLI] --> W[Project Doctor]
+    W --> U
+    X[Runtime Manifest / Release Validator] --> U
+    U --> Y[Wheel / sdist / Fresh Install / CI]
 ```
 
 系统的关键设计是把 **计算**、**控制面**、**存储所有权** 和 **证据** 分离：
@@ -97,7 +108,8 @@ flowchart LR
 - `ServingEngine` 负责 FIFO、状态转换、预算和资源决策；
 - `PagedKVCachePool` 负责 block table、private/shared ownership、reservation 和 rollback；
 - `EngineRunner` 是 HTTP 场景下唯一调用 engine/model 的 owner thread；
-- benchmark/evidence 模块不修改生产语义，只观察并保存可验证结果。
+- benchmark/evidence 模块不修改运行语义，只观察并保存可验证结果；
+- Project Doctor 和 release validator 交叉验证版本、Evidence、来源历史和安装产物，但不重新生成或隐式信任被验证对象。
 
 ---
 
@@ -405,7 +417,7 @@ tests/                      单元、集成、lifecycle、stress 与 evidence �
 ### 9.2 常用入口
 
 ```powershell
-python prepare_data.py --config configs/char_gpt.yaml
+python prepare_data.py --data-dir data
 python train.py --config configs/char_gpt.yaml
 python generate.py --checkpoint <checkpoint> --prompt "..."
 
@@ -413,7 +425,8 @@ python benchmark_v2.py --config configs/benchmark_v2_smoke.yaml
 python benchmark_inference.py --config configs/inference_benchmark_stage9.yaml
 python simulate_serving.py --config configs/serving_lazy_kv_reservation.yaml
 python serve.py --checkpoint <checkpoint> --tokenizer <tokenizer>
-python generate_stage18_evidence.py --source-commit <reviewed-commit>
+
+minigpt --help
 minigpt verify --mode quick
 minigpt verify --mode ci
 minigpt verify --mode release --require-clean

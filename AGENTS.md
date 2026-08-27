@@ -5,8 +5,8 @@ generated evidence as the source of truth.
 
 ## Project status
 
-miniGPT is a CPU-first, character-level GPT training and profiling lab. The project already
-implements:
+miniGPT is a CPU-first, character-level GPT systems reference lab spanning training, inference,
+serving, evidence, and release verification. The project already implements:
 
 - Tiny Shakespeare preparation, character tokenization, and deterministic train/validation splits;
 - a custom GPT stack with LayerNorm, causal multi-head attention, MLP, residual blocks, loss, and
@@ -47,6 +47,8 @@ implements:
 - Stage 19 production serving configuration that exposes APC strategy, token-budget chunking,
   preemption, lazy reservation, bounded overcommit, and a deterministic atomic runtime manifest on
   the real HTTP process while preserving all legacy defaults.
+
+Stage 20 adds the installable unified CLI and explicit Project Doctor registry; Stage 21 closes v1.0.0 with a single version source, wheel/sdist fresh-install validation, non-self-referential capstone Evidence, independent review, and green Windows/Linux CI. The planned v1 scope is complete. Default work should now be maintenance, compatibility, documentation, or explicitly designed post-v1 research—not another implicit completion Stage.
 
 Do not recreate or replace the existing GPT, trainer, tokenizer, optimizer, checkpoint, or
 exact-resume systems. Extend their public contracts only when the active stage requires it.

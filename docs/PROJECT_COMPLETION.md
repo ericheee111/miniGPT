@@ -8,6 +8,20 @@ miniGPT 在 **Stage 21 / v1.0.0** 达到本轮项目目标，可以按计划结�
 
 项目后续进入维护和独立研究扩展模式。新的模型能力或高性能 kernel 不再被视为 v1.0 结项阻塞项。
 
+### 当前验收状态
+
+| 验收项 | 状态 |
+|---|---|
+| Stage 1–21 既定功能范围 | 已完成 |
+| 独立 Code Review | 通过；无剩余 Blocker / Important finding |
+| 完整本地测试 | 730 passed / 1 documented platform skip / 0 failed |
+| Stage 7A–21 Evidence 与 source ancestry | 通过 |
+| Detached fresh checkout 与 release doctor | 通过 |
+| 功能分支与 `main` Windows/Python 3.14 CI | 通过 |
+| 功能分支与 `main` Linux/Python 3.11 CI | 通过 |
+| 合入与推送 | reviewed HEAD 已进入远端 `main` |
+| Annotated `v1.0.0` tag | 尚未创建；不影响项目结项，仅影响正式 Git tag 发布 |
+
 ## 2. 结项目标与完成证据
 
 ### 2.1 可解释模型与训练
@@ -120,4 +134,4 @@ pytest
 minigpt verify --mode release --require-clean
 ```
 
-最终 release commit 还必须在 GitHub Actions 的 Windows/Python 3.14 和 Linux/Python 3.11 job 全绿后，才能创建 `v1.0.0` tag。
+当前 reviewed `main` 已通过 GitHub Actions 的 Windows/Python 3.14 和 Linux/Python 3.11 job，项目结项门禁已经满足。创建 annotated `v1.0.0` tag 仍应指向一个同样 CI-green、且在 tag 前没有额外源码或 Evidence 变化的精确 `main` commit。

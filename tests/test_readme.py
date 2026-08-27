@@ -73,6 +73,13 @@ def test_readme_documents_stable_user_contracts() -> None:
     assert "ruff check src tests" in readme
     assert "basedpyright" in readme
     assert "pytest" in readme
+    assert "项目状态" in readme
+    assert "已结项" in readme
+    assert "Stage 1" in readme
+    assert "Stage 21" in readme
+    assert "PagedKVCachePool" in readme
+    assert "minigpt verify --mode release --require-clean" in readme
+    assert "](docs/PROJECT_COMPLETION.md)" in readme
 
 
 def test_readme_documents_stage_6_resume_and_portability_contracts() -> None:

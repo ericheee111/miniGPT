@@ -1,56 +1,72 @@
 # miniGPT
 
-> CPU-first GPT Training and Profiling Lab
-> 从零实现、可复现、可断点续训、可性能分析的字符级 GPT 工程。
+> CPU-first GPT Training, Inference, Serving, and Evidence Lab
+>
+> 从零实现 GPT，并把训练、精确恢复、KV-cache 推理、多请求服务和可审计发布串成完整工程闭环。
 
-**Python 3.11–3.14 · PyTorch CPU · Windows-first + Linux CI · Strict typing · Exact resume**
+**Python 3.11–3.14 · PyTorch CPU · Windows + Linux CI · Strict typing · Exact resume · v1.0.0**
+
+> **项目状态：已结项。** Stage 21 / v1.0.0 的代码、测试、Evidence、wheel/sdist 与跨平台 CI 已形成闭环；仓库现进入维护和 post-v1 独立研究扩展模式。`v1.0.0` annotated tag 尚未创建，不影响既定功能范围的结项判断。
 
 ## 项目概览
 
-miniGPT 是一个面向学习、工程实践和简历展示的字符级 GPT 项目。它没有调用现成的
-Transformer 模型，而是从张量运算开始实现 LayerNorm、因果多头自注意力、MLP、
-Transformer Block、语言模型损失与自回归采样，并把数据、训练、断点恢复、指标、
-TensorBoard、基准测试和 PyTorch Profiler 串成一条可验证的工程链路。
+miniGPT 是一个 **CPU-first、correctness-first、evidence-first** 的 GPT 系统工程项目。它没有调用现成 Transformer 模型，而是从字符 tokenizer、LayerNorm、因果多头自注意力、MLP 和 Transformer Block 开始，逐步构建出可训练、可精确恢复、可基准测试、可缓存推理、可多请求调度、可通过 HTTP/SSE 服务，并可从安装包重新验证的完整 reference system。
 
-完整的项目背景、系统架构、模块说明和 Stage 1–18 演进见 [项目技术白皮书](docs/PROJECT_OVERVIEW.md)。
+它既适合学习 GPT 的计算图，也适合研究一个模型原型如何演进为具有请求状态机、KV 资源所有权、失败隔离、跨平台质量门禁和 hash-bound Evidence 的小型系统。项目不把“代码能跑”当作完成标准，而是要求优化路径与 reference semantics 等价、资源状态可解释、性能声明不超过证据能够支持的范围。
 
-项目优先解决三个问题：
+| 方向 | 已完成能力 |
+|---|---|
+| 模型与数据 | 字符级 tokenizer、手写 GPT、learned absolute positions、loss 与 temperature/top-k sampling |
+| 训练系统 | YAML 配置、AdamW、warmup/cosine、验证与采样、JSONL/TensorBoard、checkpoint v2 exact resume |
+| 性能方法 | fresh-process Benchmark v2、Profiler、环境身份、raw replicate、strict comparison policy |
+| 推理系统 | KV prefill/decode、continuous batching、paged KV、APC、chunked prefill、preemption、lazy reservation |
+| 服务与发布 | OpenAI-compatible completions 子集、SSE、统一 CLI、runtime manifest、Project Doctor、wheel/sdist fresh install |
+| 证据与质量 | Stage 7A–21 Evidence、SHA-256 exact membership、source ancestry、Ruff、basedpyright、pytest、Windows/Linux CI |
 
-- **模型原理可解释**：关键网络结构均在 `src/minigpt/` 内实现，张量形状与因果遮罩清晰可查。
-- **实验可以复现**：checkpoint format v2 保存完整实验定义、模型、优化器、完成步数、
-  Python/NumPy/PyTorch 全局 RNG、train/val batcher RNG 和独立 sample generator RNG。
-- **性能可以测量**：基准测试区分预热与计时，输出重复测量、吞吐、离散程度和内存；
-  Profiler trace 可以在 Chrome Trace 或 Perfetto 中检查算子级时间线。
+进一步阅读：
 
-当前范围是单机 CPU、字符级 tokenizer 和教学规模 GPT。它不是分布式训练框架，也不以
-替代成熟 LLM 训练栈为目标。
+- [项目技术白皮书](docs/PROJECT_OVERVIEW.md)：项目背景、系统架构、核心模块和 Stage 1–21 演进；
+- [项目结项说明](docs/PROJECT_COMPLETION.md)：为什么可以结项、已证明与未承诺的边界；
+- [v1.0 发布检查表](docs/RELEASE_CHECKLIST.md)：可执行的本地、Evidence、fresh-install 与 CI 门禁；
+- [Changelog](CHANGELOG.md)：v1.0.0 功能、正确性合同和已知限制；
+- [`docs/results/`](docs/results)：各阶段 hash-bound Evidence packages。
+
+项目坚持四条原则：
+
+- **模型原理可解释**：关键网络结构、张量形状、因果遮罩和 learned-position 语义均可直接阅读与测试；
+- **训练轨迹可复现**：checkpoint format v2 保存模型、优化器、配置、数据身份和完整全局/批处理/采样 RNG；
+- **服务资源可解释**：请求状态、FIFO、公平性、取消、失败、KV block ownership、APC refcount 和抢占恢复都有显式合同；
+- **结论可以复核**：benchmark、Evidence、manifest 和 source commit 分离保存；未达到 strict 条件时明确报告 `not_comparable`、`fail` 或 `descriptive_only`。
+
+当前范围是单机 CPU、字符级 tokenizer 和教学/研究规模 GPT。它提供真实 HTTP serving reference，但不是面向公网、多租户或大规模 GPU 部署的生产 LLM 平台。
 
 ## English Summary
 
-miniGPT is a CPU-first character-level GPT training lab implemented with PyTorch. It includes a
-hand-written Transformer stack, deterministic data preparation, YAML-driven experiments, exact
-checkpoint resume, JSONL metrics, TensorBoard logging, repeatable CPU benchmarks, and PyTorch
-Profiler traces. The repository is intentionally small enough to study end to end while keeping
-production-minded boundaries: Python 3.11 through Python 3.14, strict static typing, explicit
-serialization validation, and the same four quality gates on Windows and Linux CI.
+miniGPT is a CPU-first GPT systems reference lab implemented in PyTorch. It starts with a hand-written character-level Transformer and extends through deterministic data preparation, YAML-driven CPU training, exact checkpoint resume, fresh-process benchmarks, cached generation, multi-request scheduling, continuous batching, paged KV management, Automatic Prefix Caching, preemption, lazy reservation, HTTP/SSE serving, an installable CLI, and release verification.
+
+The project is intentionally small enough to study end to end, but its contracts are systems-oriented: request-local RNG, explicit resource ownership, rollback and cleanup, strict serialization boundaries, source-bound evidence, and the same Ruff, basedpyright, Project Doctor, and pytest gates on Windows and Linux. Version 1.0.0 is feature-complete within this CPU reference scope; it does not claim production-scale throughput, GPU parity, or universal wall-clock speedup.
 
 ## 功能与边界
 
 已实现：
 
-- 字符词表构建、encode/decode、90/10 数据切分及 SHA-256 元数据。
-- 自定义 LayerNorm、causal self-attention、MLP、pre-norm residual blocks。
-- AdamW 参数分组、线性 warmup、余弦衰减和梯度裁剪。
-- 验证集评估、定期采样、JSONL 指标与 TensorBoard。
-- checkpoint format v2、SHA-256 数据身份校验与 bit-exact 训练恢复。
-- 训练恢复、独立生成 CLI、CPU benchmark 和 operator profiler。
-- Ruff `ALL`、basedpyright `all` 与严格 pytest。
+- 字符词表构建、encode/decode、确定性数据切分及 SHA-256 身份元数据；
+- 手写 LayerNorm、causal self-attention、MLP、pre-norm residual blocks、loss 与 sampling；
+- AdamW、linear warmup、cosine decay、梯度裁剪、验证、采样、JSONL 与 TensorBoard；
+- checkpoint format v2、原子替换、配置/数据身份校验与 bit-exact 训练恢复；
+- Benchmark v2、PyTorch Profiler、环境/方法学 identity、raw evidence 与独立 comparison policy；
+- KV cached generation、learned-position overflow rebuild、continuous decode 与 batched prefill；
+- HTTP/SSE serving、单 owner EngineRunner、有界背压、取消和失败隔离；
+- paged KV、Automatic Prefix Caching、chunked prefill、token budget、preemption/recompute 和 lazy reservation；
+- `minigpt` 统一 CLI、deterministic runtime manifest、Project Doctor、wheel/sdist 与 fresh-install release validation；
+- Stage 7A–21 hash-bound Evidence、Ruff `ALL`、basedpyright `all`、严格 pytest 和 Windows/Linux CI。
 
 明确不包含：
 
-- GPU/CUDA、混合精度、DDP/FSDP 或多机训练。
-- BPE/SentencePiece tokenizer、预训练权重下载或聊天微调。
-- 面向生产服务的推理 API。
+- GPU/CUDA、mixed precision、fused kernels、DDP/FSDP 或多机训练/服务；
+- BPE/SentencePiece、预训练权重下载、聊天微调、LoRA 或量化；
+- partial-block COW、KV swap/offload、speculative decoding 或多模型 routing；
+- 公网生产服务所需的认证、限流、租户隔离、SLO 运维与安全体系。
 
 ## 环境要求与安装
 
@@ -214,17 +230,32 @@ tensorboard --logdir outputs/smoke/tensorboard
 
 ```mermaid
 flowchart LR
-    A["Tiny Shakespeare text"] --> B["CharTokenizer"]
+    A["原始文本"] --> B["CharTokenizer"]
     B --> C["train.npy / val.npy"]
     C --> D["TokenBatcher"]
-    D --> E["Token + position embeddings"]
-    E --> F["N × TransformerBlock"]
-    F --> G["LayerNorm + LM head"]
-    G --> H["Cross entropy / sampling"]
-    H --> I["Metrics + TensorBoard"]
-    H --> J["Atomic checkpoint"]
-    J --> K["Exact resume / generation"]
+    D --> E["GPT / Transformer"]
+
+    E --> F["Trainer + AdamW + LR schedule"]
+    F --> G["Checkpoint v2"]
+    F --> H["JSONL / TensorBoard"]
+    G --> I["Exact resume"]
+
+    E --> J["Uncached / KV-cached generation"]
+    J --> K["ServingEngine"]
+    K --> L["Continuous / Paged executors"]
+    L --> M["Paged KV + APC"]
+    M --> N["Chunking / Preemption / Lazy growth"]
+    K --> O["EngineRunner"]
+    O --> P["HTTP / SSE"]
+
+    F --> Q["Benchmark / Profiler"]
+    J --> Q
+    K --> Q
+    Q --> R["Raw Evidence + SHA-256 manifest"]
+    S["Unified CLI / Project Doctor / Release validator"] --> R
 ```
+
+计算、控制面、资源所有权和证据相互分离：`GPT` 与 executor 负责模型计算，`ServingEngine` 负责请求生命周期和调度，`PagedKVCachePool` 负责 block ownership、reservation 与 rollback，`EngineRunner` 是 HTTP 场景下唯一触碰 engine/model 的 owner thread，Project Doctor 与各 Stage verifier 负责验证而不修改运行语义。
 
 每个 TransformerBlock 使用 pre-norm：
 
@@ -233,7 +264,7 @@ x = x + CausalSelfAttention(LayerNorm(x))
 x = x + MLP(LayerNorm(x))
 ```
 
-注意力遮罩注册为 non-persistent buffer；checkpoint 不重复存储可由配置重建的下三角矩阵。
+注意力遮罩注册为 non-persistent buffer；checkpoint 不重复存储可由配置重建的下三角矩阵。模型使用 learned absolute positions，因此超过 `block_size` 时必须重建滑动窗口 KV，而不能简单平移旧 cache 的位置语义。
 
 ## 性能分析
 
@@ -646,128 +677,114 @@ threshold，也不把 CI 的 timing 当作性能真相。这里没有额外 work
 
 ```text
 miniGPT/
-├── configs/                 # 训练、benchmark 与 smoke YAML
-├── docs/superpowers/        # 阶段设计与实施计划
+├── configs/                         # 训练、benchmark、simulator 与 serving YAML
+├── docs/
+│   ├── PROJECT_OVERVIEW.md          # 技术白皮书与 Stage 1–21 演进
+│   ├── PROJECT_COMPLETION.md        # v1.0 结项边界与维护策略
+│   ├── RELEASE_CHECKLIST.md         # 可执行发布检查表
+│   ├── superpowers/specs/           # 各 Stage 设计文档
+│   ├── superpowers/plans/           # 各 Stage 实施计划
+│   └── results/                     # Hash-bound Evidence packages
 ├── src/minigpt/
-│   ├── data.py              # tokenizer 与数据准备
-│   ├── batching.py          # 可恢复随机 batcher
-│   ├── layers.py            # LayerNorm / attention / MLP / block
-│   ├── model.py             # GPT forward 与 generation
-│   ├── optimization.py      # seed / AdamW / LR schedule
-│   ├── checkpoint.py        # 原子 checkpoint 与 RNG 恢复
-│   ├── trainer.py           # 训练编排与可观测性
-│   ├── benchmark_*.py       # 训练 benchmark、报告与 workload
-│   ├── inference_*.py       # KV-cache inference benchmark 与 profiler
-│   ├── serving_*.py         # serving engine、simulator、runtime policy 与证据
-│   ├── stage19_evidence.py  # Stage 19 serving runtime 配置证据
-│   ├── engine_runner.py     # 单模型执行 owner 与请求 channel
-│   └── http_server.py       # 可选 OpenAI-compatible HTTP/SSE 边界
-├── tests/
-├── prepare_data.py
-├── train.py
-├── generate.py
-├── benchmark.py
-├── benchmark_inference.py
-├── profile_inference.py
-├── generate_stage9_evidence.py
-├── simulate_serving.py
-├── generate_stage10_evidence.py
-├── benchmark_serving.py
-├── profile_serving.py
-├── generate_stage11a_evidence.py
-├── generate_stage11b_evidence.py
-├── serve.py
-├── benchmark_server.py
-├── generate_stage12_evidence.py
-└── generate_stage19_evidence.py
+│   ├── data.py / batching.py        # tokenizer、数据准备与可恢复随机 batcher
+│   ├── layers.py / model.py         # 手写 Transformer、loss、generation、KV prefill/decode
+│   ├── optimization.py              # seed、AdamW、LR schedule 与梯度裁剪
+│   ├── checkpoint.py / trainer.py   # checkpoint v2、exact resume 与训练编排
+│   ├── benchmark_*.py               # Benchmark v2、报告、方法学与 workload
+│   ├── inference_*.py               # KV-cache inference benchmark 与 profiler
+│   ├── serving.py                   # 请求状态机、调度器与 executors
+│   ├── paged_kv_cache.py            # block table、ownership、APC、reservation 与 rollback
+│   ├── engine_runner.py             # 单模型执行 owner 与有界请求 channel
+│   ├── http_server.py               # OpenAI-compatible completions 子集与 SSE
+│   ├── serving_runtime.py           # 真实 HTTP runtime 策略与 deterministic manifest
+│   ├── cli.py / project_doctor.py   # 统一 CLI、Evidence registry 与项目自检
+│   ├── release_validation.py        # wheel/sdist、fresh install 与 release doctor
+│   └── stage*_evidence.py           # 各阶段 Evidence 生成与独立 verifier
+├── tests/                            # unit / integration / lifecycle / stress / evidence
+├── prepare_data.py / train.py / generate.py
+├── benchmark*.py / profile*.py
+├── simulate_serving.py / serve.py
+└── generate_stage*_evidence.py
 ```
 
-阶段 5 的设计与实施依据见
-[设计说明](docs/superpowers/specs/2026-07-02-stage5-readme-quality-design.md) 和
-[实施计划](docs/superpowers/plans/2026-07-02-stage5-readme-quality.md)。
+设计、实施和证据应按同一 Stage 阅读。例如 Stage 21 分别对应
+[设计说明](docs/superpowers/specs/2026-08-26-stage21-v1-release-closure-design.md)、
+[实施计划](docs/superpowers/plans/2026-08-26-stage21-v1-release-closure.md) 和
+[v1 capstone Evidence](docs/results/v1-release/README.md)。
 
 ## 质量门禁与验证
 
 本地在任一受支持 Python 版本上按以下顺序执行：
 
 ```powershell
+python -m pip check
 ruff format src tests
+ruff format --check src tests
 ruff check src tests
 basedpyright
 pytest
+minigpt verify --mode quick
+minigpt verify --mode ci
+minigpt verify --mode release --require-clean
 ```
 
-额外验证根 CLI：
+统一 CLI 与兼容根脚本都保留：
 
 ```powershell
+minigpt --help
+minigpt --version
+minigpt prepare-data --help
+minigpt train --help
+minigpt generate --help
+minigpt simulate --help
+minigpt serve --help
+minigpt verify --mode quick
+
 python prepare_data.py --help
 python train.py --help
 python generate.py --help
 python benchmark.py --help
 python profile_model.py --help
-python benchmark_inference.py --help
-python profile_inference.py --help
-python generate_stage9_evidence.py --help
-python simulate_serving.py --help
-python generate_stage10_evidence.py --help
-python benchmark_serving.py --help
-python profile_serving.py --help
-python generate_stage11a_evidence.py --help
-python generate_stage11b_evidence.py --help
 python serve.py --help
-python benchmark_server.py --help
-python generate_stage12_evidence.py --help
-python generate_stage19_evidence.py --help
 ```
 
-测试遵循 Given/When/Then 结构；HTTP 合同优先使用 ASGI/in-process 测试，仅以少量真实 localhost
-subprocess smoke 覆盖 Uvicorn 启动、disconnect cancellation 与退出，不访问公网。
-`.github/workflows/quality.yml` 在 Windows/Python 3.14 与 Linux/Python 3.11 上执行相同门禁。
+测试遵循 Given/When/Then 结构；HTTP 合同优先使用 ASGI/in-process 测试，仅以少量真实 localhost subprocess smoke 覆盖 Uvicorn 启动、disconnect cancellation 与退出，不访问公网。`.github/workflows/quality.yml` 在 Windows/Python 3.14 与 Linux/Python 3.11 上执行 formatter、lint、type check、Project Doctor 和完整 pytest。
 
 ## Roadmap
 
-- Stage 9 已完成 KV cache、cached generation、overflow re-prefill 和隔离推理证据。
-- Stage 10 已完成多请求 serving 控制面、逐请求 reference executor、确定性 simulator 和证据。
-- Stage 11A 已完成 variable-length dense KV assembly/scatter、tensor-level decode batching、
-  reference 等价验证和隔离 serving benchmark。
-- Stage 11B 已完成 length-bucketed batched prefill、三 executor 等价验证、prompt padding/TTFT
-  telemetry 和独立 fresh-process benchmark；当前仍采用 dense cache 与 attention。
-- Stage 12 已完成 OpenAI-compatible completions subset、SSE、单 owner EngineRunner、有界背压、
-  disconnect cancellation、真实 localhost lifecycle smoke 与独立 HTTP system benchmark。
-- 后续可研究基于历史长度分布的自适应 bucket policy，但应保持 FIFO/no-waiting 约束；Paged
-  KV Cache、BPE 与 GPU serving 需要各自独立阶段设计。
-- 增加 BPE tokenizer，并保持 checkpoint/tokenizer 版本兼容。
-- 增加 mixed precision 与 CUDA benchmark，同时保留 CPU baseline。
-- 增加梯度累积、数据加载 worker 和更长训练实验。
-- 扩展 CI 到更多 PyTorch/Python 组合，同时保留当前跨平台最小矩阵。
+**v1.0 Roadmap 已完成。** Stage 1–21 已覆盖模型、训练、exact resume、benchmark、KV cached inference、多请求 serving、HTTP/SSE、paged KV、APC、chunked prefill、preemption、lazy reservation、真实 runtime、统一 CLI、Project Doctor 和 release closure。后续工作不再作为“补完 v1.0”的连续 Stage，而应作为带独立设计、测试、claim policy 和 Evidence 的 post-v1 研究主题。
+
+优先候选：
+
+1. BPE/SentencePiece 与 tokenizer/checkpoint version identity；
+2. partial-block prefix sharing 与 copy-on-write；
+3. KV swap/offload 与多级 cache；
+4. speculative decoding 与 draft/target RNG、acceptance、rollback 合同；
+5. CPU vectorized 或 CUDA fused kernels，同时保留 CPU reference；
+6. quantization、mixed precision 和更大模型/硬件矩阵；
+7. adaptive/SLO scheduling、认证、限流和多租户策略；
+8. 分布式训练与分布式 serving。
+
+任何 post-v1 性能工作都必须继续区分结构性工作减少、描述性 timing 和 strict wall-clock verdict。
 
 ## Resume
 
 中文简历描述：
 
-- 从零实现字符级 GPT，包括自定义 LayerNorm、因果多头自注意力、MLP、残差
-  Transformer Block、交叉熵训练与 temperature/top-k 自回归采样。
-- 设计 checkpoint v2 精确恢复系统，原子保存模型、AdamW、完整配置、数据 SHA-256、
-  completed step 及全部全局/批处理/采样 RNG，恢复前严格校验实验身份。
-- 构建 CPU 性能工程链路，使用重复 benchmark、吞吐/CV/RSS 指标与 PyTorch Profiler
-  scope 定位数据、前反向和优化器阶段开销。
-- 实现显式 KV cache、prompt prefill 和增量 decode，在 learned-position 窗口溢出时
-  re-prefill，并以 fresh-process inference benchmark 验证数值与采样等价。
-- 在 Python 3.11–3.14 下执行 Ruff `ALL`、basedpyright `all` 和严格 pytest 门禁，并在
-  Windows/Linux CI 中验证可移植性。
+- 从零实现字符级 GPT，包括自定义 LayerNorm、因果多头自注意力、MLP、残差 Transformer Block、交叉熵训练与 temperature/top-k 自回归采样。
+- 设计 checkpoint v2 精确恢复系统，原子保存模型、AdamW、解析配置、数据 SHA-256、completed step 及全局/批处理/采样 RNG，并验证中断恢复与连续训练轨迹一致。
+- 构建 fresh-process CPU Benchmark v2 与 PyTorch Profiler 链路，保存环境、raw replicate、吞吐/CV/RSS 和独立 strict comparison policy，避免把不稳定 timing 误报为提速。
+- 将推理从单请求 KV prefill/decode 扩展到多请求状态机、continuous batching、HTTP/SSE、paged KV、APC、chunked prefill、whole-request preemption 和 lazy reservation。
+- 建立 Stage 7A–21 hash-bound Evidence、deterministic runtime manifest、统一 `minigpt` CLI、Project Doctor 与 wheel/sdist fresh-install release validation。
+- 在 Python 3.11–3.14 下执行 Ruff `ALL`、basedpyright `all`、严格 pytest 和 Windows/Linux CI，显式验证 JSON/YAML/tensor/checkpoint/allocator/serving 边界。
 
 English resume bullets:
 
-- Implemented a character-level GPT from first principles in PyTorch, including custom
-  normalization, causal multi-head attention, feed-forward blocks, autoregressive loss, and
-  temperature/top-k sampling.
-- Built versioned exact-resume checkpointing for model, AdamW, resolved configuration, SHA-256
-  dataset identity, completed step, and global/batcher/sample RNG states with atomic replacement.
-- Created a repeatable CPU performance workflow with warmups, repeated measurements,
-  throughput/CV/RSS reporting, and PyTorch Profiler scopes for data, forward/backward, and
-  optimizer phases.
-- Enforced Python 3.11–3.14 quality gates with Ruff ALL, basedpyright all, strict pytest,
-  Windows/Linux CI, and typed validation at YAML, JSON, tensor, and checkpoint boundaries.
+- Implemented a character-level GPT from first principles in PyTorch, including custom normalization, causal multi-head attention, feed-forward blocks, autoregressive loss, and temperature/top-k sampling.
+- Built versioned exact-resume checkpointing for model, AdamW, resolved configuration, SHA-256 dataset identity, completed step, and global/batcher/sample RNG states with atomic replacement.
+- Created a fresh-process CPU benchmark and profiler workflow with raw replicates, environment identity, throughput/CV/RSS reporting, and an independent strict comparison policy.
+- Evolved inference into a deterministic multi-request serving system with continuous batching, HTTP/SSE, paged KV ownership, Automatic Prefix Caching, chunked prefill, preemption/recompute, and lazy reservation.
+- Added source-bound Stage 7A–21 evidence, a deterministic runtime manifest, an installable CLI, Project Doctor, isolated wheel/sdist validation, strict typing, and Windows/Linux CI.
 
 ## 统一 CLI 与项目自检（Stage 20）
 
