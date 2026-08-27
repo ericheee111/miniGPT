@@ -96,7 +96,7 @@
         "status": "pass"
       },
       {
-        "detail": "project-doctor: hashes/contracts valid; source 558a3a7b3e84",
+        "detail": "project-doctor: hashes/contracts valid; source 6c59758f9b05",
         "name": "evidence-stage-20",
         "status": "pass"
       },
@@ -116,7 +116,7 @@
         "status": "pass"
       },
       {
-        "detail": "version 1.0.0; wheel c0c0716923ea",
+        "detail": "version 1.0.0; wheel 465912aa5732",
         "name": "release-artifacts",
         "status": "pass"
       }
@@ -131,9 +131,9 @@
   "required_modules_present": true,
   "schema_version": 1,
   "sdist_built": true,
-  "sdist_sha256": "5c4c400c7843cd8ecdcccc52cbc2a4831d69a77d12b94cfe939b5ebc04e3e035",
+  "sdist_sha256": "d4ad8803233259f017328d99fb10fb2c9563ce7b3edc701f2ab0d7a7eeb8b50c",
   "stage": "21",
   "wheel_built": true,
   "wheel_import_isolated": true,
-  "wheel_sha256": "495a132bead95efcf71f8c138d56d00e01a8c314482e2f8a172789027d96a849"
+  "wheel_sha256": "ff1425930ccbf070faab31d2c77c4ff2952e360cb12d57d72a5fc222f4d70e0d"
 }
