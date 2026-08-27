@@ -12,4 +12,4 @@ Fresh wheel install passed: True.
 The evidence verdict is descriptive_only. This release-engineering stage
 makes no wall-clock performance improvement claim.
 
-Source commit: 558a3a7b3e84f15c371ec0769a7a50bb8ee84496.
+Source commit: 6c59758f9b05c1b55b998c91c8d5d2ab3cdf1872.
