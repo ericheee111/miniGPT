@@ -41,6 +41,8 @@
     },
     {
       "command": [
+        "python",
+        "-m",
         "basedpyright"
       ],
       "exit_code": 0,

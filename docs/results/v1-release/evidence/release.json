@@ -1,8 +1,11 @@
 {
+  "console_help_passed": true,
   "console_script_passed": true,
   "fresh_install_passed": true,
   "fresh_quick_doctor_passed": true,
+  "metadata_version_passed": true,
   "module_entrypoint_passed": true,
+  "module_help_passed": true,
   "pip_check_passed": true,
   "release_doctor_passed": true,
   "release_report": {
@@ -93,7 +96,7 @@
         "status": "pass"
       },
       {
-        "detail": "project-doctor: hashes/contracts valid; source 7dcbbc2e2670",
+        "detail": "project-doctor: hashes/contracts valid; source 558a3a7b3e84",
         "name": "evidence-stage-20",
         "status": "pass"
       },
@@ -113,7 +116,7 @@
         "status": "pass"
       },
       {
-        "detail": "version 1.0.0; wheel 00e7bc71a7fe",
+        "detail": "version 1.0.0; wheel c0c0716923ea",
         "name": "release-artifacts",
         "status": "pass"
       }
@@ -128,8 +131,9 @@
   "required_modules_present": true,
   "schema_version": 1,
   "sdist_built": true,
-  "sdist_sha256": "94c77e78263347293dca57ca6d01c6eaf589f7752299ae0d3cec0fbd991dc6c0",
+  "sdist_sha256": "5c4c400c7843cd8ecdcccc52cbc2a4831d69a77d12b94cfe939b5ebc04e3e035",
   "stage": "21",
   "wheel_built": true,
-  "wheel_sha256": "511d2af348479471a672b6061a69b6887ed189a57f7ae8f76485be8a7e885932"
+  "wheel_import_isolated": true,
+  "wheel_sha256": "495a132bead95efcf71f8c138d56d00e01a8c314482e2f8a172789027d96a849"
 }
