@@ -798,7 +798,7 @@ CI 模式会在临时目录执行 Stage 18 canonical simulation，并构造 Stag
 
 miniGPT 在 Stage 21 达到本轮计划结项点，当前项目版本为 **1.0.0**。结项含义、范围边界和维护策略见 [`docs/PROJECT_COMPLETION.md`](docs/PROJECT_COMPLETION.md)，发布前逐项验收见 [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)，版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
-Release doctor 会在 quick/CI 检查之外构建 wheel 与 sdist、检查 wheel 内容、创建不继承源码安装的 fresh environment、安装 wheel、运行 `pip check`，并同时验证 distribution metadata、wheel import 位置、module/console help/version。只有确认 `minigpt.__file__` 位于 fresh venv 后，才从该安装产物执行 quick doctor：
+Release doctor 会在 quick/CI 检查之外构建 wheel 与 sdist、检查 wheel 内容、创建不继承源码安装的 fresh environment、安装 wheel、运行 `pip check`，并同时验证 distribution metadata、wheel import 位置、module/console help/version。只有确认 `minigpt.__file__` 位于 fresh venv 后，才从该安装产物执行 quick doctor；Stage 21 capstone 还会在完整 Git 历史中验证 source ancestry，并核对 full-suite evidence 对所有 `tests/test_*.py` 的精确、无重复覆盖：
 
 ```powershell
 minigpt verify --mode release --require-clean

@@ -56,7 +56,7 @@ The Stage 21 package under `docs/results/v1-release/` binds:
 - full quality-gate result summary;
 - source commit and exact artifact membership.
 
-The capstone verifier cross-checks internal documents rather than treating the summary as self-authenticating.
+The capstone verifier cross-checks internal documents rather than treating the summary as self-authenticating. When given the repository root, it additionally requires non-shallow Git history, proves the bound source commit is an ancestor of `HEAD`, and checks that the full-suite partitions cover every committed `tests/test_*.py` exactly once.
 
 ## 6. Documentation closure
 

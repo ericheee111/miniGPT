@@ -254,7 +254,7 @@ Project doctor 通过显式 Stage 7A–20 registry 验证 package membership、S
 
 Stage 21 将项目从“功能完整的 repository”收口为“可安装、可审计、可发布的 v1.0.0”。版本由 `minigpt._version` 单一来源提供，setuptools 动态读取；generated egg-info 不提交。Release validator 构建 wheel/sdist、检查 package 和 root command modules，在不继承源码 `PYTHONPATH` 的 fresh venv 安装 wheel，并交叉验证 distribution metadata、`minigpt.__file__` 安装位置、module/console help/version、`pip check` 和 installed quick doctor。
 
-v1 capstone evidence 汇总 Stage 7A–20 registry、release doctor、Stage 18 canonical simulation、Stage 19 real runtime、checkpoint v2 exact resume、release lifecycle、全量 pytest partitions 和质量门禁。Stage 21 自身不加入 doctor registry，以避免 verifier 对自身 package 形成循环信任；capstone verifier 会检查内部命令记录、测试集合、计数、claim policy、exact membership/hash 和 source ancestry。
+v1 capstone evidence 汇总 Stage 7A–20 registry、release doctor、Stage 18 canonical simulation、Stage 19 real runtime、checkpoint v2 exact resume、release lifecycle、全量 pytest partitions 和质量门禁。Stage 21 自身不加入 doctor registry，以避免 verifier 对自身 package 形成循环信任；capstone verifier 会检查内部命令记录、测试集合、计数、claim policy、exact membership/hash，在非 shallow 仓库中验证 source ancestry，并要求每个已提交 `tests/test_*.py` 恰好被 full-suite partitions 覆盖一次。
 
 ---
 

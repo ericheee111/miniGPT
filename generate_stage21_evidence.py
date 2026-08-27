@@ -55,6 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         quality_path=cast("Path", arguments.quality_path),
         package_root=cast("Path", arguments.package_root),
         source_commit=cast("str", arguments.source_commit),
+        repository_root=root,
     )
     print(package)  # noqa: T201 - evidence-generation CLI
     return 0

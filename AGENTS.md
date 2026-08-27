@@ -189,6 +189,7 @@ Chinese commit-message style unless the user requests otherwise.
 - `src/minigpt/_version.py` is the only authored version value. Setuptools metadata is dynamic; generated `*.egg-info` must remain ignored and untracked.
 - `minigpt verify --mode release` builds one wheel and one sdist, inspects wheel membership, fresh-installs the wheel without inherited `PYTHONPATH`, proves distribution metadata and `minigpt.__file__` come from that venv, runs pip check plus module/console help/version, then runs the installed quick doctor against the reviewed checkout.
 - The default doctor registry covers Stage 7A–20. Stage 21 capstone evidence is intentionally outside its own registry to avoid self-verification. Capstone gate documents must contain non-empty command records, exact-resume/lifecycle membership, valid full-suite counts, and the four required quality gates; an `exit_code: 0` shell is not sufficient.
+- The Stage 21 capstone verifier must also run with the repository root in release generation and CI so it can require a non-shallow source ancestor and exact, non-duplicated coverage of every committed `tests/test_*.py` file.
 - `CHANGELOG.md`, `docs/PROJECT_COMPLETION.md`, and `docs/RELEASE_CHECKLIST.md` are required release contracts.
 - The annotated `v1.0.0` tag may be created only after the exact main commit passes Windows/Python 3.14 and Linux/Python 3.11 GitHub Actions.
 - Post-v1 research features require a new explicit design and evidence policy. v1.0 makes no production-scale or universal wall-clock performance claim.

@@ -220,6 +220,54 @@ def _run(command: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[st
     )
 
 
+def _verify_source_ancestry(source_commit: str, repository_root: Path) -> None:
+    shallow = _run(("git", "rev-parse", "--is-shallow-repository"), cwd=repository_root)
+    if shallow.returncode != 0:
+        _invalid("repository metadata is unavailable for capstone source verification")
+    if shallow.stdout.strip() == "true":
+        _invalid("capstone source ancestry requires a non-shallow repository")
+    source_exists = _run(
+        ("git", "cat-file", "-e", f"{source_commit}^{{commit}}"),
+        cwd=repository_root,
+    )
+    if source_exists.returncode != 0:
+        _invalid("capstone source commit is unavailable in repository history")
+    ancestor = _run(
+        ("git", "merge-base", "--is-ancestor", source_commit, "HEAD"),
+        cwd=repository_root,
+    )
+    if ancestor.returncode != 0:
+        _invalid("capstone source commit is not an ancestor of HEAD")
+
+
+def _verify_full_test_file_coverage(
+    full_tests: EvidenceDocument,
+    repository_root: Path,
+) -> None:
+    entries = _gate_entries(full_tests, "full tests")
+    observed: list[str] = []
+    for entry in entries:
+        command = entry["command"]
+        tokens = command.split() if isinstance(command, str) else cast("list[str]", command)
+        observed.extend(
+            normalized
+            for token in tokens
+            if (normalized := token.replace("\\", "/")).startswith("tests/test_")
+            and normalized.endswith(".py")
+        )
+    if len(observed) != len(set(observed)):
+        _invalid("full-test evidence contains duplicate test-file coverage")
+    expected = {
+        path.relative_to(repository_root).as_posix()
+        for path in (repository_root / "tests").glob("test_*.py")
+    }
+    if set(observed) != expected:
+        missing = sorted(expected - set(observed))
+        unexpected = sorted(set(observed) - expected)
+        detail = f"missing={missing}; unexpected={unexpected}"
+        _invalid(f"full-test evidence file coverage differs from repository: {detail}")
+
+
 def _installed_console_script() -> Path:
     scripts_root = Path(sys.executable).parent
     return scripts_root / "minigpt.exe" if sys.platform == "win32" else scripts_root / "minigpt"
@@ -439,6 +487,7 @@ def generate_stage21_evidence(  # noqa: PLR0913
     quality_path: Path,
     package_root: Path,
     source_commit: str,
+    repository_root: Path | None = None,
 ) -> Path:
     """Build and immediately verify the v1.0 capstone evidence package."""
     if not source_commit:
@@ -545,7 +594,7 @@ def generate_stage21_evidence(  # noqa: PLR0913
             },
         ),
     )
-    _ = verify_stage21_evidence(package_root)
+    _ = verify_stage21_evidence(package_root, repository_root=repository_root)
     return package_root
 
 
@@ -575,8 +624,10 @@ def _manifest_entries(entries: list[object]) -> dict[str, tuple[int, str]]:
     return expected
 
 
-def verify_stage21_evidence(  # noqa: C901, PLR0912
+def verify_stage21_evidence(  # noqa: C901, PLR0912, PLR0915
     package_root: Path,
+    *,
+    repository_root: Path | None = None,
 ) -> EvidenceDocument:
     """Verify capstone membership, hashes, internal contracts, and bounded claims."""
     manifest_path = package_root / "artifact_manifest.json"
@@ -659,12 +710,15 @@ def verify_stage21_evidence(  # noqa: C901, PLR0912
         _invalid("capstone registry boundary must be Stage 7A-20")
     if runtime.get("runtime_lazy_kv_reservation") is not True:
         _invalid("capstone runtime did not enable lazy KV reservation")
-    _verify_gate_documents(
-        _read_json(package_root / "evidence" / "exact_resume_tests.json"),
-        _read_json(package_root / "evidence" / "lifecycle_tests.json"),
-        _read_json(package_root / "evidence" / "full_tests.json"),
-        _read_json(package_root / "evidence" / "quality_gates.json"),
-    )
+    exact_resume = _read_json(package_root / "evidence" / "exact_resume_tests.json")
+    lifecycle = _read_json(package_root / "evidence" / "lifecycle_tests.json")
+    full_tests = _read_json(package_root / "evidence" / "full_tests.json")
+    quality = _read_json(package_root / "evidence" / "quality_gates.json")
+    _verify_gate_documents(exact_resume, lifecycle, full_tests, quality)
+    if repository_root is not None:
+        resolved_root = repository_root.resolve()
+        _verify_source_ancestry(source_commit, resolved_root)
+        _verify_full_test_file_coverage(full_tests, resolved_root)
     return manifest
 
 

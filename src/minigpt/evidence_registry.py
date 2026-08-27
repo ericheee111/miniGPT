@@ -150,11 +150,9 @@ def _safe_candidate(package_root: Path, relative: str) -> Path:
     return candidate
 
 
-def _stage7_external_checkpoint(relative: str, entry: EvidenceDocument) -> bool:
+def _stage7_external_checkpoint(relative: str) -> bool:
     normalized = relative.replace("\\", "/").lower()
-    explicitly_external = entry.get("committed") is False or entry.get("external") is True
-    checkpoint_path = normalized.startswith("checkpoints/") or normalized.endswith((".pt", ".pth"))
-    return explicitly_external or checkpoint_path
+    return normalized.startswith("checkpoints/") and normalized.endswith((".pt", ".pth"))
 
 
 def _stage7_declared_checkpoint(  # noqa: C901
@@ -182,9 +180,7 @@ def _stage7_declared_checkpoint(  # noqa: C901
     relative = _entry_path(document).replace("\\", "/")
     path = Path(relative)
     invalid_checkpoint = (
-        path.is_absolute()
-        or ".." in path.parts
-        or not _stage7_external_checkpoint(relative, document)
+        path.is_absolute() or ".." in path.parts or not _stage7_external_checkpoint(relative)
     )
     if invalid_checkpoint:
         reason = "Stage 7A external checkpoint path must be a repository-relative checkpoint"

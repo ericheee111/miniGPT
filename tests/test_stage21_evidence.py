@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from minigpt import __version__
 from minigpt.stage21_evidence import (
     Stage21EvidenceVerificationError,
+    _verify_full_test_file_coverage,  # pyright: ignore[reportPrivateUsage]
     _verify_portable_external_document,  # pyright: ignore[reportPrivateUsage]
     generate_stage21_evidence,
     generate_stage21_registry_evidence,
@@ -17,8 +19,6 @@ from minigpt.stage21_evidence import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from minigpt.data import JsonValue
 
 
@@ -237,6 +237,9 @@ def test_stage21_package_binds_capstone_contracts_and_exact_hashes(tmp_path: Pat
     assert readme.endswith("\n")
     assert not readme.endswith("\n\n")
 
+    with pytest.raises(Stage21EvidenceVerificationError, match="source commit is unavailable"):
+        _ = verify_stage21_evidence(package, repository_root=Path.cwd())
+
     registry_copy = package / "evidence" / "registry.json"
     _ = registry_copy.write_text(
         registry_copy.read_text(encoding="utf-8") + " ",
@@ -328,3 +331,23 @@ def test_stage21_verification_error_allows_traceback_assignment() -> None:
     error.__traceback__ = None
 
     assert error.__traceback__ is None
+
+
+def test_committed_stage21_evidence_binds_source_ancestry_and_full_test_coverage() -> None:
+    manifest = verify_stage21_evidence(
+        Path("docs/results/v1-release"),
+        repository_root=Path.cwd(),
+    )
+
+    assert manifest["stage"] == "21"
+
+
+def test_stage21_repository_context_rejects_partial_full_test_coverage(tmp_path: Path) -> None:
+    _exact_resume, _lifecycle, full_tests_path, _quality = _gate_inputs(tmp_path)
+    full_tests = cast(
+        "dict[str, object]",
+        json.loads(full_tests_path.read_text(encoding="utf-8")),
+    )
+
+    with pytest.raises(Stage21EvidenceVerificationError, match="file coverage differs"):
+        _verify_full_test_file_coverage(cast("dict[str, JsonValue]", full_tests), Path.cwd())

@@ -47,7 +47,7 @@ miniGPT 在 **Stage 21 / v1.0.0** 达到本轮项目目标，可以按计划结�
 - wheel/sdist build、内容检查和隔离 fresh install；验证 metadata、wheel import 位置及 module/console help/version；
 - quick/CI/release doctor modes；
 - Windows/Python 3.14 与 Linux/Python 3.11 CI；
-- v1 capstone evidence 和 release checklist；gate documents 必须包含真实命令、测试集合、计数与逐项成功状态。
+- v1 capstone evidence 和 release checklist；gate documents 必须包含真实命令、测试集合、计数与逐项成功状态，并在非 shallow 仓库中核对 source ancestor 和全部 `tests/test_*.py` 的精确、无重复覆盖。
 
 ## 3. 为什么现在可以停止增加 Stage
 

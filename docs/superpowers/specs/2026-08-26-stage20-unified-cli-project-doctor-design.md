@@ -61,13 +61,13 @@ Modern Stage 9–19 packages retain their own verifier functions. Stage 7A and S
 - every listed local artifact must exist and match size/hash;
 - package membership must exactly match the local manifest;
 - paths may not escape the package;
-- Stage 7A alone may declare an external/uncommitted checkpoint entry, whose absence from Git is part of the historical contract rather than a verifier failure.
+- Stage 7A alone may declare an external/uncommitted checkpoint through `sources.checkpoint`; it must be a repository-relative `checkpoints/**/*.pt` or `checkpoints/**/*.pth` path, while artifact-list entries remain package-local exact members.
 
 No generic adapter may weaken a modern stage-specific claim policy.
 
 ## 5. Git ancestry
 
-When a package exposes `source_commit`, the doctor requires it to be an ancestor of `HEAD`. A shallow repository is rejected because absence of ancestry information cannot be interpreted as success. CI therefore checks out with `fetch-depth: 0`.
+When a package exposes `source_commit`, the doctor requires it to be an ancestor of `HEAD`. Historical squash exceptions bind the exact reviewed source SHA and the exact merged `main` SHA; a different source is rejected even when it is otherwise an ancestor. A shallow repository is rejected because absence of ancestry information cannot be interpreted as success. CI therefore checks out with `fetch-depth: 0`.
 
 Legacy packages without a source commit remain explicitly reported as a legacy contract; the doctor does not invent a source identity.
 

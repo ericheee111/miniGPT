@@ -140,6 +140,40 @@ def test_stage7_legacy_manifest_rejects_traversal_external_artifact(tmp_path: Pa
         )
 
 
+def test_stage7_declared_checkpoint_rejects_non_checkpoint_external_path(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    package = root / "docs" / "results" / "reference-training"
+    package.mkdir(parents=True)
+    report = package / "README.md"
+    _ = report.write_text("reference evidence\n", encoding="utf-8", newline="\n")
+    _write_json(
+        package / "artifact_manifest.json",
+        {
+            "artifacts": [
+                {
+                    "path": "README.md",
+                    "bytes": report.stat().st_size,
+                    "sha256": _sha256(report),
+                }
+            ],
+            "sources": {
+                "checkpoint": {
+                    "path": "configs/not-a-checkpoint.yaml",
+                    "external": True,
+                    "sha256": "0" * 64,
+                }
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="repository-relative checkpoint"):
+        _ = _verify_legacy_manifest(
+            package,
+            stage="7A",
+            allow_external_checkpoint=True,
+        )
+
+
 def test_legacy_manifest_rejects_tamper_and_unlisted_files(tmp_path: Path) -> None:
     package = tmp_path / "legacy"
     package.mkdir()
@@ -237,6 +271,22 @@ def test_squash_merge_provenance_rejects_unreviewed_source() -> None:
     result = _check_ancestry(
         Path.cwd(),
         wrong_source,
+        reviewed_source_commit=reviewed,
+        merged_commit=merged,
+    )
+
+    assert result is not None
+    assert "does not match reviewed squash source" in result
+
+
+def test_squash_merge_provenance_rejects_wrong_source_even_when_it_is_an_ancestor() -> None:
+    reviewed = "f55d4dda24cdb632b05ac4ee8bee75bb4378f6a3"
+    merged = "6c46cf4ee0087333dad1e82ae7a388a8dabadfd7"
+    wrong_ancestor = "892bdde5c937b61eb413af219f56975f55ce84a8"
+
+    result = _check_ancestry(
+        Path.cwd(),
+        wrong_ancestor,
         reviewed_source_commit=reviewed,
         merged_commit=merged,
     )

@@ -35,6 +35,7 @@ All notable project changes are documented here. miniGPT follows semantic versio
 - A documented legacy Stage 7A `sources.checkpoint` exception without weakening committed artifact paths, uniqueness, membership, or hashes.
 - Fresh-wheel validation proves metadata/help/version agreement and that imports resolve inside the isolated wheel environment.
 - Capstone evidence rejects empty `exit_code: 0` shells and validates command records, focused test membership, full-suite counts, and quality-gate coverage.
+- Capstone verification binds its source to a non-shallow ancestor and requires exact, non-duplicated coverage of every committed test file; squash provenance rejects any source other than the explicitly reviewed SHA even when that SHA is otherwise an ancestor.
 - Bounded claim policy separating semantic correctness, structural work reduction, descriptive timing, and strict performance verdicts.
 
 ### Performance claim boundaries

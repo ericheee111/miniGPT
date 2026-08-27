@@ -38,6 +38,7 @@ pytest
 - [ ] Every modern evidence `source_commit` is an ancestor of release HEAD or matches an explicit reviewed squash mapping.
 - [ ] Repository history is not shallow during ancestry verification.
 - [ ] Stage 21 capstone evidence is bound to the reviewed source commit.
+- [ ] The Stage 21 verifier runs with the repository root, confirms its source is an ancestor of release HEAD, and matches every committed `tests/test_*.py` exactly once.
 - [ ] No evidence package claims unsupported wall-clock improvement.
 
 ## 4. Release artifacts

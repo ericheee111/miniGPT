@@ -179,19 +179,21 @@ def _check_ancestry(  # noqa: PLR0911
         return "git repository metadata is unavailable"
     if shallow.stdout.strip() == "true":
         return "repository is shallow; fetch full history before verifying evidence ancestry"
+    if (reviewed_source_commit is None) != (merged_commit is None):
+        return "squash provenance must declare both reviewed source and merged commit"
+    if reviewed_source_commit is not None and source_commit != reviewed_source_commit:
+        return (
+            f"source commit {source_commit} does not match reviewed squash source "
+            f"{reviewed_source_commit}"
+        )
     source_exists = _run_git(root, "cat-file", "-e", f"{source_commit}^{{commit}}")
     if source_exists.returncode != 0:
         return f"source commit {source_commit} is unavailable in the full repository history"
     completed = _run_git(root, "merge-base", "--is-ancestor", source_commit, "HEAD")
     if completed.returncode == 0:
         return None
-    if reviewed_source_commit is None or merged_commit is None:
+    if merged_commit is None:
         return f"source commit {source_commit} is not an ancestor of HEAD"
-    if source_commit != reviewed_source_commit:
-        return (
-            f"source commit {source_commit} does not match reviewed squash source "
-            f"{reviewed_source_commit}"
-        )
     merged_exists = _run_git(root, "cat-file", "-e", f"{merged_commit}^{{commit}}")
     if merged_exists.returncode != 0:
         return f"declared squash-merge commit {merged_commit} is unavailable"
