@@ -10,7 +10,7 @@
   "http_modules_loaded_by_version": [],
   "lazy_optional_imports": true,
   "module_entrypoint": true,
-  "project_version": "0.1.0",
+  "project_version": "1.0.0",
   "schema_version": 1,
   "stable_root_help": true,
   "stage": "20",

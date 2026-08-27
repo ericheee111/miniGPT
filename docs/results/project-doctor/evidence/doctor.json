@@ -3,12 +3,12 @@
   "ci_report": {
     "checks": [
       {
-        "detail": "source and installed metadata equal 0.1.0",
+        "detail": "source and installed metadata equal 1.0.0",
         "name": "package-version",
         "status": "pass"
       },
       {
-        "detail": "README, AGENTS, and project overview cover Stage 19-20",
+        "detail": "v1.0 release documentation covers Stage 19-21",
         "name": "release-documentation",
         "status": "pass"
       },
@@ -98,14 +98,14 @@
         "status": "pass"
       },
       {
-        "detail": "python -m minigpt reports 0.1.0",
+        "detail": "python -m minigpt reports 1.0.0",
         "name": "installed-cli",
         "status": "pass"
       }
     ],
     "mode": "ci",
     "passed": true,
-    "project_version": "0.1.0",
+    "project_version": "1.0.0",
     "repository_root": ".",
     "schema_version": 1
   },
@@ -114,12 +114,12 @@
   "quick_report": {
     "checks": [
       {
-        "detail": "source and installed metadata equal 0.1.0",
+        "detail": "source and installed metadata equal 1.0.0",
         "name": "package-version",
         "status": "pass"
       },
       {
-        "detail": "README, AGENTS, and project overview cover Stage 19-20",
+        "detail": "v1.0 release documentation covers Stage 19-21",
         "name": "release-documentation",
         "status": "pass"
       },
@@ -206,7 +206,7 @@
     ],
     "mode": "quick",
     "passed": true,
-    "project_version": "0.1.0",
+    "project_version": "1.0.0",
     "repository_root": ".",
     "schema_version": 1
   },

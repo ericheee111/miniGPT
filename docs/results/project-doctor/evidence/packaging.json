@@ -1,14 +1,18 @@
 {
+  "console_help_passed": true,
   "console_script_passed": true,
   "fresh_install_passed": true,
+  "installed_metadata_version_matches": true,
   "module_entrypoint_passed": true,
-  "project_version": "0.1.0",
+  "module_help_passed": true,
+  "project_version": "1.0.0",
   "required_command_modules_present": true,
   "root_help_passed": true,
   "schema_version": 1,
   "sdist_built": true,
-  "sdist_sha256": "a601f2acda39fa2a479977b0d257cbc0b62c57134d89929a5c16ac607b7f9edc",
+  "sdist_sha256": "3a53360cb242866ba8604098ccf07669fde04d114ce3a33d8ff73dcf1729e6e1",
   "stage": "20",
   "wheel_built": true,
-  "wheel_sha256": "06ef5aa0673339979e8a16c499bcf45900ea5382847bd1d20cfca53d74e5fcea"
+  "wheel_import_isolated": true,
+  "wheel_sha256": "530d62290250797429d7e3f8f91609a2324cf2e367aba6da25d4a14a4c0cf1f7"
 }
