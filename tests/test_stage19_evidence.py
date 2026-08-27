@@ -191,3 +191,11 @@ def test_stage19_package_requires_passing_lifecycle(tmp_path: Path) -> None:
             package_root=tmp_path / "package",
             source_commit="stage19-test-source",
         )
+
+
+def test_stage19_verification_error_allows_traceback_assignment() -> None:
+    error = Stage19EvidenceVerificationError("injected")
+
+    error.__traceback__ = None
+
+    assert error.__traceback__ is None

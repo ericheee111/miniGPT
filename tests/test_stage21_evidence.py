@@ -32,6 +32,88 @@ def _write(path: Path, document: dict[str, object]) -> Path:
     return path
 
 
+def _gate_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    exact_resume = _write(
+        tmp_path / "exact-resume.json",
+        {
+            "exit_code": 0,
+            "results": [
+                {
+                    "command": [
+                        "python",
+                        "-m",
+                        "pytest",
+                        "-q",
+                        "tests/test_checkpoint.py",
+                        "tests/test_trainer.py",
+                        "tests/test_training_components.py",
+                    ],
+                    "exit_code": 0,
+                }
+            ],
+        },
+    )
+    lifecycle = _write(
+        tmp_path / "lifecycle.json",
+        {
+            "exit_code": 0,
+            "results": [
+                {
+                    "command": [
+                        "python",
+                        "-m",
+                        "pytest",
+                        "-q",
+                        "tests/test_serving_runtime.py",
+                        "tests/test_serve_subprocess.py",
+                        "tests/test_cli.py",
+                        "tests/test_project_doctor.py",
+                        "tests/test_release_validation.py",
+                        "tests/test_stage19_evidence.py",
+                        "tests/test_stage20_evidence.py",
+                        "tests/test_stage21_evidence.py",
+                    ],
+                    "exit_code": 0,
+                }
+            ],
+        },
+    )
+    full_tests = _write(
+        tmp_path / "full-tests.json",
+        {
+            "exit_code": 0,
+            "passed": 1,
+            "failed": 0,
+            "skipped": 0,
+            "partitions": [
+                {
+                    "command": ["python", "-m", "pytest", "-q", "tests/test_model.py"],
+                    "exit_code": 0,
+                }
+            ],
+        },
+    )
+    quality = _write(
+        tmp_path / "quality.json",
+        {
+            "exit_code": 0,
+            "results": [
+                {"command": ["python", "-m", "pip", "check"], "exit_code": 0},
+                {
+                    "command": ["python", "-m", "ruff", "format", "--check", "src", "tests"],
+                    "exit_code": 0,
+                },
+                {
+                    "command": ["python", "-m", "ruff", "check", "src", "tests"],
+                    "exit_code": 0,
+                },
+                {"command": ["basedpyright"], "exit_code": 0},
+            ],
+        },
+    )
+    return exact_resume, lifecycle, full_tests, quality
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -102,6 +184,12 @@ def test_stage21_package_binds_capstone_contracts_and_exact_hashes(tmp_path: Pat
             "sdist_built": True,
             "fresh_install_passed": True,
             "pip_check_passed": True,
+            "metadata_version_passed": True,
+            "wheel_import_isolated": True,
+            "module_entrypoint_passed": True,
+            "module_help_passed": True,
+            "console_script_passed": True,
+            "console_help_passed": True,
             "fresh_quick_doctor_passed": True,
         },
     )
@@ -115,10 +203,7 @@ def test_stage21_package_binds_capstone_contracts_and_exact_hashes(tmp_path: Pat
             "simulation_completed_requests": 2,
         },
     )
-    exact_resume = _write(tmp_path / "exact-resume.json", {"exit_code": 0})
-    lifecycle = _write(tmp_path / "lifecycle.json", {"exit_code": 0})
-    full_tests = _write(tmp_path / "full-tests.json", {"exit_code": 0})
-    quality = _write(tmp_path / "quality.json", {"exit_code": 0})
+    exact_resume, lifecycle, full_tests, quality = _gate_inputs(tmp_path)
 
     package = generate_stage21_evidence(
         version_path=version,
@@ -189,6 +274,12 @@ def test_stage21_verifier_rejects_unsupported_release_claim(tmp_path: Path) -> N
             "sdist_built": True,
             "fresh_install_passed": True,
             "pip_check_passed": True,
+            "metadata_version_passed": True,
+            "wheel_import_isolated": True,
+            "module_entrypoint_passed": True,
+            "module_help_passed": True,
+            "console_script_passed": True,
+            "console_help_passed": True,
             "fresh_quick_doctor_passed": True,
         },
     )
@@ -202,10 +293,7 @@ def test_stage21_verifier_rejects_unsupported_release_claim(tmp_path: Path) -> N
             "simulation_completed_requests": 2,
         },
     )
-    exact_resume = _write(tmp_path / "exact-resume.json", {"exit_code": 0})
-    lifecycle = _write(tmp_path / "lifecycle.json", {"exit_code": 0})
-    full_tests = _write(tmp_path / "full-tests.json", {"exit_code": 0})
-    quality = _write(tmp_path / "quality.json", {"exit_code": 0})
+    exact_resume, lifecycle, full_tests, quality = _gate_inputs(tmp_path)
     package = generate_stage21_evidence(
         version_path=version,
         registry_path=registry,
@@ -232,3 +320,11 @@ def test_stage21_verifier_rejects_unsupported_release_claim(tmp_path: Path) -> N
 
     with pytest.raises(Stage21EvidenceVerificationError, match=r"hash mismatch|unsupported"):
         _ = verify_stage21_evidence(package)
+
+
+def test_stage21_verification_error_allows_traceback_assignment() -> None:
+    error = Stage21EvidenceVerificationError("injected")
+
+    error.__traceback__ = None
+
+    assert error.__traceback__ is None

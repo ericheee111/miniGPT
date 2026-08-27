@@ -249,9 +249,16 @@ Stage 20 提供 `minigpt` / `python -m minigpt` 单一安装入口，并保持�
 
 Project doctor 通过显式 Stage 7A–20 registry 验证 package membership、SHA-256、stage-specific contract 和 source provenance。对历史 squash merge，registry 必须显式记录 reviewed source SHA 与进入 `main` 的 merge SHA；`quick` 模式检查静态 release contracts，`ci` 模式还执行 Stage 18 canonical simulation、Stage 19 real runtime smoke 和 installed CLI subprocess。输出 JSON 固定使用相对 repository identity，不记录机器路径或 timing。
 
+
+### 4.18 v1.0 Release Closure（Stage 21）
+
+Stage 21 将项目从“功能完整的 repository”收口为“可安装、可审计、可发布的 v1.0.0”。版本由 `minigpt._version` 单一来源提供，setuptools 动态读取；generated egg-info 不提交。Release validator 构建 wheel/sdist、检查 package 和 root command modules，在不继承源码 `PYTHONPATH` 的 fresh venv 安装 wheel，并交叉验证 distribution metadata、`minigpt.__file__` 安装位置、module/console help/version、`pip check` 和 installed quick doctor。
+
+v1 capstone evidence 汇总 Stage 7A–20 registry、release doctor、Stage 18 canonical simulation、Stage 19 real runtime、checkpoint v2 exact resume、release lifecycle、全量 pytest partitions 和质量门禁。Stage 21 自身不加入 doctor registry，以避免 verifier 对自身 package 形成循环信任；capstone verifier 会检查内部命令记录、测试集合、计数、claim policy、exact membership/hash 和 source ancestry。
+
 ---
 
-## 5. Stage 1–20 演进
+## 5. Stage 1–21 演进
 
 > Stage 5 以后有正式 design/plan/evidence 文档。Stage 1–4 没有同样格式的阶段规格，下面的命名依据早期 Git 提交顺序与现有代码职责归纳，不把未记录的验收数字写成事实。
 
@@ -279,7 +286,8 @@ Project doctor 通过显式 Stage 7A–20 registry 验证 package membership、S
 | 17 | KV-pressure Preemption | 实现 whole-request preemption、资源释放、无采样 recompute resume、RNG 等价和 learned-position overflow 等价；hotfix 阻止 intrinsically impossible head 误触发抢占。 |
 | 18 | Lazy KV Reservation | admission 只保护当前容量，full lifetime demand 受 bounded overcommit 管理；模型工作前 growth，growth pressure 使用 Stage 17 抢占作为 correctness fallback。 |
 | 19 | Production Serving Configuration | 将 Stage 15–18 进程级策略接入真实 HTTP runtime，集中严格验证，并原子输出可复核 runtime manifest。 |
-| 20 | Unified CLI + Project Doctor | 提供可安装命令入口、Stage 7A–20 evidence registry、provenance/config/runtime 自检和 CI release gate。 |
+| 20 | Unified CLI + Project Doctor | 提供可安装命令入口、Stage 7A–20 evidence registry、精确 source/squash provenance、config/runtime 自检和 CI gate。 |
+| 21 | v1.0 Release Closure | 单一版本源、wheel/sdist 隔离 fresh install、release doctor、结项文档、capstone evidence 与跨平台发布门禁。 |
 
 ---
 
@@ -406,6 +414,9 @@ python benchmark_inference.py --config configs/inference_benchmark_stage9.yaml
 python simulate_serving.py --config configs/serving_lazy_kv_reservation.yaml
 python serve.py --checkpoint <checkpoint> --tokenizer <tokenizer>
 python generate_stage18_evidence.py --source-commit <reviewed-commit>
+minigpt verify --mode quick
+minigpt verify --mode ci
+minigpt verify --mode release --require-clean
 ```
 
 ### 9.3 建议阅读顺序
@@ -416,8 +427,8 @@ python generate_stage18_evidence.py --source-commit <reviewed-commit>
 4. `benchmark_v2*.py`：可复核性能方法学；
 5. `serving.py`：请求状态机和调度；
 6. `paged_kv_cache.py`：资源所有权与 invariant；
-7. Stage 14–18 specs：prefix sharing、chunk budget、preemption、lazy growth；
-8. `docs/results/*/summary.json` 和 verifier：理解项目如何约束结论。
+7. Stage 14–21 specs：prefix sharing、chunk budget、preemption、lazy growth、真实 runtime、project doctor 与 release closure；
+8. `docs/results/*/summary.json`、独立 verifier 与 `docs/RELEASE_CHECKLIST.md`：理解项目如何约束结论和发布边界。
 
 ---
 
@@ -429,18 +440,4 @@ miniGPT 展示了一个小型 GPT 项目如何沿着“模型实现—可恢复�
 - 资源状态和失败恢复可由 invariant 解释；
 - 性能结论不超过 evidence 能支持的范围。
 
-截至 Stage 18，项目已经形成一个完整的 CPU reference serving lab：请求可以共享 immutable prefix blocks、分块 prefill、按实际 token work 调度、在 KV 压力下抢占并无采样重算，也可以通过 bounded overcommit 延迟保护未来 KV 容量。与此同时，legacy 路径仍保留为默认 reference，所有新能力均通过 opt-in 配置、等价测试和 hash-bound evidence 接入。这种演进方式为未来引入更高性能 kernel、COW、swap、BPE 或 GPU backend 提供了清晰而可信的基线。
-
-### 4.18 v1.0 Release Closure（Stage 21）
-
-Stage 21 将项目从“功能完整的 repository”收口为“可安装、可审计、可发布的 v1.0.0”。版本由 `minigpt._version` 单一来源提供，setuptools 动态读取；generated egg-info 不再提交。Release validator 构建 wheel/sdist、检查 package 和 root command modules、fresh-install wheel、执行 dependency check、module/console help/version，并从安装产物运行 quick doctor。
-
-v1 capstone evidence 汇总 Stage 7A–20 registry、release doctor、Stage 18 canonical simulation、Stage 19 real runtime、checkpoint v2 exact resume 和 release lifecycle。Stage 21 自身不加入 doctor registry，以避免 verifier 对自身 package 形成循环信任；其 manifest/source ancestry 由独立 capstone verifier 和 fresh checkout gate验证。
-
-### Stage 21 演进补充
-
-| Stage | 主题 | 主要交付与意义 |
-|---|---|---|
-| 21 | v1.0 Release Closure | 单一版本源、wheel/sdist fresh install、release doctor、结项文档、capstone evidence、跨平台 CI 与 annotated tag。 |
-
-至此，本轮项目不再以“继续增加 Stage”作为完成标准。Bug fix、依赖兼容和 evidence hardening 进入 patch maintenance；BPE、COW、swap、speculative decoding、量化、GPU kernel 或分布式能力必须作为 post-v1 独立研究设计。
+截至 Stage 21，项目已经形成完整的 CPU reference lab 闭环：Stage 18 完成 serving 资源策略，Stage 19 将策略接入真实 HTTP runtime，Stage 20 提供可安装 CLI 与显式 evidence/provenance 自检，Stage 21 再以隔离 wheel 安装、release doctor 和非自引用 capstone evidence 收口。legacy 路径仍保留为默认 reference，所有优化能力均通过 opt-in 配置、等价测试和 hash-bound evidence 接入。此后 bug fix、依赖兼容和 evidence hardening 进入 patch maintenance；更高性能 kernel、COW、swap、BPE、GPU 或分布式能力必须作为 post-v1 独立研究设计。

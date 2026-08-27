@@ -15,12 +15,27 @@ from typing import cast
 EvidenceDocument = dict[str, object]
 EvidenceVerifier = Callable[[Path], EvidenceDocument]
 _SHA256_HEX_LENGTH = 64
-_SQUASH_MERGED_COMMITS = {
-    "13A": "6c46cf4ee0087333dad1e82ae7a388a8dabadfd7",
-    "13B": "6c46cf4ee0087333dad1e82ae7a388a8dabadfd7",
-    "14": "93beeb453946eda9affb7cd5462185ae3910a9df",
-    "15": "e2032bdc5db1bd00809080693324f376f3376268",
-    "16": "e2032bdc5db1bd00809080693324f376f3376268",
+_SQUASH_MERGE_PROVENANCE = {
+    "13A": (
+        "f55d4dda24cdb632b05ac4ee8bee75bb4378f6a3",
+        "6c46cf4ee0087333dad1e82ae7a388a8dabadfd7",
+    ),
+    "13B": (
+        "598e90dcc405e1bdf66f37edd5da5e1838984c3a",
+        "6c46cf4ee0087333dad1e82ae7a388a8dabadfd7",
+    ),
+    "14": (
+        "b248bff1166c4d57a3268140215d8d76c6b7575e",
+        "93beeb453946eda9affb7cd5462185ae3910a9df",
+    ),
+    "15": (
+        "9ab44bef0114173ad55c7a0d3b39c7e94760e535",
+        "e2032bdc5db1bd00809080693324f376f3376268",
+    ),
+    "16": (
+        "9ab44bef0114173ad55c7a0d3b39c7e94760e535",
+        "e2032bdc5db1bd00809080693324f376f3376268",
+    ),
 }
 
 
@@ -32,6 +47,7 @@ class EvidencePackage:
     slug: str
     relative_root: Path
     verifier: EvidenceVerifier
+    reviewed_source_commit: str | None = None
     merged_commit: str | None = None
 
 
@@ -197,7 +213,7 @@ def _stage7_declared_checkpoint(  # noqa: C901
     return 1
 
 
-def _verify_legacy_manifest(  # noqa: C901
+def _verify_legacy_manifest(
     package_root: Path,
     *,
     stage: str,
@@ -214,26 +230,16 @@ def _verify_legacy_manifest(  # noqa: C901
     )
     for entry in _manifest_entries(manifest):
         raw_relative = _entry_path(entry)
-        external_checkpoint = allow_external_checkpoint and _stage7_external_checkpoint(
-            raw_relative, entry
-        )
         raw_path = Path(raw_relative)
         if raw_path.is_absolute() or ".." in raw_path.parts:
-            if external_checkpoint:
-                _ = _entry_size(entry)
-                _ = _entry_digest(entry)
-                external_entries += 1
-                continue
             reason = f"manifest artifact path must stay inside the package: {raw_relative}"
             raise ValueError(reason)
         relative = _normalize_package_path(package_root, raw_relative)
+        if relative in verified_paths:
+            reason = f"duplicate manifest artifact path: {relative}"
+            raise ValueError(reason)
         candidate = _safe_candidate(package_root, relative)
         if not candidate.is_file():
-            if external_checkpoint:
-                _ = _entry_size(entry)
-                _ = _entry_digest(entry)
-                external_entries += 1
-                continue
             reason = f"manifest artifact does not exist: {relative}"
             raise ValueError(reason)
         size = _entry_size(entry)
@@ -243,7 +249,7 @@ def _verify_legacy_manifest(  # noqa: C901
         if _sha256(candidate) != _entry_digest(entry):
             reason = f"artifact hash mismatch: {relative}"
             raise ValueError(reason)
-        verified_paths.add(candidate.relative_to(package_root.resolve()).as_posix())
+        verified_paths.add(relative)
     actual_paths = {
         item.relative_to(package_root).as_posix()
         for item in package_root.rglob("*")
@@ -355,14 +361,16 @@ def evidence_registry() -> tuple[EvidencePackage, ...]:
             verifier=_stage8_verifier,
         ),
     ]
-    packages.extend(
-        EvidencePackage(
-            stage=stage,
-            slug=slug,
-            relative_root=Path("docs/results") / slug,
-            verifier=_module_verifier(f"minigpt.{module}", function_name),
-            merged_commit=_SQUASH_MERGED_COMMITS.get(stage),
+    for stage, slug, module, function_name in modern:
+        provenance = _SQUASH_MERGE_PROVENANCE.get(stage)
+        packages.append(
+            EvidencePackage(
+                stage=stage,
+                slug=slug,
+                relative_root=Path("docs/results") / slug,
+                verifier=_module_verifier(f"minigpt.{module}", function_name),
+                reviewed_source_commit=None if provenance is None else provenance[0],
+                merged_commit=None if provenance is None else provenance[1],
+            )
         )
-        for stage, slug, module, function_name in modern
-    )
     return tuple(packages)

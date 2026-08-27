@@ -127,7 +127,7 @@ _INVALID_CONFIG_FACTORIES: tuple[tuple[str, InvalidConfigFactory], ...] = (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Stage19EvidenceVerificationError(ValueError):
     """Report invalid Stage 19 evidence membership, hashes, or claims."""
 

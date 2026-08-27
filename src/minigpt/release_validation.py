@@ -32,8 +32,12 @@ class ReleaseArtifactValidation:
     required_modules_present: bool
     fresh_install_passed: bool
     pip_check_passed: bool
+    metadata_version_passed: bool
+    wheel_import_isolated: bool
     module_entrypoint_passed: bool
+    module_help_passed: bool
     console_script_passed: bool
+    console_help_passed: bool
     quick_doctor_passed: bool
 
     def to_document(self) -> dict[str, object]:
@@ -47,8 +51,12 @@ class ReleaseArtifactValidation:
             "required_modules_present": self.required_modules_present,
             "fresh_install_passed": self.fresh_install_passed,
             "pip_check_passed": self.pip_check_passed,
+            "metadata_version_passed": self.metadata_version_passed,
+            "wheel_import_isolated": self.wheel_import_isolated,
             "module_entrypoint_passed": self.module_entrypoint_passed,
+            "module_help_passed": self.module_help_passed,
             "console_script_passed": self.console_script_passed,
+            "console_help_passed": self.console_help_passed,
             "quick_doctor_passed": self.quick_doctor_passed,
         }
 
@@ -133,6 +141,106 @@ def _console_script(venv_root: Path) -> Path:
     )
 
 
+def _validate_fresh_wheel(
+    wheel: Path,
+    *,
+    repository_root: Path,
+    temp_root: Path,
+) -> None:
+    dependency_paths = tuple(Path(item).resolve() for item in site.getsitepackages())
+    venv_root = temp_root / "venv"
+    create = _run(
+        (sys.executable, "-m", "venv", str(venv_root)),
+        cwd=repository_root,
+    )
+    _require_success(create, "fresh virtual environment creation")
+    python = _venv_python(venv_root)
+    install = _run(
+        (str(python), "-m", "pip", "install", "--no-deps", str(wheel)),
+        cwd=repository_root,
+    )
+    _require_success(install, "fresh wheel installation")
+    pip_check = _run(
+        (str(python), "-m", "pip", "check"),
+        cwd=temp_root,
+        pythonpath=dependency_paths,
+    )
+    _require_success(pip_check, "fresh pip check")
+    package_location = _run(
+        (
+            str(python),
+            "-c",
+            "import pathlib,minigpt; print(pathlib.Path(minigpt.__file__).resolve())",
+        ),
+        cwd=temp_root,
+        pythonpath=dependency_paths,
+    )
+    _require_success(package_location, "fresh installed package location")
+    installed_path = Path(package_location.stdout.strip()).resolve()
+    if not installed_path.is_relative_to(venv_root.resolve()):
+        reason = "fresh CLI imported minigpt outside the wheel installation environment"
+        raise ReleaseValidationError(reason)
+    metadata_version = _run(
+        (
+            str(python),
+            "-c",
+            "import importlib.metadata; print(importlib.metadata.version('minitrain-gpt'))",
+        ),
+        cwd=temp_root,
+        pythonpath=dependency_paths,
+    )
+    _require_success(metadata_version, "fresh distribution metadata version")
+    module_version = _run(
+        (str(python), "-m", "minigpt", "--version"),
+        cwd=temp_root,
+        pythonpath=dependency_paths,
+    )
+    _require_success(module_version, "fresh module version")
+    module_help = _run(
+        (str(python), "-m", "minigpt", "--help"),
+        cwd=temp_root,
+        pythonpath=dependency_paths,
+    )
+    _require_success(module_help, "fresh module help")
+    console = _console_script(venv_root)
+    console_version = _run(
+        (str(console), "--version"),
+        cwd=temp_root,
+        pythonpath=dependency_paths,
+    )
+    _require_success(console_version, "fresh console-script version")
+    console_help = _run(
+        (str(console), "--help"),
+        cwd=temp_root,
+        pythonpath=dependency_paths,
+    )
+    _require_success(console_help, "fresh console-script help")
+    quick_doctor = _run(
+        (
+            str(python),
+            "-m",
+            "minigpt",
+            "verify",
+            "--root",
+            str(repository_root),
+            "--mode",
+            "quick",
+        ),
+        cwd=temp_root,
+        pythonpath=dependency_paths,
+    )
+    _require_success(quick_doctor, "fresh installed quick doctor")
+    if (
+        metadata_version.stdout.strip() != __version__
+        or module_version.stdout.strip() != __version__
+        or console_version.stdout.strip() != __version__
+        or "verify" not in module_help.stdout
+        or "verify" not in console_help.stdout
+    ):
+        reason = "fresh installed CLI version/help differs from release source"
+        raise ReleaseValidationError(reason)
+
+
 def validate_release_artifacts(root: Path) -> ReleaseArtifactValidation:
     """Build wheel/sdist, inspect contents, and verify a fresh installed release."""
     resolved = root.resolve()
@@ -170,6 +278,7 @@ def validate_release_artifacts(root: Path) -> ReleaseArtifactValidation:
             "minigpt/project_doctor.py",
             "minigpt/release_validation.py",
             "minigpt/serving_runtime.py",
+            "minigpt/stage19_evidence.py",
             "minigpt/stage20_evidence.py",
             "minigpt/stage21_evidence.py",
             "prepare_data.py",
@@ -181,79 +290,7 @@ def validate_release_artifacts(root: Path) -> ReleaseArtifactValidation:
         missing = sorted(required_members - members)
         if missing:
             raise ReleaseValidationError("wheel is missing required modules: " + ", ".join(missing))
-        dependency_paths = tuple(Path(item).resolve() for item in site.getsitepackages())
-        venv_root = temp_root / "venv"
-        create = _run(
-            (sys.executable, "-m", "venv", str(venv_root)),
-            cwd=resolved,
-        )
-        _require_success(create, "fresh virtual environment creation")
-        python = _venv_python(venv_root)
-        install = _run(
-            (str(python), "-m", "pip", "install", "--no-deps", str(wheel)),
-            cwd=resolved,
-        )
-        _require_success(install, "fresh wheel installation")
-        pip_check = _run(
-            (str(python), "-m", "pip", "check"),
-            cwd=temp_root,
-            pythonpath=dependency_paths,
-        )
-        _require_success(pip_check, "fresh pip check")
-        package_location = _run(
-            (
-                str(python),
-                "-c",
-                "import pathlib,minigpt; print(pathlib.Path(minigpt.__file__).resolve())",
-            ),
-            cwd=temp_root,
-            pythonpath=dependency_paths,
-        )
-        _require_success(package_location, "fresh installed package location")
-        installed_path = Path(package_location.stdout.strip()).resolve()
-        if not installed_path.is_relative_to(venv_root.resolve()):
-            reason = "fresh CLI imported minigpt outside the wheel installation environment"
-            raise ReleaseValidationError(reason)
-        module_version = _run(
-            (str(python), "-m", "minigpt", "--version"),
-            cwd=temp_root,
-            pythonpath=dependency_paths,
-        )
-        _require_success(module_version, "fresh module version")
-        module_help = _run(
-            (str(python), "-m", "minigpt", "--help"),
-            cwd=temp_root,
-            pythonpath=dependency_paths,
-        )
-        _require_success(module_help, "fresh module help")
-        console_version = _run(
-            (str(_console_script(venv_root)), "--version"),
-            cwd=temp_root,
-            pythonpath=dependency_paths,
-        )
-        _require_success(console_version, "fresh console-script version")
-        quick_doctor = _run(
-            (
-                str(python),
-                "-m",
-                "minigpt",
-                "verify",
-                "--root",
-                str(resolved),
-                "--mode",
-                "quick",
-            ),
-            cwd=temp_root,
-            pythonpath=dependency_paths,
-        )
-        _require_success(quick_doctor, "fresh installed quick doctor")
-        if (
-            module_version.stdout.strip() != __version__
-            or console_version.stdout.strip() != __version__
-            or "verify" not in module_help.stdout
-        ):
-            reason = "fresh installed CLI version/help differs from release source"
-            raise ReleaseValidationError(reason)
+        _validate_fresh_wheel(wheel, repository_root=resolved, temp_root=temp_root)
         return ReleaseArtifactValidation(
             project_version=__version__,
             wheel_sha256=_sha256(wheel),
@@ -263,7 +300,11 @@ def validate_release_artifacts(root: Path) -> ReleaseArtifactValidation:
             required_modules_present=True,
             fresh_install_passed=True,
             pip_check_passed=True,
+            metadata_version_passed=True,
+            wheel_import_isolated=True,
             module_entrypoint_passed=True,
+            module_help_passed=True,
             console_script_passed=True,
+            console_help_passed=True,
             quick_doctor_passed=True,
         )

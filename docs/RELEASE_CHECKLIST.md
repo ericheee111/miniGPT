@@ -32,8 +32,10 @@ pytest
 ## 3. Evidence and ancestry
 
 - [ ] Stage 7A–20 project-doctor registry passes.
+- [ ] Stage 7A external checkpoint is declared only through `sources.checkpoint`; artifact paths are local, unique, exact members.
 - [ ] Stage 17–21 package verifiers pass exact membership and SHA-256 checks.
-- [ ] Every modern evidence `source_commit` is an ancestor of release HEAD.
+- [ ] Historical squash exceptions bind the exact reviewed source SHA to the merged `main` SHA.
+- [ ] Every modern evidence `source_commit` is an ancestor of release HEAD or matches an explicit reviewed squash mapping.
 - [ ] Repository history is not shallow during ancestry verification.
 - [ ] Stage 21 capstone evidence is bound to the reviewed source commit.
 - [ ] No evidence package claims unsupported wall-clock improvement.
@@ -46,7 +48,8 @@ minigpt verify --mode release --require-clean
 
 - [ ] Exactly one wheel and one sdist build from a clean checkout.
 - [ ] Wheel contains package modules and supported root command modules.
-- [ ] Fresh wheel installation succeeds.
+- [ ] Fresh wheel installation succeeds with inherited `PYTHONPATH` removed.
+- [ ] Fresh `minigpt.__file__` resolves inside the wheel venv and distribution metadata equals `1.0.0`.
 - [ ] Fresh `pip check` succeeds using the provisioned dependency environment.
 - [ ] Fresh module and console-script help/version succeed.
 - [ ] Fresh installed quick doctor succeeds against the release checkout.

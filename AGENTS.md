@@ -144,10 +144,11 @@ dataset remain gitignored.
   must remain lazy and must not import FastAPI/Uvicorn. Existing command parsers remain authoritative
   behind typed forwarding subcommands.
 - `minigpt verify --mode quick|ci` uses an explicit Stage 7A–20 registry. Modern packages retain their
-  stage-specific verifiers; Stage 7A alone may declare its historical uncommitted checkpoint while all
-  committed package files remain exact hash-bound members. Historical squash merges require an
-  explicit registry mapping from reviewed source SHA to the merged `main` commit; ancestry checks may
-  not be silently disabled.
+  stage-specific verifiers; Stage 7A alone may declare its historical uncommitted checkpoint through
+  `sources.checkpoint`. Artifact entries are always package-local and exact hash-bound members; absolute
+  paths, parent traversal, duplicate entries, and unlisted files are rejected. Historical squash merges
+  require an exact registry mapping from reviewed source SHA to the merged `main` commit; a stage-level
+  merge SHA alone is insufficient and ancestry checks may not be silently disabled.
 - Evidence provenance requires a non-shallow repository and full commit objects. GitHub Actions must
   fetch full history before the doctor gate. Stage 20 is release hardening and makes no wall-clock
   speedup claim.
@@ -186,8 +187,8 @@ Chinese commit-message style unless the user requests otherwise.
 
 - Stage 21 is the planned v1.0.0 closure point. Do not add another model/scheduler feature as part of release hardening.
 - `src/minigpt/_version.py` is the only authored version value. Setuptools metadata is dynamic; generated `*.egg-info` must remain ignored and untracked.
-- `minigpt verify --mode release` builds one wheel and one sdist, inspects wheel membership, fresh-installs the wheel, runs pip check and CLI help/version, then runs the installed quick doctor against the reviewed checkout.
-- The default doctor registry covers Stage 7A–20. Stage 21 capstone evidence is intentionally outside its own registry to avoid self-verification.
+- `minigpt verify --mode release` builds one wheel and one sdist, inspects wheel membership, fresh-installs the wheel without inherited `PYTHONPATH`, proves distribution metadata and `minigpt.__file__` come from that venv, runs pip check plus module/console help/version, then runs the installed quick doctor against the reviewed checkout.
+- The default doctor registry covers Stage 7A–20. Stage 21 capstone evidence is intentionally outside its own registry to avoid self-verification. Capstone gate documents must contain non-empty command records, exact-resume/lifecycle membership, valid full-suite counts, and the four required quality gates; an `exit_code: 0` shell is not sufficient.
 - `CHANGELOG.md`, `docs/PROJECT_COMPLETION.md`, and `docs/RELEASE_CHECKLIST.md` are required release contracts.
 - The annotated `v1.0.0` tag may be created only after the exact main commit passes Windows/Python 3.14 and Linux/Python 3.11 GitHub Actions.
 - Post-v1 research features require a new explicit design and evidence policy. v1.0 makes no production-scale or universal wall-clock performance claim.

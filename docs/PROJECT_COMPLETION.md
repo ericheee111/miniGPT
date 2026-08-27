@@ -42,12 +42,12 @@ miniGPT 在 **Stage 21 / v1.0.0** 达到本轮项目目标，可以按计划结�
 
 - `minigpt` console script 和 `python -m minigpt`；
 - lazy help/version，不强制加载 HTTP extras；
-- Stage 7A–20 显式 evidence registry；
-- package hash、contract 和 source ancestry project doctor；
-- wheel/sdist build、内容检查和 fresh install；
+- Stage 7A–20 显式 evidence registry；Stage 7A 外部 checkpoint 只允许 `sources.checkpoint`，committed artifact 仍 exact membership/hash；
+- package hash、contract 和 source ancestry project doctor；历史 squash merge 同时绑定 reviewed source SHA 与 merged `main` SHA；
+- wheel/sdist build、内容检查和隔离 fresh install；验证 metadata、wheel import 位置及 module/console help/version；
 - quick/CI/release doctor modes；
 - Windows/Python 3.14 与 Linux/Python 3.11 CI；
-- v1 capstone evidence 和 release checklist。
+- v1 capstone evidence 和 release checklist；gate documents 必须包含真实命令、测试集合、计数与逐项成功状态。
 
 ## 3. 为什么现在可以停止增加 Stage
 

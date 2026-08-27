@@ -38,7 +38,7 @@ _SHA256_HEX_LENGTH = 64
 _KV_OVERCOMMIT_RATIO = 2.0
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Stage21EvidenceVerificationError(ValueError):
     """Report invalid v1 release evidence membership, hashes, or claims."""
 
@@ -80,6 +80,110 @@ def _write_json(path: Path, document: EvidenceDocument) -> Path:
         newline="\n",
     )
     return path
+
+
+def _gate_entries(document: EvidenceDocument, label: str) -> tuple[EvidenceDocument, ...]:
+    if document.get("exit_code") != 0:
+        _invalid(f"{label} evidence did not pass")
+    raw_entries = document.get("results", document.get("partitions"))
+    if not isinstance(raw_entries, list) or not raw_entries:
+        _invalid(f"{label} evidence must contain non-empty results or partitions")
+    entries: list[EvidenceDocument] = []
+    for raw_entry in cast("list[object]", raw_entries):
+        if not isinstance(raw_entry, dict):
+            _invalid(f"{label} evidence entries must be objects")
+        entry = cast("dict[object, object]", raw_entry)
+        if any(not isinstance(key, str) for key in entry):
+            _invalid(f"{label} evidence entries must use string keys")
+        document_entry = cast("EvidenceDocument", entry)
+        if document_entry.get("exit_code") != 0:
+            _invalid(f"{label} evidence contains a failed command")
+        command = document_entry.get("command")
+        valid_command = isinstance(command, str) and bool(command.strip())
+        if isinstance(command, list):
+            valid_command = bool(command) and all(
+                isinstance(item, str) and bool(item) for item in command
+            )
+        if not valid_command:
+            _invalid(f"{label} evidence command is missing or malformed")
+        entries.append(document_entry)
+    return tuple(entries)
+
+
+def _gate_command_text(entries: tuple[EvidenceDocument, ...]) -> str:
+    commands: list[str] = []
+    for entry in entries:
+        command = entry["command"]
+        if isinstance(command, str):
+            commands.append(command)
+        else:
+            commands.append(" ".join(cast("list[str]", command)))
+    return "\n".join(commands).replace("\\", "/")
+
+
+def _verify_gate_documents(
+    exact_resume: EvidenceDocument,
+    lifecycle: EvidenceDocument,
+    full_tests: EvidenceDocument,
+    quality: EvidenceDocument,
+) -> None:
+    exact_entries = _gate_entries(exact_resume, "exact resume")
+    lifecycle_entries = _gate_entries(lifecycle, "lifecycle")
+    full_entries = _gate_entries(full_tests, "full tests")
+    quality_entries = _gate_entries(quality, "quality gates")
+
+    passed = full_tests.get("passed")
+    failed = full_tests.get("failed")
+    skipped = full_tests.get("skipped")
+    if (
+        isinstance(passed, bool)
+        or not isinstance(passed, int)
+        or passed <= 0
+        or isinstance(failed, bool)
+        or not isinstance(failed, int)
+        or failed != 0
+        or isinstance(skipped, bool)
+        or not isinstance(skipped, int)
+        or skipped < 0
+    ):
+        _invalid("full-test evidence counts are invalid")
+
+    exact_text = _gate_command_text(exact_entries)
+    for required in (
+        "tests/test_checkpoint.py",
+        "tests/test_trainer.py",
+        "tests/test_training_components.py",
+    ):
+        if required not in exact_text:
+            _invalid(f"exact-resume evidence omitted {required}")
+
+    lifecycle_text = _gate_command_text(lifecycle_entries)
+    for required in (
+        "tests/test_serving_runtime.py",
+        "tests/test_serve_subprocess.py",
+        "tests/test_cli.py",
+        "tests/test_project_doctor.py",
+        "tests/test_release_validation.py",
+        "tests/test_stage19_evidence.py",
+        "tests/test_stage20_evidence.py",
+        "tests/test_stage21_evidence.py",
+    ):
+        if required not in lifecycle_text:
+            _invalid(f"lifecycle evidence omitted {required}")
+
+    full_text = _gate_command_text(full_entries)
+    if "pytest" not in full_text or "tests/" not in full_text:
+        _invalid("full-test evidence does not describe pytest test-file partitions")
+
+    quality_text = _gate_command_text(quality_entries)
+    for required in (
+        "pip check",
+        "ruff format --check src tests",
+        "ruff check src tests",
+        "basedpyright",
+    ):
+        if required not in quality_text:
+            _invalid(f"quality-gate evidence omitted {required}")
 
 
 def _absolute_command_token(token: str) -> bool:
@@ -231,8 +335,12 @@ def generate_stage21_release_evidence(root: Path, output_path: Path) -> Path:
             "required_modules_present": artifacts.required_modules_present,
             "fresh_install_passed": artifacts.fresh_install_passed,
             "pip_check_passed": artifacts.pip_check_passed,
+            "metadata_version_passed": artifacts.metadata_version_passed,
+            "wheel_import_isolated": artifacts.wheel_import_isolated,
             "module_entrypoint_passed": artifacts.module_entrypoint_passed,
+            "module_help_passed": artifacts.module_help_passed,
             "console_script_passed": artifacts.console_script_passed,
+            "console_help_passed": artifacts.console_help_passed,
             "fresh_quick_doctor_passed": artifacts.quick_doctor_passed,
             "release_report": cast("JsonValue", report.to_document()),
         },
@@ -373,6 +481,10 @@ def generate_stage21_evidence(  # noqa: PLR0913
         release.get("sdist_built"),
         release.get("fresh_install_passed"),
         release.get("pip_check_passed"),
+        release.get("metadata_version_passed"),
+        release.get("wheel_import_isolated"),
+        release.get("module_help_passed"),
+        release.get("console_help_passed"),
         release.get("fresh_quick_doctor_passed"),
         runtime.get("stage18_canonical_simulation_passed"),
         runtime.get("stage19_real_runtime_passed"),
@@ -380,14 +492,7 @@ def generate_stage21_evidence(  # noqa: PLR0913
     )
     if not all(value is True for value in required):
         _invalid("v1 capstone evidence contracts did not all pass")
-    for name, document in (
-        ("exact resume", exact_resume),
-        ("lifecycle", lifecycle),
-        ("full tests", full_tests),
-        ("quality gates", quality),
-    ):
-        if document.get("exit_code") != 0:
-            _invalid(f"{name} evidence did not pass")
+    _verify_gate_documents(exact_resume, lifecycle, full_tests, quality)
     summary: EvidenceDocument = {
         "schema_version": 1,
         "stage": STAGE_NAME,
@@ -534,18 +639,32 @@ def verify_stage21_evidence(  # noqa: C901, PLR0912
     runtime = _read_json(package_root / "evidence" / "runtime.json")
     if any(document.get("release_version") != _RELEASE_VERSION for document in (version, release)):
         _invalid("release version differs across internal evidence")
+    release_contracts = (
+        "release_doctor_passed",
+        "wheel_built",
+        "sdist_built",
+        "fresh_install_passed",
+        "pip_check_passed",
+        "metadata_version_passed",
+        "wheel_import_isolated",
+        "module_entrypoint_passed",
+        "module_help_passed",
+        "console_script_passed",
+        "console_help_passed",
+        "fresh_quick_doctor_passed",
+    )
+    if any(release.get(key) is not True for key in release_contracts):
+        _invalid("release artifact contract did not pass")
     if registry.get("registry_first_stage") != "7A" or registry.get("registry_last_stage") != "20":
         _invalid("capstone registry boundary must be Stage 7A-20")
     if runtime.get("runtime_lazy_kv_reservation") is not True:
         _invalid("capstone runtime did not enable lazy KV reservation")
-    for name in (
-        "exact_resume_tests.json",
-        "lifecycle_tests.json",
-        "full_tests.json",
-        "quality_gates.json",
-    ):
-        if _read_json(package_root / "evidence" / name).get("exit_code") != 0:
-            _invalid(f"committed {name} did not pass")
+    _verify_gate_documents(
+        _read_json(package_root / "evidence" / "exact_resume_tests.json"),
+        _read_json(package_root / "evidence" / "lifecycle_tests.json"),
+        _read_json(package_root / "evidence" / "full_tests.json"),
+        _read_json(package_root / "evidence" / "quality_gates.json"),
+    )
     return manifest
 
 

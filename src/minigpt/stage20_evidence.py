@@ -29,7 +29,7 @@ STAGE_NAME = "20"
 _SHA256_HEX_LENGTH = 64
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Stage20EvidenceVerificationError(ValueError):
     """Report invalid Stage 20 evidence membership, hashes, or claims."""
 
@@ -73,6 +73,30 @@ def _write_json(path: Path, document: EvidenceDocument) -> Path:
     return path
 
 
+def _verify_lifecycle_document(document: EvidenceDocument) -> None:
+    if document.get("exit_code") != 0:
+        _invalid("Stage 20 lifecycle tests did not pass")
+    command = document.get("command")
+    if isinstance(command, str):
+        command_text = command
+    elif isinstance(command, list) and command and all(isinstance(item, str) for item in command):
+        command_text = " ".join(cast("list[str]", command))
+    else:
+        _invalid("Stage 20 lifecycle command is missing or malformed")
+    command_text = command_text.replace("\\", "/")
+    for required in (
+        "tests/test_cli.py",
+        "tests/test_project_doctor.py",
+        "tests/test_serving_runtime.py",
+        "tests/test_serve_subprocess.py",
+        "tests/test_stage19_evidence.py",
+        "tests/test_http_server.py",
+        "tests/test_engine_runner.py",
+    ):
+        if required not in command_text:
+            _invalid(f"Stage 20 lifecycle evidence omitted {required}")
+
+
 def _run(
     command: Sequence[str],
     *,
@@ -80,6 +104,7 @@ def _run(
     environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     resolved_environment = os.environ.copy()
+    _ = resolved_environment.pop("PYTHONPATH", None)
     if environment is not None:
         resolved_environment.update(environment)
     resolved_environment["PYTHONUTF8"] = "1"
@@ -221,20 +246,44 @@ def generate_stage20_packaging_evidence(root: Path, output_path: Path) -> Path:
         fresh_python = _fresh_venv_python(venv_root)
         install_result = _run(
             (str(fresh_python), "-m", "pip", "install", "--no-deps", str(wheel)),
-            cwd=root,
+            cwd=temp_root,
         )
-        version_result = _run((str(fresh_python), "-m", "minigpt", "--version"), cwd=root)
-        help_result = _run((str(fresh_python), "-m", "minigpt", "--help"), cwd=root)
+        location_result = _run(
+            (
+                str(fresh_python),
+                "-c",
+                "import pathlib,minigpt; print(pathlib.Path(minigpt.__file__).resolve())",
+            ),
+            cwd=temp_root,
+        )
+        metadata_result = _run(
+            (
+                str(fresh_python),
+                "-c",
+                ("import importlib.metadata; print(importlib.metadata.version('minitrain-gpt'))"),
+            ),
+            cwd=temp_root,
+        )
+        version_result = _run((str(fresh_python), "-m", "minigpt", "--version"), cwd=temp_root)
+        help_result = _run((str(fresh_python), "-m", "minigpt", "--help"), cwd=temp_root)
         console = _fresh_console_script(venv_root)
-        console_result = _run((str(console), "--version"), cwd=root)
+        console_result = _run((str(console), "--version"), cwd=temp_root)
+        console_help_result = _run((str(console), "--help"), cwd=temp_root)
+        location = Path(location_result.stdout.strip()).resolve()
         if not (
             install_result.returncode == 0
+            and location_result.returncode == 0
+            and location.is_relative_to(venv_root.resolve())
+            and metadata_result.returncode == 0
+            and metadata_result.stdout.strip() == __version__
             and version_result.returncode == 0
             and version_result.stdout.strip() == __version__
             and help_result.returncode == 0
             and "verify" in help_result.stdout
             and console_result.returncode == 0
             and console_result.stdout.strip() == __version__
+            and console_help_result.returncode == 0
+            and "verify" in console_help_result.stdout
         ):
             _invalid("fresh wheel CLI installation contract did not pass")
         document = cast(
@@ -246,8 +295,12 @@ def generate_stage20_packaging_evidence(root: Path, output_path: Path) -> Path:
                 "wheel_built": True,
                 "sdist_built": True,
                 "fresh_install_passed": True,
+                "wheel_import_isolated": True,
+                "installed_metadata_version_matches": True,
                 "module_entrypoint_passed": True,
+                "module_help_passed": True,
                 "console_script_passed": True,
+                "console_help_passed": True,
                 "root_help_passed": True,
                 "wheel_sha256": _sha256(wheel),
                 "sdist_sha256": _sha256(sdists[0]),
@@ -299,13 +352,16 @@ def generate_stage20_evidence(  # noqa: PLR0913
         packaging.get("wheel_built"),
         packaging.get("sdist_built"),
         packaging.get("fresh_install_passed"),
+        packaging.get("wheel_import_isolated"),
+        packaging.get("installed_metadata_version_matches"),
+        packaging.get("module_help_passed"),
         packaging.get("console_script_passed"),
+        packaging.get("console_help_passed"),
         packaging.get("required_command_modules_present"),
     )
     if not all(value is True for value in required):
         _invalid("Stage 20 evidence contracts did not all pass")
-    if lifecycle.get("exit_code") != 0:
-        _invalid("Stage 20 lifecycle tests did not pass")
+    _verify_lifecycle_document(lifecycle)
     summary: EvidenceDocument = {
         "schema_version": 1,
         "stage": STAGE_NAME,
@@ -437,9 +493,16 @@ def verify_stage20_evidence(  # noqa: C901, PLR0912
     packaging = _read_json(package_root / "evidence" / "packaging.json")
     if packaging.get("project_version") != summary.get("project_version"):
         _invalid("packaging project version differs from summary")
+    packaging_contracts = (
+        "wheel_import_isolated",
+        "installed_metadata_version_matches",
+        "module_help_passed",
+        "console_help_passed",
+    )
+    if any(packaging.get(key) is not True for key in packaging_contracts):
+        _invalid("packaging isolation/help contract did not pass")
     lifecycle = _read_json(package_root / "evidence" / "lifecycle_tests.json")
-    if lifecycle.get("exit_code") != 0:
-        _invalid("committed lifecycle tests did not pass")
+    _verify_lifecycle_document(lifecycle)
     return manifest
 
 

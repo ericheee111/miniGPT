@@ -171,6 +171,7 @@ def _check_ancestry(  # noqa: PLR0911
     root: Path,
     source_commit: str,
     *,
+    reviewed_source_commit: str | None = None,
     merged_commit: str | None = None,
 ) -> str | None:
     shallow = _run_git(root, "rev-parse", "--is-shallow-repository")
@@ -184,8 +185,13 @@ def _check_ancestry(  # noqa: PLR0911
     completed = _run_git(root, "merge-base", "--is-ancestor", source_commit, "HEAD")
     if completed.returncode == 0:
         return None
-    if merged_commit is None:
+    if reviewed_source_commit is None or merged_commit is None:
         return f"source commit {source_commit} is not an ancestor of HEAD"
+    if source_commit != reviewed_source_commit:
+        return (
+            f"source commit {source_commit} does not match reviewed squash source "
+            f"{reviewed_source_commit}"
+        )
     merged_exists = _run_git(root, "cat-file", "-e", f"{merged_commit}^{{commit}}")
     if merged_exists.returncode != 0:
         return f"declared squash-merge commit {merged_commit} is unavailable"
@@ -207,6 +213,7 @@ def _check_evidence_package(root: Path, package: EvidencePackage) -> CheckResult
             ancestry_error = _check_ancestry(
                 root,
                 source,
+                reviewed_source_commit=package.reviewed_source_commit,
                 merged_commit=package.merged_commit,
             )
             if ancestry_error is not None:
@@ -319,8 +326,12 @@ def _check_release_artifacts(root: Path) -> CheckResult:
         artifacts.required_modules_present,
         artifacts.fresh_install_passed,
         artifacts.pip_check_passed,
+        artifacts.metadata_version_passed,
+        artifacts.wheel_import_isolated,
         artifacts.module_entrypoint_passed,
+        artifacts.module_help_passed,
         artifacts.console_script_passed,
+        artifacts.console_help_passed,
         artifacts.quick_doctor_passed,
     )
     if artifacts.project_version != __version__ or not all(required):

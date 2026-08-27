@@ -72,8 +72,45 @@ def test_registry_is_explicit_and_complete_through_stage20() -> None:
 def test_stage7_legacy_contract_allows_only_declared_external_checkpoint(
     tmp_path: Path,
 ) -> None:
-    package = tmp_path / "reference-training"
-    package.mkdir()
+    root = tmp_path / "repo"
+    package = root / "docs" / "results" / "reference-training"
+    package.mkdir(parents=True)
+    report = package / "README.md"
+    _ = report.write_text("reference evidence\n", encoding="utf-8", newline="\n")
+    _write_json(
+        package / "artifact_manifest.json",
+        {
+            "artifacts": [
+                {
+                    "path": "docs/results/reference-training/README.md",
+                    "bytes": report.stat().st_size,
+                    "sha256": _sha256(report),
+                }
+            ],
+            "sources": {
+                "checkpoint": {
+                    "path": "checkpoints/reference.pt",
+                    "bytes": 123,
+                    "sha256": "0" * 64,
+                }
+            },
+        },
+    )
+
+    result = _verify_legacy_manifest(
+        package,
+        stage="7A",
+        allow_external_checkpoint=True,
+    )
+
+    assert result["verified_artifacts"] == 1
+    assert result["external_artifacts"] == 1
+
+
+def test_stage7_legacy_manifest_rejects_traversal_external_artifact(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    package = root / "docs" / "results" / "reference-training"
+    package.mkdir(parents=True)
     report = package / "README.md"
     _ = report.write_text("reference evidence\n", encoding="utf-8", newline="\n")
     _write_json(
@@ -86,7 +123,7 @@ def test_stage7_legacy_contract_allows_only_declared_external_checkpoint(
                     "sha256": _sha256(report),
                 },
                 {
-                    "path": "../../checkpoints/reference.pt",
+                    "path": "../../escape.pt",
                     "external": True,
                     "bytes": 123,
                     "sha256": "0" * 64,
@@ -95,14 +132,12 @@ def test_stage7_legacy_contract_allows_only_declared_external_checkpoint(
         },
     )
 
-    result = _verify_legacy_manifest(
-        package,
-        stage="7A",
-        allow_external_checkpoint=True,
-    )
-
-    assert result["verified_artifacts"] == 1
-    assert result["external_artifacts"] == 1
+    with pytest.raises(ValueError, match="must stay inside"):
+        _ = _verify_legacy_manifest(
+            package,
+            stage="7A",
+            allow_external_checkpoint=True,
+        )
 
 
 def test_legacy_manifest_rejects_tamper_and_unlisted_files(tmp_path: Path) -> None:
@@ -135,6 +170,27 @@ def test_legacy_manifest_rejects_tamper_and_unlisted_files(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="membership differs"):
         _ = _verify_legacy_manifest(package, stage="8", allow_external_checkpoint=False)
 
+    _ = (package / "unlisted.txt").unlink()
+    _write_json(
+        package / "artifact_manifest.json",
+        {
+            "files": [
+                {
+                    "relative_path": "result.json",
+                    "size_bytes": artifact.stat().st_size,
+                    "sha256": _sha256(artifact),
+                },
+                {
+                    "relative_path": "result.json",
+                    "size_bytes": artifact.stat().st_size,
+                    "sha256": _sha256(artifact),
+                },
+            ]
+        },
+    )
+    with pytest.raises(ValueError, match="duplicate manifest artifact"):
+        _ = _verify_legacy_manifest(package, stage="8", allow_external_checkpoint=False)
+
 
 def test_ancestry_rejects_shallow_or_non_ancestor_repository(
     monkeypatch: pytest.MonkeyPatch,
@@ -162,7 +218,31 @@ def test_explicit_squash_merge_provenance_allows_review_source() -> None:
     source = "f55d4dda24cdb632b05ac4ee8bee75bb4378f6a3"
     merged = "6c46cf4ee0087333dad1e82ae7a388a8dabadfd7"
 
-    assert _check_ancestry(Path.cwd(), source, merged_commit=merged) is None
+    assert (
+        _check_ancestry(
+            Path.cwd(),
+            source,
+            reviewed_source_commit=source,
+            merged_commit=merged,
+        )
+        is None
+    )
+
+
+def test_squash_merge_provenance_rejects_unreviewed_source() -> None:
+    reviewed = "f55d4dda24cdb632b05ac4ee8bee75bb4378f6a3"
+    merged = "6c46cf4ee0087333dad1e82ae7a388a8dabadfd7"
+    wrong_source = "598e90dcc405e1bdf66f37edd5da5e1838984c3a"
+
+    result = _check_ancestry(
+        Path.cwd(),
+        wrong_source,
+        reviewed_source_commit=reviewed,
+        merged_commit=merged,
+    )
+
+    assert result is not None
+    assert "does not match reviewed squash source" in result
 
 
 def test_version_drift_is_a_hard_failure(monkeypatch: pytest.MonkeyPatch) -> None:

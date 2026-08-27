@@ -29,6 +29,28 @@ def _write(path: Path, document: dict[str, object]) -> Path:
     return path
 
 
+def _lifecycle(path: Path) -> Path:
+    return _write(
+        path,
+        {
+            "exit_code": 0,
+            "command": [
+                "python",
+                "-m",
+                "pytest",
+                "-q",
+                "tests/test_cli.py",
+                "tests/test_project_doctor.py",
+                "tests/test_serving_runtime.py",
+                "tests/test_serve_subprocess.py",
+                "tests/test_stage19_evidence.py",
+                "tests/test_http_server.py",
+                "tests/test_engine_runner.py",
+            ],
+        },
+    )
+
+
 def test_stage20_cli_and_doctor_evidence_use_real_repository_contracts(tmp_path: Path) -> None:
     cli = generate_stage20_cli_evidence(tmp_path.cwd(), tmp_path / "cli.json")
     doctor = generate_stage20_doctor_evidence(tmp_path.cwd(), tmp_path / "doctor.json")
@@ -60,7 +82,11 @@ def test_stage20_packaging_builds_and_fresh_installs_cli(tmp_path: Path) -> None
     assert document["wheel_built"] is True
     assert document["sdist_built"] is True
     assert document["fresh_install_passed"] is True
+    assert document["wheel_import_isolated"] is True
+    assert document["installed_metadata_version_matches"] is True
+    assert document["module_help_passed"] is True
     assert document["console_script_passed"] is True
+    assert document["console_help_passed"] is True
 
 
 def test_stage20_package_binds_contracts_and_exact_hashes(tmp_path: Path) -> None:
@@ -92,11 +118,15 @@ def test_stage20_package_binds_contracts_and_exact_hashes(tmp_path: Path) -> Non
             "wheel_built": True,
             "sdist_built": True,
             "fresh_install_passed": True,
+            "wheel_import_isolated": True,
+            "installed_metadata_version_matches": True,
+            "module_help_passed": True,
             "console_script_passed": True,
+            "console_help_passed": True,
             "required_command_modules_present": True,
         },
     )
-    lifecycle = _write(tmp_path / "lifecycle.json", {"exit_code": 0})
+    lifecycle = _lifecycle(tmp_path / "lifecycle.json")
 
     package = generate_stage20_evidence(
         cli_path=cli,
@@ -161,11 +191,15 @@ def test_stage20_verifier_rejects_performance_claim(tmp_path: Path) -> None:
             "wheel_built": True,
             "sdist_built": True,
             "fresh_install_passed": True,
+            "wheel_import_isolated": True,
+            "installed_metadata_version_matches": True,
+            "module_help_passed": True,
             "console_script_passed": True,
+            "console_help_passed": True,
             "required_command_modules_present": True,
         },
     )
-    lifecycle = _write(tmp_path / "lifecycle.json", {"exit_code": 0})
+    lifecycle = _lifecycle(tmp_path / "lifecycle.json")
     package = generate_stage20_evidence(
         cli_path=cli,
         doctor_path=doctor,
@@ -188,3 +222,11 @@ def test_stage20_verifier_rejects_performance_claim(tmp_path: Path) -> None:
 
     with pytest.raises(Stage20EvidenceVerificationError, match=r"hash mismatch|must not claim"):
         _ = verify_stage20_evidence(package)
+
+
+def test_stage20_verification_error_allows_traceback_assignment() -> None:
+    error = Stage20EvidenceVerificationError("injected")
+
+    error.__traceback__ = None
+
+    assert error.__traceback__ is None

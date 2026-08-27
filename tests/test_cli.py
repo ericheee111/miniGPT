@@ -6,12 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+
+import pytest
 
 from minigpt import __version__, cli
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def test_root_help_lists_stable_commands(capsys: pytest.CaptureFixture[str]) -> None:
@@ -157,3 +155,19 @@ def test_command_module_contract_is_callable(monkeypatch: pytest.MonkeyPatch) ->
 
     assert cli.main(["generate", "--help"]) == 0
     assert observed == ["--help"]
+
+
+def test_command_runtime_error_preserves_command_failure_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def command_main(_arguments: list[str] | None = None) -> int:
+        reason = "injected command runtime failure"
+        raise RuntimeError(reason)
+
+    def load_command_module(_name: str) -> object:
+        return SimpleNamespace(main=command_main)
+
+    monkeypatch.setattr(importlib, "import_module", load_command_module)
+
+    with pytest.raises(RuntimeError, match="injected command runtime failure"):
+        _ = cli.main(["train"])

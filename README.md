@@ -785,7 +785,7 @@ minigpt verify --mode quick
 
 `python -m minigpt` 与 console script 等价。根级帮助和版本查询采用 lazy import，不要求安装 HTTP 可选依赖；只有选择 `serve` 时才加载 FastAPI、HTTPX 和 Uvicorn。
 
-Stage 19 将 Stage 15–18 的 cache/scheduler 选项接入真实 HTTP runtime，并可通过 `--runtime-manifest` 原子写出不含绝对路径和 secret 的确定性运行身份。Stage 20 的 project doctor 验证安装版本、canonical config、Stage 7A–19 evidence hash/contract、显式 squash-merge provenance 和真实 runtime wiring：
+Stage 19 将 Stage 15–18 的 cache/scheduler 选项接入真实 HTTP runtime，并可通过 `--runtime-manifest` 原子写出不含绝对路径和 secret 的确定性运行身份。Stage 20 的 project doctor 验证安装版本、canonical config、Stage 7A–20 evidence hash/contract、精确的 reviewed-source → squash-merge provenance 和真实 runtime wiring。Stage 7A 的历史外部 checkpoint 只能由 `sources.checkpoint` 声明，committed artifact 列表仍拒绝绝对路径、父目录穿越、重复项和未列出文件：
 
 ```powershell
 minigpt verify --mode quick
@@ -798,7 +798,7 @@ CI 模式会在临时目录执行 Stage 18 canonical simulation，并构造 Stag
 
 miniGPT 在 Stage 21 达到本轮计划结项点，当前项目版本为 **1.0.0**。结项含义、范围边界和维护策略见 [`docs/PROJECT_COMPLETION.md`](docs/PROJECT_COMPLETION.md)，发布前逐项验收见 [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)，版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
-Release doctor 会在 quick/CI 检查之外构建 wheel 与 sdist、检查 wheel 内容、创建 fresh environment、安装 wheel、运行 `pip check`、验证 module/console help/version，并从安装产物执行 quick doctor：
+Release doctor 会在 quick/CI 检查之外构建 wheel 与 sdist、检查 wheel 内容、创建不继承源码安装的 fresh environment、安装 wheel、运行 `pip check`，并同时验证 distribution metadata、wheel import 位置、module/console help/version。只有确认 `minigpt.__file__` 位于 fresh venv 后，才从该安装产物执行 quick doctor：
 
 ```powershell
 minigpt verify --mode release --require-clean

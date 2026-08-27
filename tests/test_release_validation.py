@@ -54,8 +54,12 @@ def test_release_artifacts_build_and_fresh_install() -> None:
     assert result.required_modules_present
     assert result.fresh_install_passed
     assert result.pip_check_passed
+    assert result.metadata_version_passed
+    assert result.wheel_import_isolated
     assert result.module_entrypoint_passed
+    assert result.module_help_passed
     assert result.console_script_passed
+    assert result.console_help_passed
     assert result.quick_doctor_passed
     assert len(result.wheel_sha256) == 64
     assert len(result.sdist_sha256) == 64
@@ -73,8 +77,12 @@ def test_release_doctor_mode_invokes_artifact_validation(
         required_modules_present=True,
         fresh_install_passed=True,
         pip_check_passed=True,
+        metadata_version_passed=True,
+        wheel_import_isolated=True,
         module_entrypoint_passed=True,
+        module_help_passed=True,
         console_script_passed=True,
+        console_help_passed=True,
         quick_doctor_passed=True,
     )
 
@@ -100,8 +108,12 @@ def test_release_report_extends_ci_contracts(monkeypatch: pytest.MonkeyPatch) ->
         required_modules_present=True,
         fresh_install_passed=True,
         pip_check_passed=True,
+        metadata_version_passed=True,
+        wheel_import_isolated=True,
         module_entrypoint_passed=True,
+        module_help_passed=True,
         console_script_passed=True,
+        console_help_passed=True,
         quick_doctor_passed=True,
     )
 

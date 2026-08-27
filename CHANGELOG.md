@@ -31,8 +31,10 @@ All notable project changes are documented here. miniGPT follows semantic versio
 - Windows/Python 3.14 and Linux/Python 3.11 quality gates.
 - Strict Ruff formatting/linting and basedpyright `all` mode.
 - Deterministic unit, integration, lifecycle, stress, HTTP subprocess, allocator, simulator, and evidence tests.
-- Explicit source-commit ancestry and exact artifact membership for modern evidence packages.
-- A documented legacy Stage 7A external-checkpoint exception without weakening committed artifact hashes.
+- Explicit source-commit ancestry and exact artifact membership for modern evidence packages; historical squash exceptions bind both the reviewed source and merged commit.
+- A documented legacy Stage 7A `sources.checkpoint` exception without weakening committed artifact paths, uniqueness, membership, or hashes.
+- Fresh-wheel validation proves metadata/help/version agreement and that imports resolve inside the isolated wheel environment.
+- Capstone evidence rejects empty `exit_code: 0` shells and validates command records, focused test membership, full-suite counts, and quality-gate coverage.
 - Bounded claim policy separating semantic correctness, structural work reduction, descriptive timing, and strict performance verdicts.
 
 ### Performance claim boundaries

@@ -89,10 +89,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         target = _load_command(spec)
-        return target(arguments)
     except (RuntimeError, TypeError) as error:
         print(str(error), file=sys.stderr)  # noqa: T201 - command-line error boundary
         return 2
+    return target(arguments)
 
 
 if __name__ == "__main__":
