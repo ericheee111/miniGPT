@@ -161,6 +161,31 @@ def test_public_site_client_uses_safe_streaming_and_bounded_offline_polling() ->
     assert "Backend offline" in app_source
 
 
+def test_public_site_css_preserves_touch_targets_and_light_theme_contrast() -> None:
+    # Given: the responsive stylesheet used by the public portfolio.
+    styles = (Path(__file__).resolve().parents[1] / "web" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+
+    # When/Then: interactive controls and link groups keep 44px touch targets.
+    for contract in (
+        ".brand {\n  display: inline-flex;\n  min-height: 44px;",
+        ".site-header nav a,\n.header-link {\n  display: inline-flex;\n  min-height: 44px;",
+        'input[type="number"] {\n  min-height: 44px;',
+        ".preset {\n  min-height: 44px;",
+        (
+            ".toggle-field {\n  display: flex;\n  grid-column: 1 / -1;\n"
+            "  gap: 0.6rem;\n  min-height: 44px;"
+        ),
+        ".evidence-grid article a {\n  display: inline-flex;\n  min-height: 44px;",
+        ".site-footer a {\n  display: inline-flex;\n  min-height: 44px;",
+    ):
+        assert contract in styles
+
+    # And: the audited light-theme subtle text color remains above 4.5:1.
+    assert "--subtle: #5b7065;" in styles
+
+
 def test_pages_workflow_uses_variable_boundary_and_main_only_push() -> None:
     # Given: the committed GitHub Pages workflow.
     workflow = (
