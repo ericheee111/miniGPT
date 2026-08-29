@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="miniGPT is a CPU-first, character-level GPT systems demo with auditable evidence."
+    >
+    <meta name="color-scheme" content="dark light">
+    <title>miniGPT Playground · CPU-first GPT Systems Demo</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./config.js" defer></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#playground">Skip to Playground</a>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="miniGPT Playground home">miniGPT<span>_</span></a>
+      <nav aria-label="Primary navigation">
+        <a href="#playground">Playground</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#privacy">Limits</a>
+      </nav>
+      <a
+        class="header-link"
+        href="https://github.com/ericheee111/miniGPT"
+        target="_blank"
+        rel="noreferrer"
+      >GitHub ↗</a>
+    </header>
+
+    <main id="top">
+      <section class="hero shell" aria-labelledby="hero-title">
+        <p class="eyebrow">Post-v1 Public Playground</p>
+        <h1 id="hero-title">miniGPT Playground</h1>
+        <p class="hero-subtitle">CPU-first GPT Systems Demo</p>
+        <p class="hero-copy">
+          A small, inspectable character-level Transformer carried from training and exact resume
+          through KV caching, multi-request scheduling, HTTP/SSE serving, and hash-bound release
+          evidence.
+        </p>
+        <div class="scope-note" role="note">
+          <strong>Text continuation, not general chat.</strong>
+          This model continues characters in a Shakespeare-like corpus. It is not a general-purpose
+          question-answering assistant or a ChatGPT replacement.
+        </div>
+        <div class="hero-actions">
+          <a class="button primary" href="#playground">Try the local model</a>
+          <a
+            class="button secondary"
+            href="https://github.com/ericheee111/miniGPT/blob/main/docs/PROJECT_OVERVIEW.md"
+            target="_blank"
+            rel="noreferrer"
+          >Read the whitepaper</a>
+        </div>
+        <dl class="hero-facts" aria-label="Project facts">
+          <div><dt>Runtime</dt><dd>PyTorch · CPU</dd></div>
+          <div><dt>Tokenizer</dt><dd>Character level</dd></div>
+          <div><dt>Release</dt><dd>v1.0.0 scope complete</dd></div>
+          <div><dt>Verification</dt><dd>Windows + Linux CI</dd></div>
+        </dl>
+      </section>
+
+      <section id="playground" class="section shell" aria-labelledby="playground-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Live inference boundary</p>
+            <h2 id="playground-title">Character continuation Playground</h2>
+          </div>
+          <div class="backend-chip offline" id="backend-chip" role="status" aria-live="polite">
+            <span aria-hidden="true"></span>
+            <strong id="backend-state">Checking backend…</strong>
+          </div>
+        </div>
+
+        <div class="playground-grid">
+          <form id="completion-form" class="card controls" novalidate>
+            <div class="field-group">
+              <label for="prompt">Prompt</label>
+              <textarea
+                id="prompt"
+                name="prompt"
+                rows="7"
+                maxlength="256"
+                required
+                spellcheck="false"
+                placeholder="ROMEO:"
+                aria-describedby="prompt-help"
+              ></textarea>
+              <p id="prompt-help" class="field-help">
+                Use characters from the training vocabulary. Nothing is stored in this browser.
+              </p>
+            </div>
+
+            <fieldset class="preset-group">
+              <legend>Shakespeare presets</legend>
+              <div class="preset-list">
+                <button type="button" class="preset" data-prompt="ROMEO:">ROMEO:</button>
+                <button type="button" class="preset" data-prompt="JULIET:">JULIET:</button>
+                <button type="button" class="preset" data-prompt="To be, or not to be">To be…</button>
+                <button type="button" class="preset" data-prompt="KING HENRY:">KING HENRY:</button>
+              </div>
+            </fieldset>
+
+            <div class="parameter-grid">
+              <div class="field-group">
+                <label for="max-tokens">Max tokens</label>
+                <input id="max-tokens" name="max_tokens" type="number" min="1" max="96" value="48">
+              </div>
+              <div class="field-group">
+                <label for="temperature">Temperature</label>
+                <input
+                  id="temperature"
+                  name="temperature"
+                  type="number"
+                  min="0.1"
+                  max="1.2"
+                  step="0.1"
+                  value="0.8"
+                >
+              </div>
+              <div class="field-group">
+                <label for="seed">Seed</label>
+                <input id="seed" name="seed" type="number" min="0" max="2147483647" value="42">
+              </div>
+              <div class="toggle-field">
+                <input id="stream" name="stream" type="checkbox" checked>
+                <label for="stream">Stream tokens</label>
+              </div>
+            </div>
+
+            <div class="control-actions">
+              <button id="generate" class="button primary" type="submit" disabled>Generate</button>
+              <button id="stop" class="button danger" type="button" disabled>Stop</button>
+              <button id="clear" class="button secondary" type="button">Clear</button>
+            </div>
+            <p id="request-status" class="request-status" aria-live="polite">Waiting for backend status.</p>
+          </form>
+
+          <section class="card output-card" aria-labelledby="output-title">
+            <div class="output-heading">
+              <div>
+                <p class="eyebrow">Model output</p>
+                <h3 id="output-title">Continuation</h3>
+              </div>
+              <span id="output-mode" class="mode-badge">Static example</span>
+            </div>
+            <pre id="output" tabindex="0" aria-live="polite" aria-atomic="false">ROMEO:
+But soft, what light through yonder window breaks?</pre>
+            <p id="output-note" class="output-note">
+              Static example shown while the local Windows backend is offline.
+            </p>
+          </section>
+        </div>
+
+        <section class="live-panel" aria-labelledby="live-title">
+          <div class="live-heading">
+            <p class="eyebrow">Observable boundary</p>
+            <h3 id="live-title">Live request panel</h3>
+          </div>
+          <dl class="metric-grid">
+            <div><dt>Status</dt><dd id="metric-status">Idle</dd></div>
+            <div><dt>TTFT</dt><dd id="metric-ttft">—</dd></div>
+            <div><dt>Elapsed</dt><dd id="metric-elapsed">—</dd></div>
+            <div><dt>Generated</dt><dd id="metric-tokens">0 tokens</dd></div>
+            <div><dt>Rate</dt><dd id="metric-rate">—</dd></div>
+            <div><dt>Executor</dt><dd id="metric-executor">—</dd></div>
+            <div><dt>KV backend</dt><dd id="metric-kv">—</dd></div>
+            <div><dt>Queue depth</dt><dd id="metric-queue">—</dd></div>
+          </dl>
+        </section>
+      </section>
+
+      <section id="architecture" class="section shell" aria-labelledby="architecture-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">System boundary</p>
+            <h2 id="architecture-title">Static portfolio, local compute</h2>
+          </div>
+          <p class="section-summary">
+            GitHub Pages never receives model weights. The browser calls an account-bound ngrok
+            development domain, which forwards to the loopback-only runtime on the owner’s PC.
+          </p>
+        </div>
+        <div class="architecture-flow" aria-label="Public Playground request architecture">
+          <article><span>01</span><h3>GitHub Pages</h3><p>Always-on static HTML, CSS, JavaScript, evidence, and examples.</p></article>
+          <div class="flow-arrow" aria-hidden="true">HTTPS →</div>
+          <article><span>02</span><h3>ngrok tunnel</h3><p>Assigned free development domain; no token or model asset in Git.</p></article>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <article><span>03</span><h3>127.0.0.1:8000</h3><p>Restricted FastAPI policy, CORS, queue, timeout, and rate limits.</p></article>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <article><span>04</span><h3>miniGPT runtime</h3><p>Existing EngineRunner, scheduler, executor, tokenizer, and CPU model.</p></article>
+        </div>
+      </section>
+
+      <section class="section shell" aria-labelledby="stages-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Engineering progression</p>
+            <h2 id="stages-title">Stage 1–21, compressed</h2>
+          </div>
+          <p class="section-summary">
+            The post-v1 Playground is a deployment extension. It does not rename or extend the
+            completed Stage sequence.
+          </p>
+        </div>
+        <ol class="stage-grid">
+          <li><span>01–06</span><h3>Model + training</h3><p>Character tokenizer, Transformer, optimizer, checkpoints, exact resume.</p></li>
+          <li><span>07–09</span><h3>Evidence + inference</h3><p>Reference training, mmap batching, explicit KV-cache generation.</p></li>
+          <li><span>10–12</span><h3>Serving control plane</h3><p>FIFO ownership, continuous batching, OpenAI-style HTTP and SSE.</p></li>
+          <li><span>13–15</span><h3>Paged KV + APC</h3><p>Block lifecycle, direct paged decode, prefix caching and suffix prefill.</p></li>
+          <li><span>16–18</span><h3>Pressure handling</h3><p>Chunk budgets, whole-request preemption, lazy KV reservation.</p></li>
+          <li><span>19</span><h3>Runtime policy</h3><p>Strict production-facing configuration and deterministic manifests.</p></li>
+          <li><span>20</span><h3>Unified CLI</h3><p>Installable commands and an explicit Project Doctor registry.</p></li>
+          <li><span>21</span><h3>v1 closure</h3><p>Fresh-install package gates, capstone Evidence, Windows/Linux CI.</p></li>
+        </ol>
+      </section>
+
+      <section id="evidence" class="section shell" aria-labelledby="evidence-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Evidence before claims</p>
+            <h2 id="evidence-title">Auditable by construction</h2>
+          </div>
+          <p class="section-summary">
+            Correctness, lifecycle, packaging, and performance claims are separated. Descriptive
+            results remain descriptive when strict comparison does not pass.
+          </p>
+        </div>
+        <div class="evidence-grid">
+          <article class="card"><strong>Hash-bound Evidence</strong><p>Package-local artifacts, SHA-256 membership, reviewed source provenance.</p><a href="https://github.com/ericheee111/miniGPT/tree/main/docs/results" target="_blank" rel="noreferrer">Browse Evidence ↗</a></article>
+          <article class="card"><strong>Quality gates</strong><p>Ruff format/lint, BasedPyright strict typing, full pytest, Project Doctor.</p><a href="https://github.com/ericheee111/miniGPT/actions" target="_blank" rel="noreferrer">View CI ↗</a></article>
+          <article class="card"><strong>Technical whitepaper</strong><p>Architecture, module contracts, Stage 1–21 evolution, and claim boundaries.</p><a href="https://github.com/ericheee111/miniGPT/blob/main/docs/PROJECT_OVERVIEW.md" target="_blank" rel="noreferrer">Read overview ↗</a></article>
+          <article class="card"><strong>Completion contract</strong><p>What v1 proves, what it does not claim, and how post-v1 work stays separate.</p><a href="https://github.com/ericheee111/miniGPT/blob/main/docs/PROJECT_COMPLETION.md" target="_blank" rel="noreferrer">Read completion ↗</a></article>
+        </div>
+      </section>
+
+      <section id="privacy" class="section shell limits" aria-labelledby="limits-title">
+        <div>
+          <p class="eyebrow">Privacy and limitations</p>
+          <h2 id="limits-title">A personal systems demo, not a hosted service</h2>
+        </div>
+        <div class="limit-copy">
+          <p>
+            Prompts travel from your browser through ngrok to the owner’s local machine. miniGPT
+            does not intentionally log prompts, this page uses no analytics or cookies, and prompts
+            are not saved in localStorage. Do not submit sensitive information.
+          </p>
+          <p>
+            The backend is available only while the Windows PC and tunnel are running. There is no
+            24/7 SLA, production-security claim, general-chat capability, or universal performance
+            claim. When compute is offline, this portfolio and its static example remain available.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer shell">
+      <p>miniGPT · CPU-first, correctness-first, evidence-first.</p>
+      <div>
+        <a href="https://github.com/ericheee111/miniGPT" target="_blank" rel="noreferrer">Repository</a>
+        <a href="https://github.com/ericheee111/miniGPT/blob/main/docs/RELEASE_CHECKLIST.md" target="_blank" rel="noreferrer">Release checklist</a>
+      </div>
+    </footer>
+  </body>
+</html>

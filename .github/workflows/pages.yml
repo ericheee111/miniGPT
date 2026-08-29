@@ -1,0 +1,49 @@
+name: Deploy Public Playground
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "web/**"
+      - "scripts/build_public_demo_site.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/configure-pages@v5
+      - name: Build deterministic static site
+        env:
+          DEMO_API_BASE: ${{ vars.DEMO_API_BASE }}
+        run: python scripts/build_public_demo_site.py --output _site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

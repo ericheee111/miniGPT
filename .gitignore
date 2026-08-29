@@ -32,3 +32,9 @@ runs/
 .omo/
 .codegraph/
 .worktrees/
+_site/
+web/config.js
+.env
+.env.*
+!.env.public-demo.example
+ngrok.yml
