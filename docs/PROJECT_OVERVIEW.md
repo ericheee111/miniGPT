@@ -64,6 +64,12 @@ CPU-first 并不表示项目假定 CPU 比 GPU 更适合大模型，而是表示
 
 截至 Stage 21 / v1.0.0，既定 CPU reference scope 已完成：功能分支和 `main` 均通过 Windows/Python 3.14 与 Linux/Python 3.11 质量门禁，完整 pytest、Stage 7A–21 Evidence、source ancestry、fresh checkout、wheel/sdist 和 release doctor 均已验证。项目因此进入维护模式；未创建 annotated `v1.0.0` tag 只表示尚未发布 Git tag，不构成功能或证据闭环的缺口。
 
+### 2.5 Post-v1 Public Playground 部署扩展
+
+Post-v1 Public Playground 把系统作为个人作品集展示，但不扩大 v1 模型或 serving 语义：`web/` 由 GitHub Pages 永久在线，checkpoint/tokenizer 和 CPU 计算仍位于个人 Windows 电脑；ngrok assigned development domain 只把 HTTPS completion/SSE 请求转发到 `127.0.0.1:8000` 的受限 `minigpt demo-serve`。本地 backend offline 时，页面保留项目定位、架构、Stage 1–21、Evidence 和静态示例，并禁用 Generate。
+
+公网 adapter 复用既有 `ServingRuntimeConfig`、`EngineRunner`、`ServingEngine` 和 completion contract，只增加 fail-closed body/Prompt/generation limits、bounded HTTP queue、timeout/disconnect cancellation、per-client + independent global rate limit、exact CORS、safe aggregate info/metrics 和 `DEMO_ENABLED` kill switch。普通 `minigpt serve` 不改变。该部署没有认证或生产级 DDoS 防护，因此只定位为非商业字符级续写 Demo，不声明 24/7 SLA、生产安全或普遍 wall-clock speedup。
+
 ---
 
 ## 3. 系统总体架构

@@ -46,6 +46,45 @@ miniGPT is a CPU-first GPT systems reference lab implemented in PyTorch. It star
 
 The project is intentionally small enough to study end to end, but its contracts are systems-oriented: request-local RNG, explicit resource ownership, rollback and cleanup, strict serialization boundaries, source-bound evidence, and the same Ruff, basedpyright, Project Doctor, and pytest gates on Windows and Linux. Version 1.0.0 is feature-complete within this CPU reference scope; it does not claim production-scale throughput, GPU parity, or universal wall-clock speedup.
 
+## Public Playground / Deployment
+
+Post-v1 Public Playground 把 miniGPT 作为零月费个人作品集展示：GitHub Pages 托管无构建链的静态页面，模型、checkpoint、tokenizer 和 CPU 计算继续留在个人 Windows 电脑，ngrok 免费账户绑定的 assigned development domain 把 HTTPS completion/SSE 请求转发到 loopback-only backend。
+
+```text
+GitHub Pages → ngrok HTTPS → 127.0.0.1:8000
+             → minigpt demo-serve → existing EngineRunner / ServingRuntime / GPT
+```
+
+页面明确定位为**字符级文本续写 systems demo**，不是通用问答助手或 ChatGPT 替代品。电脑或 tunnel 离线时，Generate 会禁用，但项目介绍、架构、Stage 1–21、Evidence 和静态示例仍可访问。
+
+当前 deployment 状态：本仓库包含完整实现与 workflow，但 GitHub Pages 尚需 repository owner 配置；预期 project URL 是 `https://ericheee111.github.io/miniGPT/`，在 Pages 设置和 `DEMO_API_BASE` 尚未完成前，不能视为已经在线。
+
+本地启动前先把 ngrok authtoken 写入 ngrok 自己的用户配置，绝不能放入仓库：
+
+```powershell
+$env:PUBLIC_ORIGIN = "https://ericheee111.github.io"
+$env:DEMO_ENABLED = "1"
+$env:MINIGPT_CHECKPOINT = "checkpoints/reference/latest.pt"
+$env:MINIGPT_TOKENIZER = "data/processed/tokenizer.json"
+.\scripts\start_public_demo.ps1
+```
+
+只构建静态 offline-only 页面：
+
+```powershell
+$env:DEMO_API_BASE = ""
+python scripts/build_public_demo_site.py --output _site
+python -m http.server 4173 --directory _site --bind 127.0.0.1
+```
+
+公网入口使用独立 `minigpt demo-serve`；普通 `minigpt serve` 的默认行为没有改变。public mode 默认最多 8192-byte body、256 Prompt characters/tokens、96 generated tokens、2 active + 8 queued requests、45 秒 timeout，并同时使用 per-client 和不可由 XFF 绕过的 global limiter。CORS 是 exact browser allowlist，不是认证。Swagger/OpenAPI、Prompt logging、analytics、cookie、Prompt storage、checkpoint publication 和 query-string API override 都被禁用。
+
+- [完整零成本部署步骤](docs/PUBLIC_DEMO_DEPLOYMENT.md)
+- [Public Demo threat model](docs/PUBLIC_DEMO_THREAT_MODEL.md)
+- [设计说明](docs/superpowers/specs/2026-08-30-post-v1-public-playground-design.md)
+
+这是非商业个人 Demo：不输入敏感信息、没有 24/7 SLA、ngrok 免费额度有限、不声明生产安全，也不宣称 paged KV/APC 或整体服务具有普遍 wall-clock 提升。
+
 ## 功能与边界
 
 已实现：
@@ -738,6 +777,7 @@ minigpt train --help
 minigpt generate --help
 minigpt simulate --help
 minigpt serve --help
+minigpt demo-serve --help
 minigpt verify --mode quick
 
 python prepare_data.py --help
@@ -797,10 +837,11 @@ minigpt train --help
 minigpt generate --help
 minigpt simulate --help
 minigpt serve --help
+minigpt demo-serve --help
 minigpt verify --mode quick
 ```
 
-`python -m minigpt` 与 console script 等价。根级帮助和版本查询采用 lazy import，不要求安装 HTTP 可选依赖；只有选择 `serve` 时才加载 FastAPI、HTTPX 和 Uvicorn。
+`python -m minigpt` 与 console script 等价。根级帮助和版本查询采用 lazy import，不要求安装 HTTP 可选依赖；只有选择 `serve` 或 `demo-serve` 时才加载对应的 FastAPI/Uvicorn 服务模块。
 
 Stage 19 将 Stage 15–18 的 cache/scheduler 选项接入真实 HTTP runtime，并可通过 `--runtime-manifest` 原子写出不含绝对路径和 secret 的确定性运行身份。Stage 20 的 project doctor 验证安装版本、canonical config、Stage 7A–20 evidence hash/contract、精确的 reviewed-source → squash-merge provenance 和真实 runtime wiring。Stage 7A 的历史外部 checkpoint 只能由 `sources.checkpoint` 声明，committed artifact 列表仍拒绝绝对路径、父目录穿越、重复项和未列出文件：
 

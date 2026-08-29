@@ -4,6 +4,22 @@ All notable project changes are documented here. miniGPT follows semantic versio
 
 > **Release status:** the v1.0.0 code, Evidence, packaging, independent review, and cross-platform CI baseline is complete on `main` as of 2026-08-27. The annotated `v1.0.0` Git tag has not yet been published.
 
+## Unreleased
+
+### Added
+
+- Post-v1 Public Playground: a build-chain-free GitHub Pages portfolio with online/offline status, character-level completion controls, fetch-based SSE, architecture, Stage 1–21 summary, Evidence links, privacy limits, and static offline output.
+- Restricted `minigpt demo-serve` entrypoint with loopback-only default, typed public policy, exact CORS allowlist, body/Prompt/generation bounds, bounded FIFO HTTP capacity, per-client and independent global rate limits, request timeout, disconnect cancellation, generic errors, safe aggregate metrics, and an explicit `DEMO_ENABLED` kill switch.
+- Deterministic static-site builder, official GitHub Pages workflow, Windows/ngrok launcher, zero-cost deployment guide, and public-demo threat model.
+
+### Security
+
+- Public OpenAPI/Swagger/Redoc and Uvicorn access logging are disabled; Prompt text, client identifiers, local paths, process identity, traceback, and secrets are excluded from public documents and application logs.
+- Model output is inserted with `textContent`; API Base is build-time-only, accepts empty or credential-free HTTPS origin, and is JSON encoded before entering `config.js`.
+- Checkpoint, tokenizer, ngrok user config/authtoken, `.env`, local runtime logs, generated `_site/`, and machine paths remain local and gitignored.
+
+This is a deployment extension after v1 closure. It is not Stage 22 and does not alter historical v1.0 Evidence, scope, or performance verdicts.
+
 ## 1.0.0 — 2026-08-27
 
 ### Added

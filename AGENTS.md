@@ -195,3 +195,18 @@ Chinese commit-message style unless the user requests otherwise.
 - `CHANGELOG.md`, `docs/PROJECT_COMPLETION.md`, and `docs/RELEASE_CHECKLIST.md` are required release contracts.
 - The annotated `v1.0.0` tag may be created only after the exact main commit passes Windows/Python 3.14 and Linux/Python 3.11 GitHub Actions.
 - Post-v1 research features require a new explicit design and evidence policy. v1.0 makes no production-scale or universal wall-clock performance claim.
+
+## Post-v1 Public Playground contracts
+
+- This deployment extension is named **Post-v1 Public Playground**; it is not Stage 22 and must not change the meaning of historical Stage 7A–21 Evidence.
+- `minigpt demo-serve` is the only restricted public-demo entrypoint. Ordinary `minigpt serve` keeps its existing defaults and contracts.
+- The public demo binds loopback by default. A non-loopback bind requires the explicit unsafe flag; proxy trust and a non-loopback bind must never be combined.
+- Preserve the existing `ServingRuntimeConfig`, `EngineRunner`, `ServingEngine`, tokenizer, checkpoint, and completion/SSE contracts. The HTTP policy layer may validate, queue, cancel, and aggregate; it must not become a second scheduler or model owner.
+- Public limits, exact CORS origins, kill switch, queue capacity, request timeout, per-client limiter, and independent global limiter must fail closed at startup or request boundaries. CORS is never authentication.
+- Do not log Prompt text or token sequences. Public errors, `/demo/info`, `/demo/metrics`, manifests, and logs must not expose traceback, hostname, PID, IP, absolute path, checkpoint path, tokenizer path, or secret.
+- Every terminal path, timeout, disconnect, stream close, error, and shutdown must cancel outstanding work as applicable and release the public concurrency lease plus existing KV/request resources.
+- `web/` remains build-chain-free native HTML/CSS/JavaScript. Model output uses `textContent`; the page uses no analytics, cookie, Prompt storage, third-party CDN, or user/query API Base override.
+- GitHub Pages artifacts contain static assets and JSON-encoded `DEMO_API_BASE` only. An empty variable builds offline-only; checkpoint, tokenizer, ngrok config/token, `.env`, local logs, and machine paths never enter the artifact.
+- `scripts/start_public_demo.ps1` may use only loopback, exact child processes, gitignored logs, and ngrok's existing user config. It must not accept/print authtoken, require admin, modify firewall, or create router port mappings.
+- Keep post-v1 tests in existing `tests/test_*.py` files unless a separately reviewed Evidence decision changes the Stage 21 historical test-file contract. Never weaken the Stage 21 verifier to accommodate new tests.
+- Public documentation must keep the character-level continuation, no-SLA, non-commercial, no-sensitive-input, free-quota, non-production-security, and no-universal-speedup limitations visible.
