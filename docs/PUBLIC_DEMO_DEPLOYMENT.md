@@ -32,13 +32,13 @@ minigpt demo-serve → EngineRunner → ServingRuntime → local CPU model
 在普通 PowerShell 中运行，不需要管理员权限：
 
 ```powershell
-Set-Location D:\Projects\miniGPT
+Set-Location "<REPO_ROOT>"
 py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev,report]"
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-项目声明支持 Python 3.11–3.14；Windows canonical gate 使用 Python 3.14。不要使用空的 `requirements.txt` 作为安装入口。
+把 `<REPO_ROOT>` 替换为你的 miniGPT checkout 目录。项目声明支持 Python 3.11–3.14；Windows canonical gate 使用 Python 3.14。不要使用空的 `requirements.txt` 作为安装入口。
 
 ## 3. 准备本地 reference checkpoint
 
@@ -223,7 +223,7 @@ Backend offline 时：
 
 1. 使用当前普通用户创建“登录时”任务；
 2. Program 为 `powershell.exe`；
-3. Arguments 为 `-NoProfile -ExecutionPolicy RemoteSigned -File D:\Projects\miniGPT\scripts\start_public_demo.ps1`；
+3. Arguments 为 `-NoProfile -ExecutionPolicy RemoteSigned -File "<REPO_ROOT>\scripts\start_public_demo.ps1"`；
 4. Start in 为仓库根目录；
 5. 环境变量应由受控的用户会话或单独安全包装提供，不要把 authtoken 放入 Arguments；
 6. 先在交互式窗口验证 Ctrl+C cleanup，再考虑调度；

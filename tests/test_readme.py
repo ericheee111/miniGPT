@@ -177,6 +177,11 @@ def test_public_demo_deployment_and_threat_documents_cover_operational_contracts
     ):
         assert contract in deployment
 
+    # And: operator examples use an explicit placeholder, never a tracked host path.
+    assert "<REPO_ROOT>" in deployment
+    assert "D:\\Projects\\miniGPT" not in deployment
+    assert "C:\\Users\\" not in deployment
+
     # And: high-risk trust boundaries and cleanup obligations remain reviewable.
     for contract in (
         "CORS 被误当成认证",
