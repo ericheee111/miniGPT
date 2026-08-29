@@ -34,6 +34,12 @@ _COMMANDS = (
         "run the optional HTTP/SSE completion service",
         frozenset({"fastapi", "httpx", "uvicorn"}),
     ),
+    CommandSpec(
+        "demo-serve",
+        "minigpt.public_demo",
+        "run the restricted public portfolio demo",
+        frozenset({"fastapi", "uvicorn"}),
+    ),
     CommandSpec("verify", "minigpt.project_doctor", "verify the repository and evidence chain"),
 )
 _COMMAND_BY_NAME = {item.name: item for item in _COMMANDS}
