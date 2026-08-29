@@ -18,7 +18,15 @@ def test_root_help_lists_stable_commands(capsys: pytest.CaptureFixture[str]) -> 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Usage:" in captured.out
-    for command in ("prepare-data", "train", "generate", "simulate", "serve", "verify"):
+    for command in (
+        "prepare-data",
+        "train",
+        "generate",
+        "simulate",
+        "serve",
+        "demo-serve",
+        "verify",
+    ):
         assert command in captured.out
     assert captured.err == ""
 

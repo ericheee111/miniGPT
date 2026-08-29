@@ -2,18 +2,37 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import queue
 import time
+from concurrent.futures import Future
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, cast
+from dataclasses import replace
+from typing import TYPE_CHECKING, cast, final
 
 import httpx
+import pytest
 import torch
 from httpx import ASGITransport
 
+from minigpt import __version__
 from minigpt.data import CharTokenizer, JsonValue
-from minigpt.engine_runner import EngineRunner, RunnerConfig
+from minigpt.engine_runner import (
+    EngineRunner,
+    RequestHandle,
+    RunnerConfig,
+    RunnerResult,
+    StreamEvent,
+)
 from minigpt.http_server import MODEL_ID, create_app
 from minigpt.model import GPT
+from minigpt.public_demo import (
+    InvalidPublicDemoConfigError,
+    PublicDemoInfo,
+    PublicDemoPolicy,
+    create_public_demo_app,
+    validate_bind_host,
+)
 from minigpt.serving import (
     ContinuousExecutor,
     EngineConfig,
@@ -24,9 +43,10 @@ from minigpt.serving import (
 from minigpt.settings import GPTConfig
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
 
     from fastapi import FastAPI
+    from starlette.types import Message, Scope
 
 _BLOCK_SIZE = 8
 _BASE_URL = "http://test"
@@ -66,6 +86,120 @@ def build_app() -> FastAPI:
         model_id=MODEL_ID,
         block_size=_BLOCK_SIZE,
     )
+
+
+_PUBLIC_ORIGIN = "https://portfolio.example"
+_PUBLIC_POLICY = PublicDemoPolicy(
+    enabled=True,
+    allowed_origins=(_PUBLIC_ORIGIN,),
+    per_client_requests=100,
+    global_requests=100,
+)
+
+
+@final
+class _ControlledRunner:
+    def __init__(self, *, failure: BaseException | None = None) -> None:
+        self.running = False
+        self.failure = failure
+        self.handles: list[RequestHandle] = []
+        self.cancelled_request_ids: list[str] = []
+
+    @property
+    def is_running(self) -> bool:
+        return self.running
+
+    def start(self) -> None:
+        self.running = True
+
+    def shutdown(self) -> None:
+        self.running = False
+        for handle in self.handles:
+            if not handle.future.done():
+                _ = handle.future.cancel()
+
+    def submit(self, request: GenerationRequest, *, stream: bool) -> RequestHandle:
+        future: Future[RunnerResult] = Future()
+        if self.failure is not None:
+            future.set_exception(self.failure)
+        stream_queue: queue.Queue[StreamEvent] | None = queue.Queue() if stream else None
+        handle = RequestHandle(
+            request_id=request.request_id,
+            future=future,
+            stream_queue=stream_queue,
+        )
+        self.handles.append(handle)
+        return handle
+
+    def cancel(self, request_id: str, *, timeout_seconds: float = 1.0) -> None:
+        del timeout_seconds
+        self.cancelled_request_ids.append(request_id)
+        for handle in self.handles:
+            if handle.request_id == request_id and not handle.future.done():
+                _ = handle.future.cancel()
+
+
+def _public_info() -> PublicDemoInfo:
+    return PublicDemoInfo(
+        project_version=__version__,
+        model_id=MODEL_ID,
+        executor_name="continuous",
+        kv_cache_backend="dense",
+        prefix_cache_enabled=False,
+    )
+
+
+def _build_public_app(
+    policy: PublicDemoPolicy = _PUBLIC_POLICY,
+) -> tuple[FastAPI, EngineRunner]:
+    _ = torch.default_generator.manual_seed(1234)
+    model = GPT(
+        GPTConfig(
+            vocab_size=2,
+            block_size=_BLOCK_SIZE,
+            n_layer=1,
+            n_head=1,
+            n_embd=8,
+            dropout=0.0,
+        )
+    ).eval()
+    runner = EngineRunner(
+        engine=ServingEngine(
+            config=EngineConfig(
+                scheduler=SchedulerConfig(
+                    max_active_requests=policy.max_concurrent_requests,
+                    max_cached_tokens=128,
+                ),
+                block_size=_BLOCK_SIZE,
+            ),
+            executor=ContinuousExecutor(model),
+        ),
+        config=RunnerConfig(command_queue_size=64, stream_buffer_size=8),
+    )
+    app = create_public_demo_app(
+        runner=runner,
+        tokenizer=CharTokenizer.from_text("AB"),
+        block_size=_BLOCK_SIZE,
+        policy=policy,
+        info=_public_info(),
+    )
+    return app, runner
+
+
+def _build_controlled_public_app(
+    *,
+    policy: PublicDemoPolicy,
+    failure: BaseException | None = None,
+) -> tuple[FastAPI, _ControlledRunner]:
+    runner = _ControlledRunner(failure=failure)
+    app = create_public_demo_app(
+        runner=cast("EngineRunner", cast("object", runner)),
+        tokenizer=CharTokenizer.from_text("AB"),
+        block_size=_BLOCK_SIZE,
+        policy=policy,
+        info=_public_info(),
+    )
+    return app, runner
 
 
 @asynccontextmanager
@@ -489,3 +623,432 @@ def _direct_completion(*, seed: int, max_tokens: int) -> str:
     while not engine.is_idle:
         engine.tick()
     return tokenizer.decode(engine.request_state(request_id).generated_tokens)
+
+
+def test_public_demo_bind_and_origin_configuration_fail_closed() -> None:
+    # Given: the default safe bind policy and explicit CORS origins.
+    policy = PublicDemoPolicy()
+
+    # When/Then: wildcard CORS and an implicit public bind are rejected.
+    with pytest.raises(InvalidPublicDemoConfigError, match="non-wildcard"):
+        _ = replace(policy, allowed_origins=("*",))
+    with pytest.raises(InvalidPublicDemoConfigError, match="only bind loopback"):
+        validate_bind_host(
+            "0.0.0.0",  # noqa: S104 - deliberate rejected bind test
+            unsafe_allow_non_loopback=False,
+            trust_proxy=False,
+        )
+
+    # And: loopback is accepted while proxy trust cannot accompany a public bind.
+    validate_bind_host(
+        "127.0.0.1",
+        unsafe_allow_non_loopback=False,
+        trust_proxy=False,
+    )
+    with pytest.raises(InvalidPublicDemoConfigError, match="requires a loopback"):
+        validate_bind_host(
+            "0.0.0.0",  # noqa: S104 - deliberate rejected bind test
+            unsafe_allow_non_loopback=True,
+            trust_proxy=True,
+        )
+
+
+def test_public_demo_cors_allows_only_configured_origin_and_preflight() -> None:
+    asyncio.run(_check_public_demo_cors())
+
+
+async def _check_public_demo_cors() -> None:
+    # Given: a public demo with one exact HTTPS browser origin.
+    app, _runner = _build_public_app()
+
+    # When: allowed, denied, and preflight requests cross the boundary.
+    async with _test_client(app) as client:
+        allowed = await client.get("/demo/info", headers={"Origin": _PUBLIC_ORIGIN})
+        denied = await client.get(
+            "/demo/info",
+            headers={"Origin": "https://attacker.example"},
+        )
+        preflight = await client.options(
+            "/v1/completions",
+            headers={
+                "Origin": _PUBLIC_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": ("content-type, ngrok-skip-browser-warning"),
+            },
+        )
+
+    # Then: only the configured origin receives CORS authorization.
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == _PUBLIC_ORIGIN
+    assert denied.status_code == 403
+    assert "access-control-allow-origin" not in denied.headers
+    assert preflight.status_code == 204
+    assert preflight.headers["access-control-allow-origin"] == _PUBLIC_ORIGIN
+    assert preflight.headers["access-control-allow-methods"] == "GET, POST, OPTIONS"
+    assert (
+        preflight.headers["access-control-allow-headers"]
+        == "content-type, ngrok-skip-browser-warning"
+    )
+
+
+def test_public_demo_rejects_body_prompt_and_generation_limit_violations() -> None:
+    asyncio.run(_check_public_demo_request_limits())
+
+
+async def _check_public_demo_request_limits() -> None:
+    # Given: small independent body, character, token, generation, and temperature limits.
+    body_app, _runner = _build_public_app(replace(_PUBLIC_POLICY, max_request_body_bytes=32))
+    character_app, _runner = _build_public_app(replace(_PUBLIC_POLICY, max_prompt_characters=1))
+    token_app, _runner = _build_public_app(
+        replace(
+            _PUBLIC_POLICY,
+            max_prompt_characters=8,
+            max_prompt_tokens=1,
+        )
+    )
+    generation_app, _runner = _build_public_app(
+        replace(
+            _PUBLIC_POLICY,
+            max_new_tokens=2,
+            min_temperature=0.5,
+            max_temperature=1.0,
+        )
+    )
+
+    # When: each limit is exceeded at its public HTTP boundary.
+    async with _test_client(body_app) as client:
+        body_response = await client.post(
+            "/v1/completions",
+            content=b"{" + b"x" * 64,
+            headers={"Content-Type": "application/json"},
+        )
+    async with _test_client(character_app) as client:
+        character_response = await client.post(
+            "/v1/completions",
+            json=_completion_payload(prompt="AB", max_tokens=0),
+        )
+    async with _test_client(token_app) as client:
+        token_response = await client.post(
+            "/v1/completions",
+            json=_completion_payload(prompt="AB", max_tokens=0),
+        )
+    async with _test_client(generation_app) as client:
+        token_count_response = await client.post(
+            "/v1/completions",
+            json=_completion_payload(max_tokens=3),
+        )
+        cold_response = await client.post(
+            "/v1/completions",
+            json={**_completion_payload(max_tokens=0), "temperature": 0.4},
+        )
+        hot_response = await client.post(
+            "/v1/completions",
+            json={**_completion_payload(max_tokens=0), "temperature": 1.1},
+        )
+
+    # Then: each response fails with a bounded, non-traceback error.
+    assert body_response.status_code == 413
+    assert _error_code(_response_json(body_response)) == "request_body_too_large"
+    assert character_response.status_code == 400
+    assert _error_code(_response_json(character_response)) == "prompt_too_long"
+    assert token_response.status_code == 400
+    assert _error_code(_response_json(token_response)) == "prompt_too_long"
+    assert token_count_response.status_code == 400
+    assert cold_response.status_code == 400
+    assert hot_response.status_code == 400
+
+
+def test_public_demo_enforces_per_client_and_global_rate_limits() -> None:
+    asyncio.run(_check_public_demo_rate_limits())
+
+
+async def _check_public_demo_rate_limits() -> None:
+    # Given: separate apps with a two-request client limit and a two-request global limit.
+    client_app, _runner = _build_public_app(
+        replace(
+            _PUBLIC_POLICY,
+            per_client_requests=2,
+            global_requests=100,
+        )
+    )
+    global_app, _runner = _build_public_app(
+        replace(
+            _PUBLIC_POLICY,
+            trust_proxy=True,
+            per_client_requests=100,
+            global_requests=2,
+        )
+    )
+    payload = _completion_payload(max_tokens=0)
+
+    # When: one peer exceeds its limit and spoofed client keys try to bypass global capacity.
+    async with _test_client(client_app) as client:
+        client_responses = [
+            await client.post("/v1/completions", json=payload) for _index in range(3)
+        ]
+    async with _test_client(global_app) as client:
+        global_responses = [
+            await client.post(
+                "/v1/completions",
+                json=payload,
+                headers={"X-Forwarded-For": f"192.0.2.{index}"},
+            )
+            for index in range(1, 4)
+        ]
+
+    # Then: both third requests receive 429 and a bounded Retry-After value.
+    assert [response.status_code for response in client_responses] == [200, 200, 429]
+    assert [response.status_code for response in global_responses] == [200, 200, 429]
+    assert int(client_responses[-1].headers["retry-after"]) >= 1
+    assert int(global_responses[-1].headers["retry-after"]) >= 1
+
+
+async def _wait_until(predicate: object, *, timeout_seconds: float = 1.0) -> None:
+    check = cast("Callable[[], bool]", predicate)
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not check():
+        if asyncio.get_running_loop().time() >= deadline:
+            reason = "condition did not become true before the test deadline"
+            raise AssertionError(reason)
+        await asyncio.sleep(0.001)
+
+
+def test_public_demo_queue_full_and_task_cancellation_release_capacity() -> None:
+    asyncio.run(_check_public_demo_queue_capacity())
+
+
+async def _check_public_demo_queue_capacity() -> None:
+    # Given: one active slot, one waiter slot, and a runner that stays pending.
+    policy = replace(
+        _PUBLIC_POLICY,
+        max_concurrent_requests=1,
+        max_queue_size=1,
+        request_timeout_seconds=10.0,
+    )
+    app, runner = _build_controlled_public_app(policy=policy)
+
+    # When: three requests arrive before model work completes.
+    async with _test_client(app) as client:
+        first = asyncio.create_task(client.post("/v1/completions", json=_completion_payload()))
+        await _wait_until(lambda: len(runner.handles) == 1)
+        second = asyncio.create_task(client.post("/v1/completions", json=_completion_payload()))
+        queued = 0
+        queue_deadline = asyncio.get_running_loop().time() + 1.0
+        while queued != 1:
+            metrics_response = await client.get("/demo/metrics")
+            queued = cast("int", _response_body(metrics_response)["queued_requests"])
+            assert asyncio.get_running_loop().time() < queue_deadline
+            await asyncio.sleep(0.001)
+        third = await client.post("/v1/completions", json=_completion_payload())
+
+        # Then: the third request is rejected, and cancelling both predecessors drains capacity.
+        assert third.status_code == 429
+        assert third.headers["retry-after"] == "1"
+        _ = first.cancel()
+        _ = await asyncio.gather(first, return_exceptions=True)
+        await _wait_until(lambda: len(runner.handles) == 2)
+        _ = second.cancel()
+        _ = await asyncio.gather(second, return_exceptions=True)
+        metrics = _response_body(await client.get("/demo/metrics"))
+        assert metrics["active_requests"] == 0
+        assert metrics["queued_requests"] == 0
+
+
+def test_public_demo_timeout_cancels_runner_and_releases_capacity() -> None:
+    asyncio.run(_check_public_demo_timeout())
+
+
+async def _check_public_demo_timeout() -> None:
+    # Given: a pending runner behind a short public request deadline.
+    policy = replace(_PUBLIC_POLICY, request_timeout_seconds=0.02)
+    app, runner = _build_controlled_public_app(policy=policy)
+
+    # When: generation outlives that deadline.
+    async with _test_client(app) as client:
+        response = await client.post("/v1/completions", json=_completion_payload())
+        metrics = _response_body(await client.get("/demo/metrics"))
+
+    # Then: the request is cancelled, counted as timed out, and holds no slot.
+    assert response.status_code == 504
+    assert len(runner.cancelled_request_ids) == 1
+    assert metrics["timeout_requests"] == 1
+    assert metrics["active_requests"] == 0
+    assert metrics["queued_requests"] == 0
+
+
+def test_public_demo_disconnect_cancels_runner_and_releases_capacity() -> None:
+    asyncio.run(_check_public_demo_disconnect())
+
+
+async def _check_public_demo_disconnect() -> None:
+    # Given: a pending non-stream request with an explicit ASGI disconnect channel.
+    app, runner = _build_controlled_public_app(policy=_PUBLIC_POLICY)
+    body = json.dumps(_completion_payload()).encode("utf-8")
+    receives: asyncio.Queue[Message] = asyncio.Queue()
+    sent: list[Message] = []
+    await receives.put(
+        {
+            "type": "http.request",
+            "body": body,
+            "more_body": False,
+        }
+    )
+    scope = cast(
+        "Scope",
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/v1/completions",
+            "raw_path": b"/v1/completions",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 8000),
+            "state": {},
+        },
+    )
+
+    async def receive() -> Message:
+        return await receives.get()
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    # When: the client disconnects after submission but before completion.
+    async with app.router.lifespan_context(app):
+        request_task = asyncio.create_task(app(scope, receive, send))
+        await _wait_until(lambda: len(runner.handles) == 1)
+        await receives.put({"type": "http.disconnect"})
+        await asyncio.wait_for(request_task, timeout=1.0)
+
+    # Then: cancellation reaches the runner and the HTTP capacity is released.
+    starts = [message for message in sent if message["type"] == "http.response.start"]
+    assert starts
+    assert starts[0]["status"] == 499
+    assert len(runner.cancelled_request_ids) == 1
+
+
+def test_public_demo_stream_completion_releases_slot_and_engine_resources() -> None:
+    asyncio.run(_check_public_demo_stream_cleanup())
+
+
+async def _check_public_demo_stream_cleanup() -> None:
+    # Given: a real tiny EngineRunner and one streaming public completion.
+    app, runner = _build_public_app()
+
+    # When: the stream reaches [DONE] and all chunks are consumed.
+    async with _test_client(app) as client:
+        async with client.stream(
+            "POST",
+            "/v1/completions",
+            json=_completion_payload(max_tokens=3, stream=True),
+        ) as response:
+            lines = [line async for line in response.aiter_lines()]
+        public_metrics = _response_body(await client.get("/demo/metrics"))
+        engine_metrics = runner.metrics()
+
+    # Then: one stream completed and neither public nor KV capacity remains resident.
+    assert response.status_code == 200
+    assert any(line == "data: [DONE]" for line in lines)
+    assert public_metrics["completed_requests"] == 1
+    assert public_metrics["active_requests"] == 0
+    assert public_metrics["queued_requests"] == 0
+    assert engine_metrics.active_requests == 0
+    assert engine_metrics.waiting_requests == 0
+    assert engine_metrics.cached_tokens == 0
+    assert engine_metrics.reserved_cache_tokens == 0
+
+
+def test_public_demo_kill_switch_and_safe_read_only_documents() -> None:
+    asyncio.run(_check_public_demo_kill_switch_and_documents())
+
+
+async def _check_public_demo_kill_switch_and_documents() -> None:
+    # Given: a disabled public demo whose model runner must not start.
+    app, runner = _build_controlled_public_app(policy=replace(_PUBLIC_POLICY, enabled=False))
+
+    # When: clients inspect health, info, metrics, and attempt generation.
+    async with _test_client(app) as client:
+        health = await client.get("/healthz")
+        info = _response_body(await client.get("/demo/info"))
+        metrics = _response_body(await client.get("/demo/metrics"))
+        completion = await client.post(
+            "/v1/completions",
+            json=_completion_payload(prompt="AB"),
+        )
+
+    # Then: generation is off and documents contain only the explicit safe schema.
+    assert health.status_code == 503
+    assert completion.status_code == 503
+    assert not runner.running
+    assert set(info) == {
+        "project_version",
+        "model_id",
+        "demo_mode",
+        "limits",
+        "executor",
+        "kv_cache_backend",
+        "prefix_cache_enabled",
+        "streaming_available",
+    }
+    assert set(metrics) == {
+        "online",
+        "active_requests",
+        "queued_requests",
+        "completed_requests",
+        "failed_requests",
+        "rejected_requests",
+        "rate_limited_requests",
+        "timeout_requests",
+        "generated_token_count",
+        "average_latency_ms",
+    }
+    documents = json.dumps({"info": info, "metrics": metrics})
+    assert "AB" not in documents
+    assert "checkpoint" not in documents.lower()
+    assert "hostname" not in documents.lower()
+    assert ":\\" not in documents
+
+
+def test_public_demo_model_failure_is_generic_and_never_logs_prompt(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    asyncio.run(_check_public_demo_failure_privacy(caplog))
+
+
+async def _check_public_demo_failure_privacy(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Given: a model failure carrying sensitive-looking internal detail.
+    prompt = "AB"
+    app, _runner = _build_controlled_public_app(
+        policy=_PUBLIC_POLICY,
+        failure=RuntimeError("traceback sensitive-internal-marker"),
+    )
+    caplog.set_level(logging.INFO, logger="minigpt.public_demo")
+
+    # When: the public completion fails after submission.
+    async with _test_client(app) as client:
+        response = await client.post(
+            "/v1/completions",
+            json=_completion_payload(prompt=prompt),
+        )
+        metrics = _response_body(await client.get("/demo/metrics"))
+
+    # Then: the client and aggregate metrics omit traceback, prompt, and internal detail.
+    assert response.status_code == 500
+    assert _error_code(_response_json(response)) == "internal_error"
+    public_text = response.text.lower()
+    assert "traceback" not in public_text
+    assert "sensitive-internal-marker" not in public_text
+    assert prompt not in json.dumps(metrics)
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert prompt not in log_text
+    assert "sensitive-internal-marker" not in log_text

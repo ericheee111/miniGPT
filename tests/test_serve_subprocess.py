@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import pytest
 import serve
 import torch
 
+from minigpt import public_demo
 from minigpt.batching import TokenBatcher
 from minigpt.checkpoint import (
     CheckpointResources,
@@ -266,6 +268,153 @@ def test_serve_cli_lazy_kv_runtime_starts_and_exits_on_localhost(tmp_path: Path)
     scheduler = cast("dict[str, object]", document["scheduler"])
     assert scheduler["lazy_kv_reservation"] is True
     assert document["executor"] == "paged_attention"
+
+
+def test_public_demo_build_runtime_uses_existing_runner_and_safe_info(tmp_path: Path) -> None:
+    # Given: a tiny local checkpoint and the conservative public demo config.
+    checkpoint_path, tokenizer_path = _write_service_checkpoint(tmp_path)
+    arguments = public_demo.build_parser().parse_args(
+        [
+            "--config",
+            "configs/public_demo.yaml",
+            "--checkpoint",
+            str(checkpoint_path),
+            "--tokenizer",
+            str(tokenizer_path),
+        ]
+    )
+
+    # When: the typed builder creates the real ServingRuntime and serves both modes.
+    app, runner, server = public_demo.build_runtime(
+        arguments,
+        environment={
+            "DEMO_ENABLED": "1",
+            "PUBLIC_ORIGIN": "https://portfolio.example",
+        },
+    )
+
+    async def _scenario() -> tuple[httpx.Response, httpx.Response, httpx.Response]:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://public-demo",
+            ) as client,
+        ):
+            info = await client.get("/demo/info")
+            completion = await client.post(
+                "/v1/completions",
+                json={
+                    "model": "minigpt-char",
+                    "prompt": "A",
+                    "max_tokens": 2,
+                    "temperature": 1.0,
+                    "stream": False,
+                    "seed": 2026,
+                },
+            )
+            stream = await client.post(
+                "/v1/completions",
+                json={
+                    "model": "minigpt-char",
+                    "prompt": "A",
+                    "max_tokens": 2,
+                    "temperature": 1.0,
+                    "stream": True,
+                    "seed": 2026,
+                },
+            )
+            assert runner.metrics().active_requests == 0
+            return info, completion, stream
+
+    info, completion, stream = asyncio.run(_scenario())
+
+    # Then: it remains loopback-only and exposes no local asset paths.
+    assert server.host == "127.0.0.1"
+    assert info.status_code == 200
+    assert completion.status_code == 200
+    assert stream.status_code == 200
+    assert "data: [DONE]" in stream.text
+    info_text = info.text
+    assert str(checkpoint_path) not in info_text
+    assert str(tokenizer_path) not in info_text
+    assert '"executor":"continuous"' in info_text
+    assert '"kv_cache_backend":"dense"' in info_text
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows is the canonical subprocess runtime")
+def test_public_demo_cli_serves_real_localhost_completion_and_stream(tmp_path: Path) -> None:
+    # Given: a real tiny checkpoint, a free loopback port, and the explicit kill switch enabled.
+    checkpoint_path, tokenizer_path = _write_service_checkpoint(tmp_path)
+    port = _free_port()
+    project_root = Path(__file__).resolve().parents[1]
+    command = [
+        sys.executable,
+        "-m",
+        "minigpt",
+        "demo-serve",
+        "--config",
+        str(project_root / "configs" / "public_demo.yaml"),
+        "--checkpoint",
+        str(checkpoint_path),
+        "--tokenizer",
+        str(tokenizer_path),
+        "--port",
+        str(port),
+    ]
+    environment = {
+        **os.environ,
+        "DEMO_ENABLED": "1",
+        "PUBLIC_ORIGIN": "https://portfolio.example",
+    }
+
+    # When: the restricted CLI starts and receives health, completion, and SSE traffic.
+    process = subprocess.Popen(  # noqa: S603
+        command,
+        cwd=project_root,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        _wait_for_health(process, port)
+        headers = {"ngrok-skip-browser-warning": "1"}
+        completion = httpx.post(
+            f"http://127.0.0.1:{port}/v1/completions",
+            headers=headers,
+            json={
+                "model": "minigpt-char",
+                "prompt": "A",
+                "max_tokens": 3,
+                "temperature": 1.0,
+                "stream": False,
+                "seed": 42,
+            },
+            timeout=5.0,
+        )
+        stream = httpx.post(
+            f"http://127.0.0.1:{port}/v1/completions",
+            headers=headers,
+            json={
+                "model": "minigpt-char",
+                "prompt": "A",
+                "max_tokens": 3,
+                "temperature": 1.0,
+                "stream": True,
+                "seed": 42,
+            },
+            timeout=5.0,
+        )
+    finally:
+        process.terminate()
+        _ = process.wait(timeout=10.0)
+
+    # Then: both public modes succeed and the process exits cleanly without a public bind.
+    assert completion.status_code == 200
+    assert stream.status_code == 200
+    assert "data: [DONE]" in stream.text
+    assert process.returncode is not None
 
 
 def _write_service_checkpoint(tmp_path: Path) -> tuple[Path, Path]:
