@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import final
 
 import pytest
-from scripts.build_public_demo_site import build_site, normalize_api_base
-from scripts.build_public_demo_site import main as build_site_main
 from typing_extensions import override
 
 import minigpt
@@ -54,22 +54,54 @@ def test_package_can_be_imported() -> None:
         " https://demo.example",
     ],
 )
-def test_public_site_api_base_rejects_every_non_origin_value(value: str) -> None:
+def test_public_site_api_base_rejects_every_non_origin_value(
+    value: str,
+    tmp_path: Path,
+) -> None:
     # Given: a Pages build input that is not an empty value or an HTTPS origin.
-    # When/Then: normalization rejects it before any static output is published.
-    with pytest.raises(ValueError, match="DEMO_API_BASE"):
-        _ = normalize_api_base(value)
+    project_root = Path(__file__).resolve().parents[1]
+    output = tmp_path / "site"
+
+    # When: the real build entrypoint receives the invalid origin.
+    result = _run_site_builder(
+        project_root,
+        ["--output", str(output), "--api-base", value],
+    )
+
+    # Then: it fails before publishing output and names the invalid boundary.
+    assert result.returncode != 0
+    assert "DEMO_API_BASE" in result.stderr
+    assert not output.exists()
 
 
-def test_public_site_api_base_accepts_offline_and_normalizes_https() -> None:
+def test_public_site_api_base_accepts_offline_and_normalizes_https(tmp_path: Path) -> None:
     # Given: the two supported Pages configuration shapes.
-    # When: API Base normalization runs.
-    offline = normalize_api_base("")
-    online = normalize_api_base("https://Demo.Example:443/")
+    project_root = Path(__file__).resolve().parents[1]
+    offline_output = tmp_path / "offline"
+    online_output = tmp_path / "online"
+
+    # When: the real build entrypoint renders each shape.
+    offline = _run_site_builder(
+        project_root,
+        ["--output", str(offline_output), "--api-base", ""],
+    )
+    online = _run_site_builder(
+        project_root,
+        [
+            "--output",
+            str(online_output),
+            "--api-base",
+            "https://Demo.Example:443/",
+        ],
+    )
 
     # Then: the output is stable and carries no path component.
-    assert offline == ""
-    assert online == "https://demo.example"
+    assert offline.returncode == 0, offline.stderr
+    assert online.returncode == 0, online.stderr
+    assert 'apiBase: ""' in (offline_output / "config.js").read_text(encoding="utf-8")
+    assert 'apiBase: "https://demo.example"' in (online_output / "config.js").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_public_site_build_is_offline_safe_deterministic_and_secret_free(
@@ -84,19 +116,17 @@ def test_public_site_build_is_offline_safe_deterministic_and_secret_free(
     monkeypatch.setenv("UNRELATED_DEPLOYMENT_SECRET", sentinel)
 
     # When: the same managed output is built twice.
-    assert (
-        build_site_main(
-            [
-                "--source",
-                str(project_root / "web"),
-                "--output",
-                str(output),
-            ]
-        )
-        == 0
+    first_build = _run_site_builder(
+        project_root,
+        ["--source", str(project_root / "web"), "--output", str(output)],
     )
+    assert first_build.returncode == 0, first_build.stderr
     first = _directory_bytes(output)
-    assert build_site(source=project_root / "web", output=output, api_base="") is None
+    second_build = _run_site_builder(
+        project_root,
+        ["--source", str(project_root / "web"), "--output", str(output)],
+    )
+    assert second_build.returncode == 0, second_build.stderr
     second = _directory_bytes(output)
 
     # Then: config is offline-only, contents are byte-identical, and no secret leaked.
@@ -114,11 +144,18 @@ def test_public_site_build_json_encodes_config_and_preserves_relative_assets(
     output = tmp_path / "site"
 
     # When: the deterministic Pages site is built.
-    build_site(
-        source=project_root / "web",
-        output=output,
-        api_base="https://example.ngrok-free.app",
+    result = _run_site_builder(
+        project_root,
+        [
+            "--source",
+            str(project_root / "web"),
+            "--output",
+            str(output),
+            "--api-base",
+            "https://example.ngrok-free.app",
+        ],
     )
+    assert result.returncode == 0, result.stderr
     config = (output / "config.js").read_text(encoding="utf-8")
     index = (output / "index.html").read_text(encoding="utf-8")
     parser = _AssetParser()
@@ -210,3 +247,20 @@ def _directory_bytes(directory: Path) -> dict[str, bytes]:
         for path in sorted(directory.rglob("*"))
         if path.is_file()
     }
+
+
+def _run_site_builder(
+    project_root: Path,
+    arguments: list[str],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            str(project_root / "scripts" / "build_public_demo_site.py"),
+            *arguments,
+        ],
+        cwd=project_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
