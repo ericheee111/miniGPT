@@ -49,7 +49,7 @@ from minigpt.serving_runtime import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 
     from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -794,6 +794,45 @@ class _PublicMetrics:
 
 
 @final
+class _PublicStreamingResponse(StreamingResponse):
+    def __init__(  # noqa: PLR0913
+        self,
+        content: AsyncGenerator[str, None],
+        *,
+        runner: EngineRunner,
+        request_id: str,
+        lease: _CapacityLease,
+        metrics: _PublicMetrics,
+        clock: Callable[[], float],
+        started_at: float,
+        headers: Mapping[str, str],
+    ) -> None:
+        super().__init__(content, media_type="text/event-stream", headers=headers)
+        self._content = content
+        self._runner = runner
+        self._request_id = request_id
+        self._lease = lease
+        self._metrics = metrics
+        self._clock = clock
+        self._started_at = started_at
+
+    @override
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                await self._content.aclose()
+            finally:
+                if not self._lease.released:
+                    try:
+                        await _cancel_safely(self._runner, self._request_id)
+                    finally:
+                        self._metrics.fail(latency_seconds=_elapsed(self._clock, self._started_at))
+                        await self._lease.release()
+
+
+@final
 class _SlidingWindowLimiter:
     """Apply one atomic global window and one in-memory per-client window."""
 
@@ -1174,22 +1213,28 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         _LOGGER.info("public demo request submitted request_id=%s", request_id)
         created = int(time.time())
         if completion.stream:
-            return StreamingResponse(
-                _stream_completion(
-                    runner=runner,
-                    handle=handle,
-                    lease=lease,
-                    tokenizer=tokenizer,
-                    request_id=request_id,
-                    created=created,
-                    model_id=info.model_id,
-                    prompt_tokens=len(prompt_tokens),
-                    deadline=deadline,
-                    metrics=metrics,
-                    clock=clock,
-                    started_at=started_at,
-                ),
-                media_type="text/event-stream",
+            stream = _stream_completion(
+                runner=runner,
+                handle=handle,
+                lease=lease,
+                tokenizer=tokenizer,
+                request_id=request_id,
+                created=created,
+                model_id=info.model_id,
+                prompt_tokens=len(prompt_tokens),
+                deadline=deadline,
+                metrics=metrics,
+                clock=clock,
+                started_at=started_at,
+            )
+            return _PublicStreamingResponse(
+                stream,
+                runner=runner,
+                request_id=request_id,
+                lease=lease,
+                metrics=metrics,
+                clock=clock,
+                started_at=started_at,
                 headers={
                     "Cache-Control": "no-cache, no-store",
                     "X-Accel-Buffering": "no",
@@ -1339,7 +1384,7 @@ async def _stream_completion(  # noqa: C901, PLR0913
     metrics: _PublicMetrics,
     clock: Callable[[], float],
     started_at: float,
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str, None]:
     stream_queue = handle.stream_queue
     if stream_queue is None:
         await lease.release()
@@ -1398,7 +1443,7 @@ async def _stream_completion(  # noqa: C901, PLR0913
         terminal_recorded = True
         _LOGGER.info("public demo request timed out request_id=%s", request_id)
         yield _sse_error("generation request timed out", "request_timeout")
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, GeneratorExit):
         if not terminal_recorded:
             metrics.fail(latency_seconds=_elapsed(clock, started_at))
         raise

@@ -14,6 +14,7 @@ import httpx
 import pytest
 import torch
 from httpx import ASGITransport
+from starlette.requests import ClientDisconnect
 
 from minigpt import __version__
 from minigpt.data import CharTokenizer, JsonValue
@@ -964,6 +965,69 @@ async def _check_public_demo_stream_cleanup() -> None:
     assert engine_metrics.waiting_requests == 0
     assert engine_metrics.cached_tokens == 0
     assert engine_metrics.reserved_cache_tokens == 0
+
+
+def test_public_demo_stream_disconnect_before_first_body_releases_capacity() -> None:
+    asyncio.run(_check_public_demo_stream_start_disconnect())
+
+
+async def _check_public_demo_stream_start_disconnect() -> None:
+    # Given: a streaming request whose client vanishes while response headers are sent.
+    policy = replace(_PUBLIC_POLICY, max_concurrent_requests=1, max_queue_size=0)
+    app, runner = _build_controlled_public_app(policy=policy)
+    body = json.dumps(_completion_payload(stream=True)).encode("utf-8")
+    receives: asyncio.Queue[Message] = asyncio.Queue()
+    await receives.put(
+        {
+            "type": "http.request",
+            "body": body,
+            "more_body": False,
+        }
+    )
+    scope = cast(
+        "Scope",
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/v1/completions",
+            "raw_path": b"/v1/completions",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 8000),
+            "state": {},
+        },
+    )
+
+    async def receive() -> Message:
+        return await receives.get()
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            raise ClientDisconnect
+
+    # When: StreamingResponse cannot begin the body iterator after submission.
+    async with app.router.lifespan_context(app):
+        with pytest.raises(ClientDisconnect):
+            await app(scope, receive, send)
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url=_BASE_URL,
+        ) as client:
+            metrics = _response_body(await client.get("/demo/metrics"))
+
+    # Then: the request is cancelled and no public slot survives the disconnect.
+    assert len(runner.cancelled_request_ids) == 1
+    assert metrics["active_requests"] == 0
+    assert metrics["queued_requests"] == 0
+    assert metrics["failed_requests"] == 1
 
 
 def test_public_demo_kill_switch_and_safe_read_only_documents() -> None:
