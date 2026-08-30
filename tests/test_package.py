@@ -185,6 +185,10 @@ def test_public_site_client_uses_safe_streaming_and_bounded_offline_polling() ->
     assert "response.body" in app_source
     assert ".getReader()" in app_source
     assert "AbortController" in app_source
+    non_stream_source = app_source.split("async function readNonStream", maxsplit=1)[1].split(
+        "async function refreshMetrics", maxsplit=1
+    )[0]
+    assert "firstTokenAt" not in non_stream_source
 
     # And: polling is visibility-aware, no faster than 60 seconds, and stores no prompt.
     assert "HEALTH_INTERVAL_MS = 60_000" in app_source
@@ -196,6 +200,19 @@ def test_public_site_client_uses_safe_streaming_and_bounded_offline_polling() ->
     assert 'name="referrer" content="no-referrer"' in index
     assert "Static example" in index
     assert "Backend offline" in app_source
+    assert 'elements.outputMode.textContent === "Static example"' in app_source
+    assert "Static example shown until you run the local CPU model." in app_source
+    assert "Partial model output" in app_source
+    assert "No model output" in app_source
+    assert app_source.count("valueAsNumber") == 3
+    assert "Number(elements." not in app_source
+    assert '<pre id="output" tabindex="0">' in index
+    assert 'id="output" tabindex="0" aria-live' not in index
+    for control_id in ("max-tokens", "temperature", "seed"):
+        attributes = index.split(f'id="{control_id}"', maxsplit=1)[1].split(">", maxsplit=1)[0]
+        assert "required" in attributes
+    assert "does not intentionally\n                persist prompts" in index
+    assert "Nothing is stored in this browser" not in index
 
 
 def test_public_site_css_preserves_touch_targets_and_light_theme_contrast() -> None:
@@ -221,6 +238,9 @@ def test_public_site_css_preserves_touch_targets_and_light_theme_contrast() -> N
 
     # And: the audited light-theme subtle text color remains above 4.5:1.
     assert "--subtle: #5b7065;" in styles
+    assert ".site-header nav {\n    grid-row: 2;\n    grid-column: 1 / -1;" in styles
+    assert "overflow-x: auto;" in styles
+    assert "scroll-margin-top: 90px;" in styles
 
 
 def test_pages_workflow_uses_variable_boundary_and_main_only_push() -> None:

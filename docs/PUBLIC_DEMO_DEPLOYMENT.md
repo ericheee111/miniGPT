@@ -125,7 +125,7 @@ $env:MINIGPT_TOKENIZER = "data/processed/tokenizer.json"
 4. workflow 从 `web/` 构建 `_site/`，上传官方 Pages artifact，再用官方 deploy action 发布；
 5. 页面使用 `./styles.css`、`./config.js` 和 `./app.js`，兼容 `/miniGPT/` project path。
 
-本次交付只 push feature branch，不合入 `main`。因此 Pages workflow 在它进入默认分支并由用户完成 repository 设置前不会自动上线；README 也不会把预期地址写成已上线事实。GitHub 官方的自定义 workflow 说明见 [Using custom workflows with GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。
+代码合入 `main` 只会触发 Pages workflow，不等于公网地址已经上线。repository owner 仍须完成 Pages source 与 `DEMO_API_BASE` 设置，并核对 deploy job 成功；README 在这些步骤完成前不会把预期地址写成已上线事实。GitHub 官方的自定义 workflow 说明见 [Using custom workflows with GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。
 
 ## 9. 本地预览静态站点
 

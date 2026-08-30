@@ -151,6 +151,7 @@ def test_readme_documents_public_playground_without_claiming_it_is_live() -> Non
 def test_public_demo_deployment_and_threat_documents_cover_operational_contracts() -> None:
     # Given: the deployment guide and threat model shipped with the static portfolio.
     deployment = (PROJECT_ROOT / "docs" / "PUBLIC_DEMO_DEPLOYMENT.md").read_text(encoding="utf-8")
+    completion = (PROJECT_ROOT / "docs" / "PROJECT_COMPLETION.md").read_text(encoding="utf-8")
     threat_model = (PROJECT_ROOT / "docs" / "PUBLIC_DEMO_THREAT_MODEL.md").read_text(
         encoding="utf-8"
     )
@@ -181,6 +182,8 @@ def test_public_demo_deployment_and_threat_documents_cover_operational_contracts
     assert "<REPO_ROOT>" in deployment
     assert "D:\\Projects\\miniGPT" not in deployment
     assert "C:\\Users\\" not in deployment
+    assert "本轮 feature branch 不合入 `main`" not in deployment
+    assert "本轮 feature branch 不合入 `main`" not in completion
 
     # And: high-risk trust boundaries and cleanup obligations remain reviewable.
     for contract in (

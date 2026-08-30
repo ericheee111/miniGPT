@@ -68,6 +68,11 @@
     elements.backendChip.classList.toggle("offline", !online);
     elements.backendState.textContent = label;
     elements.generate.disabled = !online || state.activeController !== null;
+    if (elements.outputMode.textContent === "Static example") {
+      elements.outputNote.textContent = online
+        ? "Static example shown until you run the local CPU model."
+        : "Static example shown while the local Windows backend is offline.";
+    }
     if (!online && state.activeController === null && elements.output.textContent.trim() === "") {
       showStaticExample();
     }
@@ -130,6 +135,14 @@
     elements.clear.disabled = true;
     setRequestStatus("Submitting one bounded completion request…");
     state.elapsedTimer = window.setInterval(updateRequestMetrics, 100);
+  }
+
+  function markIncompleteOutput(outcome) {
+    const hasModelOutput = state.generatedTokens > 0;
+    elements.outputMode.textContent = hasModelOutput ? "Partial model output" : "No model output";
+    elements.outputNote.textContent = hasModelOutput
+      ? `The local CPU model returned partial output before the request ${outcome}.`
+      : `The request ${outcome} before the local CPU model returned a token.`;
   }
 
   function endRequest() {
@@ -264,9 +277,6 @@
   async function readNonStream(response) {
     const documentValue = await response.json();
     const text = readChoiceText(documentValue);
-    if (text.length > 0 && state.firstTokenAt === null) {
-      state.firstTokenAt = performance.now();
-    }
     elements.output.textContent = `${elements.output.textContent}${text}`;
     updateUsage(documentValue);
     updateRequestMetrics();
@@ -307,9 +317,9 @@
     const payload = {
       model: state.modelId,
       prompt,
-      max_tokens: Number(elements.maxTokens.value),
-      temperature: Number(elements.temperature.value),
-      seed: Number(elements.seed.value),
+      max_tokens: elements.maxTokens.valueAsNumber,
+      temperature: elements.temperature.valueAsNumber,
+      seed: elements.seed.valueAsNumber,
       stream: elements.stream.checked,
     };
     const controller = new AbortController();
@@ -336,6 +346,7 @@
       await refreshMetrics();
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
+        markIncompleteOutput(state.stopRequested ? "was stopped" : "was cancelled");
         elements.metricStatus.textContent = "Stopped";
         setRequestStatus(
           state.stopRequested ? "Generation stopped by user." : "Generation request was cancelled.",
@@ -343,6 +354,7 @@
         );
       } else {
         const message = error instanceof Error ? error.message : "Generation failed.";
+        markIncompleteOutput("failed");
         elements.metricStatus.textContent = "Failed";
         setRequestStatus(message, true);
         if (error instanceof TypeError) {

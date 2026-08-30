@@ -95,7 +95,8 @@
                 aria-describedby="prompt-help"
               ></textarea>
               <p id="prompt-help" class="field-help">
-                Use characters from the training vocabulary. Nothing is stored in this browser.
+                Use characters from the training vocabulary. This page does not intentionally
+                persist prompts.
               </p>
             </div>
 
@@ -112,7 +113,15 @@
             <div class="parameter-grid">
               <div class="field-group">
                 <label for="max-tokens">Max tokens</label>
-                <input id="max-tokens" name="max_tokens" type="number" min="1" max="96" value="48">
+                <input
+                  id="max-tokens"
+                  name="max_tokens"
+                  type="number"
+                  min="1"
+                  max="96"
+                  value="48"
+                  required
+                >
               </div>
               <div class="field-group">
                 <label for="temperature">Temperature</label>
@@ -124,11 +133,20 @@
                   max="1.2"
                   step="0.1"
                   value="0.8"
+                  required
                 >
               </div>
               <div class="field-group">
                 <label for="seed">Seed</label>
-                <input id="seed" name="seed" type="number" min="0" max="2147483647" value="42">
+                <input
+                  id="seed"
+                  name="seed"
+                  type="number"
+                  min="0"
+                  max="2147483647"
+                  value="42"
+                  required
+                >
               </div>
               <div class="toggle-field">
                 <input id="stream" name="stream" type="checkbox" checked>
@@ -152,7 +170,7 @@
               </div>
               <span id="output-mode" class="mode-badge">Static example</span>
             </div>
-            <pre id="output" tabindex="0" aria-live="polite" aria-atomic="false">ROMEO:
+            <pre id="output" tabindex="0">ROMEO:
 But soft, what light through yonder window breaks?</pre>
             <p id="output-note" class="output-note">
               Static example shown while the local Windows backend is offline.

@@ -26,7 +26,7 @@ miniGPT 在 **Stage 21 / v1.0.0** 达到本轮项目目标，可以按计划结�
 
 `codex/post-v1-public-playground` 在 v1 结项之后增加独立的公网作品集部署边界：GitHub Pages 提供始终可访问的静态项目展示，ngrok 把访问转发到个人 Windows 电脑上的 loopback-only `minigpt demo-serve`。本地计算离线时，静态页面仍展示架构、Stage 1–21、Evidence 和示例输出。
 
-该扩展不命名为 Stage 22，不增加模型、scheduler 或 Evidence tier，也不修改上述历史 v1.0 验收表、capstone file coverage、source ancestry 或性能 verdict。它新增的是 post-v1 deployment policy、abuse bounds、offline UX、部署文档和独立测试；Pages 真正上线仍要求 repository owner 后续配置 `DEMO_API_BASE`、选择 GitHub Actions，并让 workflow 出现在默认分支。本轮 feature branch 不合入 `main`。
+该扩展不命名为 Stage 22，不增加模型、scheduler 或 Evidence tier，也不修改上述历史 v1.0 验收表、capstone file coverage、source ancestry 或性能 verdict。它新增的是 post-v1 deployment policy、abuse bounds、offline UX、部署文档和独立测试；代码合入 `main` 不代表公网 Demo 已部署，Pages 真正上线仍要求 repository owner 配置 `DEMO_API_BASE`、选择 GitHub Actions，并核对 deploy job 成功。
 
 ## 2. 结项目标与完成证据
 
