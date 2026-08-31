@@ -256,7 +256,8 @@ def test_pages_workflow_uses_variable_boundary_and_main_only_push() -> None:
     assert "actions/configure-pages@v5" in workflow
     assert "actions/upload-pages-artifact@v5" in workflow
     assert "actions/deploy-pages@v5" in workflow
-    assert "DEMO_API_BASE: ${{ vars.DEMO_API_BASE }}" in workflow
+    assert "DEMO_API_BASE: ${{ inputs.demo_api_base || vars.DEMO_API_BASE }}" in workflow
+    assert 'description: "Public demo HTTPS origin; empty builds offline-only"' in workflow
     assert "python scripts/build_public_demo_site.py --output _site" in workflow
 
     # And: automatic deployment is restricted to main while manual dispatch remains possible.

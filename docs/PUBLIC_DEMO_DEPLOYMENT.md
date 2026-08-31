@@ -99,6 +99,16 @@ https://minigpt-demo.example-tailnet.ts.net
 
 该 URL 是公开配置，不是 secret。它必须为空或是无 credentials/path/query/fragment 的 HTTPS origin。构建器用 `json.dumps` 生成 `config.js`；空值会得到完整的 offline-only 作品集。
 
+若当前 GitHub CLI token 没有 Actions Variables 管理权限，可在手工发布时把同一公开 origin 作为 workflow input 传入，无需扩大 token scope：
+
+```powershell
+gh workflow run pages.yml `
+    --ref codex/post-v1-public-playground `
+    -f demo_api_base=https://minigpt-demo.example-tailnet.ts.net
+```
+
+手工 input 只覆盖该次 workflow；main push 仍读取 repository variable，二者为空时仍 fail closed 为 offline-only。
+
 然后在 **Settings → Pages** 选择 **GitHub Actions**。`.github/workflows/pages.yml` 仅在 `main` push 或手工 `workflow_dispatch` 时部署。功能分支在完成独立审查前不合入 `main`，因此不会因为本次实现自动发布 Pages。
 
 ## 7. 本地静态页面预览

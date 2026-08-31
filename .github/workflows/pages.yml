@@ -9,6 +9,11 @@ on:
       - "scripts/build_public_demo_site.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+    inputs:
+      demo_api_base:
+        description: "Public demo HTTPS origin; empty builds offline-only"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -28,7 +33,7 @@ jobs:
       - uses: actions/configure-pages@v5
       - name: Build deterministic static site
         env:
-          DEMO_API_BASE: ${{ vars.DEMO_API_BASE }}
+          DEMO_API_BASE: ${{ inputs.demo_api_base || vars.DEMO_API_BASE }}
         run: python scripts/build_public_demo_site.py --output _site
       - uses: actions/upload-pages-artifact@v5
         with:
