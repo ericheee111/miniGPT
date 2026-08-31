@@ -419,7 +419,7 @@ def test_public_demo_cli_serves_real_localhost_completion_and_stream(tmp_path: P
 def _write_public_demo_config(tmp_path: Path, *, streaming_enabled: bool) -> Path:
     project_root = Path(__file__).resolve().parents[1]
     source = (project_root / "configs" / "public_demo.yaml").read_text(encoding="utf-8")
-    expected = "streaming_enabled: false"
+    expected = "streaming_enabled: true"
     assert source.count(expected) == 1
     configured = source.replace(
         expected,

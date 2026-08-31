@@ -160,7 +160,7 @@ runner request 并释放 lease。超时和 client disconnect 走同一取消路�
 | `max_queue_size` | 8 |
 | `global_requests_per_hour` | 60 |
 | `global_generated_tokens_per_day` | 10000 |
-| `streaming_enabled` | `false`，真实 Funnel SSE 验收通过前保持关闭 |
+| `streaming_enabled` | `true`，仅在 2026-08-31 真实 Funnel SSE 验收通过后启用；代码默认仍为 `false` |
 | `enabled` | `false`，由 `DEMO_ENABLED=1` 显式开启 |
 
 `configs/public_demo.yaml` 是 schema-versioned、未知字段拒绝的 typed config。默认 executor 为

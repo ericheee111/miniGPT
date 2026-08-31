@@ -31,6 +31,6 @@ policy:
   max_queue_size: 8
   global_requests_per_hour: 60
   global_generated_tokens_per_day: 10000
-  streaming_enabled: false
+  streaming_enabled: true
   enabled: false
 allowed_origins: []

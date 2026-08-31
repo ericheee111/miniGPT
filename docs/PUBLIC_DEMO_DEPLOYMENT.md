@@ -123,7 +123,7 @@ $env:DEMO_API_BASE = ""
 - 45 秒总 timeout；
 - `global_requests_per_hour: 60`；
 - `global_generated_tokens_per_day: 10000`；
-- `streaming_enabled: false`；
+- `streaming_enabled: true`，在 2026-08-31 真实 Funnel 验收通过后显式启用；
 - `enabled: false`，只能由 `DEMO_ENABLED=1` 显式打开。
 
 两个 global quotas 都是单进程、线程安全且与 client IP/XFF 无关。请求 quota 只在 runner 接受提交时计数；token quota 在活跃请求期间先做 hard reservation，终态再结算实际生成 token。流式和非流式使用同一配额与 cleanup 路径。
@@ -153,7 +153,7 @@ Invoke-RestMethod `
     -Body $body
 ```
 
-localhost SSE smoke 必须使用一份临时 config 把 `streaming_enabled` 设为 `true`，重启 backend 后执行：
+正式 config 已启用 SSE；重启 backend 后执行：
 
 ```powershell
 $streamBody = $body -replace '"stream":\s*false', '"stream": true'
@@ -163,11 +163,11 @@ curl.exe -N --no-buffer `
     http://127.0.0.1:8000/v1/completions
 ```
 
-验证 `[DONE]`、Stop/cancel、`active_requests=0`、`queued_requests=0`，以及 engine/KV 资源归零后，把 committed config 保持为 `streaming_enabled: false`。
+验证 `[DONE]`、Stop/cancel、`active_requests=0`、`queued_requests=0`，以及 engine/KV 资源归零。需要验证保守 fallback 时，使用临时 config 把 `streaming_enabled` 设为 `false`；不要修改代码层的 fail-closed 默认值。
 
 ## 10. 真实 Funnel 验收与 streaming 决策
 
-在默认 `streaming_enabled: false` 下先从公网完成：
+先在 `streaming_enabled: false` 下从公网完成基础验收：
 
 1. `GET /healthz` 为 200；
 2. Pages origin 的 CORS preflight 只允许 `content-type`；
@@ -184,6 +184,13 @@ curl.exe -N --no-buffer `
 - EngineRunner active/waiting/cached/reserved KV 均回到 0。
 
 若 Funnel SSE 失败或无法证明未缓冲，部署仍可继续，但必须保持 `streaming_enabled: false`。前端会禁用 stream 选项并直接发送一次 non-stream 请求，不会在 stream 失败后自动重试同一 Prompt。
+
+### 2026-08-31 验收记录
+
+- 基础公网请求经 Funnel 返回 HTTPS 200、精确 Pages origin CORS 和 3 个 completion tokens；关闭 streaming 时，直接 SSE 请求按策略返回 `streaming_disabled`。
+- 启用临时 SSE config 后，公网请求收到 32 个 token events、1 个 terminal event 和 `[DONE]`；首个 event 在 13.617 ms 到达，全部 event 跨越 117.967 ms，共记录 34 个不同到达时间，证明不是终态一次性缓冲。
+- 客户端在首个 token 后断开时，修复后的生命周期只记录 `failed_requests=1`，随后 `active_requests=0`、`queued_requests=0`；紧接着的 non-stream 请求返回 200 和 1 个 token。
+- 现有 in-process 生命周期测试同时验证 EngineRunner 与 KV/request 资源归零。基于公网分块、断流和本地资源三层证据，正式 config 启用 `streaming_enabled: true`；代码默认仍为 `false`，未来任何代理回归都可立即退回非流式。
 
 ## 11. 停止与紧急关闭
 
