@@ -188,9 +188,11 @@ curl.exe -N --no-buffer `
 ### 2026-08-31 验收记录
 
 - 基础公网请求经 Funnel 返回 HTTPS 200、精确 Pages origin CORS 和 3 个 completion tokens；关闭 streaming 时，直接 SSE 请求按策略返回 `streaming_disabled`。
-- 启用临时 SSE config 后，公网请求收到 32 个 token events、1 个 terminal event 和 `[DONE]`；首个 event 在 13.617 ms 到达，全部 event 跨越 117.967 ms，共记录 34 个不同到达时间，证明不是终态一次性缓冲。
+- 正式 config 的公网请求收到 32 个 token events、1 个 terminal event 和 `[DONE]`；首个 event 在 10.939 ms 到达，token events 跨越 69.555 ms，`[DONE]` 在 80.678 ms 到达，共记录 34 个不同到达时间，证明不是终态一次性缓冲。
 - 客户端在首个 token 后断开时，修复后的生命周期只记录 `failed_requests=1`，随后 `active_requests=0`、`queued_requests=0`；紧接着的 non-stream 请求返回 200 和 1 个 token。
 - 现有 in-process 生命周期测试同时验证 EngineRunner 与 KV/request 资源归零。基于公网分块、断流和本地资源三层证据，正式 config 启用 `streaming_enabled: true`；代码默认仍为 `false`，未来任何代理回归都可立即退回非流式。
+
+本次正式验收绑定 source commit `bed5a4abeb1fe091024dca8d6c7e8116763bb9c4`。命令记录依次为：带显式四个环境变量执行 `scripts/start_public_demo_tailscale.ps1`；使用 `.venv\Scripts\python.exe -` 运行 Python 3.14/httpx `Client.stream()` 采集器；最后执行 `python -m json.tool` 严格解析。三条命令均为 exit 0。逐事件 trace、CORS、断流前后 metrics、后续请求和所有断言保存在 [`funnel-acceptance-20260831.json`](results/public-playground/funnel-acceptance-20260831.json)，该文件 SHA-256 为 `003569b5d6431d4a7dbe8593781c8d02d92f193b999ddb2eeafa04acc62cc0ab`。为遵守 no-Prompt/no-token logging，trace 只保留序号、到达时间、事件类型、字节数和收到的完整 SSE 行 SHA-256，不保存文本内容。
 
 ## 11. 停止与紧急关闭
 
