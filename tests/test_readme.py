@@ -140,17 +140,18 @@ def test_readme_local_markdown_links_exist() -> None:
     assert missing == []
 
 
-def test_readme_documents_public_playground_without_claiming_it_is_live() -> None:
+def test_readme_documents_live_public_playground_with_offline_limits() -> None:
     # Given: the post-v1 repository README.
     readme = README_PATH.read_text(encoding="utf-8")
 
-    # When/Then: deployment, character-level scope, and manual setup remain explicit.
+    # When/Then: deployment, character-level scope, and runtime availability remain explicit.
     assert "## Public Playground / Deployment" in readme
     assert "minigpt demo-serve" in readme
     assert "字符级文本续写" in readme
     assert "不是通用问答助手" in readme
-    assert "GitHub Pages 尚需 repository owner 配置" in readme
-    assert "不能视为已经在线" in readme
+    assert "https://ericheee111.github.io/miniGPT/" in readme
+    assert "GitHub Pages 已部署到" in readme
+    assert "实时生成仍依赖个人 Windows 电脑" in readme
     assert "](docs/PUBLIC_DEMO_DEPLOYMENT.md)" in readme
     assert "](docs/PUBLIC_DEMO_THREAT_MODEL.md)" in readme
 

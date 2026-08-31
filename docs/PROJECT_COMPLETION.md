@@ -26,7 +26,7 @@ miniGPT 在 **Stage 21 / v1.0.0** 达到本轮项目目标，可以按计划结�
 
 `codex/post-v1-public-playground` 在 v1 结项之后增加独立的公网作品集部署边界：GitHub Pages 提供始终可访问的静态项目展示，Tailscale Funnel 把访问转发到个人 Windows 电脑上的 loopback-only `minigpt demo-serve`。本地计算离线时，静态页面仍展示架构、Stage 1–21、Evidence 和示例输出。代码层 SSE 默认关闭；2026-08-31 真实 Funnel 分块与取消验收通过后，正式部署配置已显式启用。
 
-该扩展不命名为 Stage 22，不增加模型、scheduler 或 Evidence tier，也不修改上述历史 v1.0 验收表、capstone file coverage、source ancestry 或性能 verdict。它新增的是 post-v1 deployment policy、abuse bounds、offline UX、部署文档和独立测试；代码合入 `main` 不代表公网 Demo 已部署，Pages 真正上线仍要求 repository owner 配置 `DEMO_API_BASE`、选择 GitHub Actions，并核对 deploy job 成功。
+该扩展不命名为 Stage 22，不增加模型、scheduler 或 Evidence tier，也不修改上述历史 v1.0 验收表、capstone file coverage、source ancestry 或性能 verdict。它新增的是 post-v1 deployment policy、abuse bounds、offline UX、部署文档和独立测试。2026-08-31，repository owner 已配置 `DEMO_API_BASE`，Pages workflow attempt 2 部署成功，公开页面为 `https://ericheee111.github.io/miniGPT/`；部署来自已审查的 feature branch，未合入或改动 `main`。实时生成仍依赖本机 backend 与 Funnel 在线，没有 24/7 SLA。
 
 ## 2. 结项目标与完成证据
 

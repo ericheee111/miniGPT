@@ -204,6 +204,13 @@ curl.exe -N --no-buffer `
 
 本次正式验收绑定 source commit `bed5a4abeb1fe091024dca8d6c7e8116763bb9c4`。命令记录依次为：带显式四个环境变量执行 `scripts/start_public_demo_tailscale.ps1`；使用 `.venv\Scripts\python.exe -` 运行 Python 3.14/httpx `Client.stream()` 采集器；最后执行 `python -m json.tool` 严格解析。三条命令均为 exit 0。逐事件 trace、CORS、断流前后 metrics、后续请求和所有断言保存在 [`funnel-acceptance-20260831.json`](results/public-playground/funnel-acceptance-20260831.json)，该文件 SHA-256 为 `003569b5d6431d4a7dbe8593781c8d02d92f193b999ddb2eeafa04acc62cc0ab`。为遵守 no-Prompt/no-token logging，trace 只保留序号、到达时间、事件类型、字节数和收到的完整 SSE 行 SHA-256，不保存文本内容。
 
+### 2026-08-31 正式上线记录
+
+- GitHub Pages 已部署到 `https://ericheee111.github.io/miniGPT/`，Funnel API origin 为 `https://desktop-kdc7371.tail683fcc.ts.net`；repository variable `DEMO_API_BASE` 已保存同一公开 origin。
+- GitHub Actions run `33384943175` 的 attempt 2 在 source commit `e3b2b0d9075122c34631f54dcea8c399be9dc9ce` 上完成 build 与 deploy。为允许已审查 feature branch 首次发布而临时加入的 Pages environment branch rule 已在部署后移除，环境恢复为仅允许 `main`。
+- extension-free 浏览器从公开 Pages 完成 32-token SSE 请求：状态为 `Complete`，TTFT 32 ms，总耗时 113 ms，页面无 console error；公网断流清理继续由上述 hash-bound Funnel trace 证明。
+- 本次只推送 `codex/post-v1-public-playground`，没有把扩展合入 `main`。静态页面可持续访问；实时生成仍依赖本机 backend 与 Funnel 在线。
+
 ## 11. 停止与紧急关闭
 
 ```powershell

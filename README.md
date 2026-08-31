@@ -57,7 +57,7 @@ GitHub Pages → Tailscale Funnel HTTPS → 127.0.0.1:8000
 
 页面明确定位为**字符级文本续写 systems demo**，不是通用问答助手或 ChatGPT 替代品。电脑或 tunnel 离线时，Generate 会禁用，但项目介绍、架构、Stage 1–21、Evidence 和静态示例仍可访问。
 
-当前 deployment 状态：本仓库包含完整实现与 workflow，但 GitHub Pages 尚需 repository owner 配置；预期 project URL 是 `https://ericheee111.github.io/miniGPT/`，在 Pages 设置和 `DEMO_API_BASE` 尚未完成前，不能视为已经在线。
+截至 2026-08-31，GitHub Pages 已部署到 `https://ericheee111.github.io/miniGPT/`，repository variable `DEMO_API_BASE` 已指向正式 Funnel endpoint。静态作品集始终可访问；实时生成仍依赖个人 Windows 电脑、backend 和 Funnel 保持在线，没有 24/7 SLA。
 
 本地启动前先安装、登录 Tailscale，并准备匹配的本地模型资产：
 
@@ -77,7 +77,7 @@ python scripts/build_public_demo_site.py --output _site
 python -m http.server 4173 --directory _site --bind 127.0.0.1
 ```
 
-公网入口使用独立 `minigpt demo-serve`；普通 `minigpt serve` 的默认行为没有改变。public mode 默认最多 8192-byte body、256 Prompt characters/tokens、96 generated tokens、2 active + 8 queued requests、45 秒 timeout、60 accepted requests/hour 和 10000 actual generated tokens/day。global quotas 与 client IP/XFF 无关。SSE 默认关闭，只有真实 Funnel 分块与取消验收通过后才启用。CORS 是 exact browser allowlist，不是认证。Swagger/OpenAPI、Prompt logging、analytics、cookie、Prompt storage、checkpoint publication 和 query-string API override 都被禁用。
+公网入口使用独立 `minigpt demo-serve`；普通 `minigpt serve` 的默认行为没有改变。public mode 默认最多 8192-byte body、256 Prompt characters/tokens、96 generated tokens、2 active + 8 queued requests、45 秒 timeout、60 accepted requests/hour 和 10000 actual generated tokens/day。global quotas 与 client IP/XFF 无关。代码层 SSE 默认关闭；2026-08-31 真实 Funnel 分块与取消验收通过后，正式部署配置已显式启用。CORS 是 exact browser allowlist，不是认证。Swagger/OpenAPI、Prompt logging、analytics、cookie、Prompt storage、checkpoint publication 和 query-string API override 都被禁用。
 
 - [完整零成本部署步骤](docs/PUBLIC_DEMO_DEPLOYMENT.md)
 - [Public Demo threat model](docs/PUBLIC_DEMO_THREAT_MODEL.md)
