@@ -10,21 +10,7 @@ function Invoke-MiniGPTPublicDemoStop {
     $pythonPath = Join-Path $script:RepositoryRoot ".venv\Scripts\python.exe"
     $backendProcess = Get-ManagedBackendProcess -State $state -PythonPath $pythonPath
     $tailscalePath = Resolve-TailscaleCommand
-    $funnelStatus = Invoke-Tailscale `
-        -CommandPath $tailscalePath `
-        -Arguments @("funnel", "status", "--json")
-    $funnel = Get-MiniGPTFunnel -StatusJson $funnelStatus
-    if ($null -ne $funnel) {
-        $null = Invoke-Tailscale `
-            -CommandPath $tailscalePath `
-            -Arguments @("funnel", "--https=443", "off")
-        $updatedStatus = Invoke-Tailscale `
-            -CommandPath $tailscalePath `
-            -Arguments @("funnel", "status", "--json")
-        if ($null -ne (Get-MiniGPTFunnel -StatusJson $updatedStatus)) {
-            throw "Tailscale Funnel still publishes the miniGPT target."
-        }
-    }
+    Remove-MiniGPTFunnel -CommandPath $tailscalePath
     Stop-ExactProcess -Process $backendProcess
 
     if (Test-Path -LiteralPath $script:RuntimeStatePath -PathType Leaf) {

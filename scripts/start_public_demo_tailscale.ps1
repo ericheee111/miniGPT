@@ -200,6 +200,30 @@ function Get-MiniGPTFunnelAction {
     return "create"
 }
 
+function Remove-MiniGPTFunnel {
+    param(
+        [Parameter(Mandatory)]
+        [string]$CommandPath
+    )
+
+    $funnelStatus = Invoke-Tailscale `
+        -CommandPath $CommandPath `
+        -Arguments @("funnel", "status", "--json")
+    $funnel = Get-MiniGPTFunnel -StatusJson $funnelStatus
+    if ($null -eq $funnel) {
+        return
+    }
+    $null = Invoke-Tailscale `
+        -CommandPath $CommandPath `
+        -Arguments @("funnel", "--https=443", "off")
+    $updatedStatus = Invoke-Tailscale `
+        -CommandPath $CommandPath `
+        -Arguments @("funnel", "status", "--json")
+    if ($null -ne (Get-MiniGPTFunnel -StatusJson $updatedStatus)) {
+        throw "Tailscale Funnel still publishes the miniGPT target."
+    }
+}
+
 function Quote-ProcessArgument {
     param(
         [Parameter(Mandatory)]
@@ -455,9 +479,7 @@ function Invoke-MiniGPTPublicDemoStart {
     } catch {
         if ($configuredFunnel) {
             try {
-                $null = Invoke-Tailscale `
-                    -CommandPath $tailscalePath `
-                    -Arguments @("funnel", "--https=443", "off")
+                Remove-MiniGPTFunnel -CommandPath $tailscalePath
             } catch {
                 Write-Warning "Funnel cleanup failed; run scripts\stop_public_demo_tailscale.ps1."
             }

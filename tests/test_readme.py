@@ -234,6 +234,7 @@ def test_public_demo_launcher_is_loopback_scoped_and_never_accepts_token() -> No
         '@("funnel", "status", "--json")',
         '@("funnel", "--bg", "--yes", "8000")',
         "Get-MiniGPTFunnel",
+        "Remove-MiniGPTFunnel",
         "Test-TcpPortInUse",
         "Get-NetTCPConnection",
         "Read-RuntimeState",
@@ -251,7 +252,8 @@ def test_public_demo_launcher_is_loopback_scoped_and_never_accepts_token() -> No
     assert "127.0.0.1:8787" not in scripts
     assert "tailscale down" not in scripts
     assert "stop-process -name" not in scripts
-    assert '@("funnel", "--https=443", "off")' in stopper
+    assert "Remove-MiniGPTFunnel" in stopper
+    assert '@("funnel", "--https=443", "off")' in scripts
     assert "0.0.0.0" not in launcher  # noqa: S104 - assert the unsafe bind is absent
     assert "New-NetFirewallRule" not in launcher
     assert "portproxy" not in launcher
@@ -351,6 +353,16 @@ def test_public_demo_tailscale_status_parsing_and_preflight_failures_are_mocked(
             "Test-TcpPortInUse -Port 8000"
         ),
     )
+    shared_cleanup = _run_powershell_launcher_probe(
+        shared_funnel,
+        (
+            "$script:commands = @(); "
+            "function Invoke-Tailscale { param([string]$CommandPath, [string[]]$Arguments) "
+            "$script:commands += ($Arguments -join ' '); return $mockJson }; "
+            "try { Remove-MiniGPTFunnel -CommandPath 'mock-tailscale.exe' } catch {}; "
+            "$script:commands -join '|'"
+        ),
+    )
 
     # Then: the ts.net origin is exact and missing login/CLI fail with actionable errors.
     assert parsed.returncode == 0, parsed.stderr
@@ -367,6 +379,7 @@ def test_public_demo_tailscale_status_parsing_and_preflight_failures_are_mocked(
     assert "port 443 already serves another target" in conflict_error.stdout
     assert "shares HTTPS port 443 with other handlers" in shared_error.stdout
     assert occupied_port.stdout.strip() == "True"
+    assert shared_cleanup.stdout.strip() == "funnel status --json"
 
 
 def _run_powershell_launcher_probe(
