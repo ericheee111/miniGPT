@@ -234,6 +234,8 @@ def test_public_demo_launcher_is_loopback_scoped_and_never_accepts_token() -> No
         '@("funnel", "status", "--json")',
         '@("funnel", "--bg", "--yes", "8000")',
         "Get-MiniGPTFunnel",
+        "Test-TcpPortInUse",
+        "Get-NetTCPConnection",
         "Read-RuntimeState",
         "Get-ManagedBackendProcess",
         "outputs\\public-demo",
@@ -286,6 +288,19 @@ def test_public_demo_tailscale_status_parsing_and_preflight_failures_are_mocked(
             "AllowFunnel": {"other.example-tailnet.ts.net:443": True},
         }
     )
+    shared_funnel = json.dumps(
+        {
+            "Web": {
+                "minigpt-demo.example-tailnet.ts.net:443": {
+                    "Handlers": {
+                        "/": {"Proxy": "http://127.0.0.1:8000"},
+                        "/other": {"Proxy": "http://127.0.0.1:9000"},
+                    }
+                }
+            },
+            "AllowFunnel": {"minigpt-demo.example-tailnet.ts.net:443": True},
+        }
+    )
 
     # When: parser, login validation, and CLI discovery run without invoking real Tailscale.
     parsed = _run_powershell_launcher_probe(
@@ -321,6 +336,21 @@ def test_public_demo_tailscale_status_parsing_and_preflight_failures_are_mocked(
             "catch { Write-Output $_.Exception.Message }"
         ),
     )
+    shared_error = _run_powershell_launcher_probe(
+        shared_funnel,
+        (
+            "try { Get-MiniGPTFunnelAction -StatusJson $mockJson } "
+            "catch { Write-Output $_.Exception.Message }"
+        ),
+    )
+    occupied_port = _run_powershell_launcher_probe(
+        "{}",
+        (
+            "function Get-NetTCPConnection { [CmdletBinding()] param([string]$State, "
+            "[int]$LocalPort) [PSCustomObject]@{ LocalPort = $LocalPort } }; "
+            "Test-TcpPortInUse -Port 8000"
+        ),
+    )
 
     # Then: the ts.net origin is exact and missing login/CLI fail with actionable errors.
     assert parsed.returncode == 0, parsed.stderr
@@ -335,6 +365,8 @@ def test_public_demo_tailscale_status_parsing_and_preflight_failures_are_mocked(
     assert reuse_action.stdout.strip() == "reuse"
     assert create_action.stdout.strip() == "create"
     assert "port 443 already serves another target" in conflict_error.stdout
+    assert "shares HTTPS port 443 with other handlers" in shared_error.stdout
+    assert occupied_port.stdout.strip() == "True"
 
 
 def _run_powershell_launcher_probe(

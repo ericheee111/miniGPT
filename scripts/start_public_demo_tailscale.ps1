@@ -130,6 +130,10 @@ function Get-MiniGPTFunnel {
         if ($proxy -ne $script:BackendTarget) {
             continue
         }
+        $handlerProperties = @($handlers.PSObject.Properties)
+        if ($handlerProperties.Count -ne 1 -or $handlerProperties[0].Name -ne "/") {
+            throw "The miniGPT Funnel shares HTTPS port 443 with other handlers."
+        }
         $separator = $hostPort.LastIndexOf(":")
         if ($separator -le 0) {
             throw "Tailscale Funnel status contains an invalid host and port."
@@ -220,6 +224,19 @@ function Test-HttpSuccess {
     } catch {
         return $false
     }
+}
+
+function Test-TcpPortInUse {
+    param(
+        [Parameter(Mandatory)]
+        [int]$Port
+    )
+
+    $listeners = @(Get-NetTCPConnection `
+        -State Listen `
+        -LocalPort $Port `
+        -ErrorAction SilentlyContinue)
+    return $listeners.Count -gt 0
 }
 
 function Wait-ForBackend {
@@ -375,8 +392,8 @@ function Invoke-MiniGPTPublicDemoStart {
         } else {
             if ($null -ne $backendProcess) {
                 Stop-ExactProcess -Process $backendProcess
-            } elseif (Test-HttpSuccess -Uri $script:BackendHealthUrl) {
-                throw "Port 8000 is already used by an unmanaged HTTP service."
+            } elseif (Test-TcpPortInUse -Port 8000) {
+                throw "Port 8000 is already used by an unmanaged local service."
             }
             $backendOutput = Join-Path $script:RuntimeDirectory "backend.stdout.log"
             $backendError = Join-Path $script:RuntimeDirectory "backend.stderr.log"
