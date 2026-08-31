@@ -909,28 +909,71 @@ class _PublicMetrics:
         }
 
 
+@dataclass(slots=True)
+class _StreamLifecycle:
+    runner: EngineRunner
+    request_id: str
+    lease: _CapacityLease
+    quota_lease: _GlobalQuotaLease
+    metrics: _PublicMetrics
+    generated_tokens: int = 0
+    terminal_recorded: bool = False
+    cleanup_task: asyncio.Task[None] | None = field(default=None, init=False)
+
+    def record_token(self) -> None:
+        self.generated_tokens += 1
+
+    def complete(self, *, generated_tokens: int, latency_seconds: float) -> None:
+        self.generated_tokens = generated_tokens
+        if self.terminal_recorded:
+            return
+        self.terminal_recorded = True
+        self.metrics.complete(
+            generated_tokens=generated_tokens,
+            latency_seconds=latency_seconds,
+        )
+
+    def fail(self, *, latency_seconds: float, timed_out: bool = False) -> None:
+        if self.terminal_recorded:
+            return
+        self.terminal_recorded = True
+        self.metrics.fail(latency_seconds=latency_seconds, timed_out=timed_out)
+
+    async def cleanup(self, *, cancel: bool) -> None:
+        if self.cleanup_task is None:
+            self.cleanup_task = asyncio.create_task(self._cleanup_once(cancel=cancel))
+        cleanup_task = self.cleanup_task
+        interrupted = False
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                interrupted = True
+        cleanup_task.result()
+        if interrupted:
+            raise asyncio.CancelledError
+
+    async def _cleanup_once(self, *, cancel: bool) -> None:
+        if cancel:
+            await _cancel_safely(self.runner, self.request_id)
+        await self.quota_lease.settle(self.generated_tokens)
+        await self.lease.release()
+
+
 @final
 class _PublicStreamingResponse(StreamingResponse):
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         content: AsyncGenerator[str, None],
         *,
-        runner: EngineRunner,
-        request_id: str,
-        lease: _CapacityLease,
-        quota_lease: _GlobalQuotaLease,
-        metrics: _PublicMetrics,
+        lifecycle: _StreamLifecycle,
         clock: Callable[[], float],
         started_at: float,
         headers: Mapping[str, str],
     ) -> None:
         super().__init__(content, media_type="text/event-stream", headers=headers)
         self._content = content
-        self._runner = runner
-        self._request_id = request_id
-        self._lease = lease
-        self._quota_lease = quota_lease
-        self._metrics = metrics
+        self._lifecycle = lifecycle
         self._clock = clock
         self._started_at = started_at
 
@@ -942,14 +985,8 @@ class _PublicStreamingResponse(StreamingResponse):
             try:
                 await self._content.aclose()
             finally:
-                if not self._quota_lease.finalized:
-                    await self._quota_lease.settle(0)
-                if not self._lease.released:
-                    try:
-                        await _cancel_safely(self._runner, self._request_id)
-                    finally:
-                        self._metrics.fail(latency_seconds=_elapsed(self._clock, self._started_at))
-                        await self._lease.release()
+                self._lifecycle.fail(latency_seconds=_elapsed(self._clock, self._started_at))
+                await self._lifecycle.cleanup(cancel=True)
 
 
 @final
@@ -1321,28 +1358,28 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         _LOGGER.info("public demo request submitted request_id=%s", request_id)
         created = int(time.time())
         if completion.stream:
-            stream = _stream_completion(
+            lifecycle = _StreamLifecycle(
                 runner=runner,
-                handle=handle,
+                request_id=request_id,
                 lease=lease,
                 quota_lease=quota_lease,
+                metrics=metrics,
+            )
+            stream = _stream_completion(
+                handle=handle,
+                lifecycle=lifecycle,
                 tokenizer=tokenizer,
                 request_id=request_id,
                 created=created,
                 model_id=info.model_id,
                 prompt_tokens=len(prompt_tokens),
                 deadline=deadline,
-                metrics=metrics,
                 clock=clock,
                 started_at=started_at,
             )
             return _PublicStreamingResponse(
                 stream,
-                runner=runner,
-                request_id=request_id,
-                lease=lease,
-                quota_lease=quota_lease,
-                metrics=metrics,
+                lifecycle=lifecycle,
                 clock=clock,
                 started_at=started_at,
                 headers={
@@ -1490,44 +1527,36 @@ async def _wait_for_disconnect(request: Request, stop: asyncio.Event) -> None:
             continue
 
 
-async def _stream_completion(  # noqa: C901, PLR0913, PLR0915
+async def _stream_completion(  # noqa: PLR0913
     *,
-    runner: EngineRunner,
     handle: RequestHandle,
-    lease: _CapacityLease,
-    quota_lease: _GlobalQuotaLease,
+    lifecycle: _StreamLifecycle,
     tokenizer: CharTokenizer,
     request_id: str,
     created: int,
     model_id: str,
     prompt_tokens: int,
     deadline: float,
-    metrics: _PublicMetrics,
     clock: Callable[[], float],
     started_at: float,
 ) -> AsyncGenerator[str, None]:
     stream_queue = handle.stream_queue
     if stream_queue is None:
-        await _cancel_safely(runner, request_id)
-        await quota_lease.settle(0)
-        metrics.fail(latency_seconds=_elapsed(clock, started_at))
-        await lease.release()
+        lifecycle.fail(latency_seconds=_elapsed(clock, started_at))
+        await lifecycle.cleanup(cancel=True)
         reason = "streaming request omitted its stream channel"
         raise RuntimeError(reason)
     completed_normally = False
-    terminal_recorded = False
-    generated_tokens = 0
     try:
         async with asyncio.timeout_at(deadline):
             while True:
                 event = await asyncio.to_thread(stream_queue.get)
                 if event.event_type is StreamEventType.TOKEN:
                     if event.token_id is None:
-                        metrics.fail(latency_seconds=_elapsed(clock, started_at))
-                        terminal_recorded = True
+                        lifecycle.fail(latency_seconds=_elapsed(clock, started_at))
                         yield _sse_error("generation failed", "internal_error")
                         return
-                    generated_tokens += 1
+                    lifecycle.record_token()
                     yield _sse_data(
                         _completion_document(
                             request_id=request_id,
@@ -1539,12 +1568,10 @@ async def _stream_completion(  # noqa: C901, PLR0913, PLR0915
                     )
                     continue
                 if event.event_type is StreamEventType.FINISHED and event.result is not None:
-                    generated_tokens = len(event.result.generated_tokens)
-                    metrics.complete(
-                        generated_tokens=generated_tokens,
+                    lifecycle.complete(
+                        generated_tokens=len(event.result.generated_tokens),
                         latency_seconds=_elapsed(clock, started_at),
                     )
-                    terminal_recorded = True
                     yield _sse_data(
                         _completion_document(
                             request_id=request_id,
@@ -1552,37 +1579,32 @@ async def _stream_completion(  # noqa: C901, PLR0913, PLR0915
                             model_id=model_id,
                             text="",
                             finish_reason="length",
-                            usage=_usage(prompt_tokens, generated_tokens),
+                            usage=_usage(prompt_tokens, lifecycle.generated_tokens),
                         )
                     )
                     yield "data: [DONE]\n\n"
                     completed_normally = True
                     _LOGGER.info("public demo request completed request_id=%s", request_id)
                     return
-                metrics.fail(latency_seconds=_elapsed(clock, started_at))
-                terminal_recorded = True
+                lifecycle.fail(latency_seconds=_elapsed(clock, started_at))
                 yield _sse_error("generation failed", "generation_failed")
                 return
     except TimeoutError:
-        await _cancel_safely(runner, request_id)
-        metrics.fail(latency_seconds=_elapsed(clock, started_at), timed_out=True)
-        terminal_recorded = True
+        lifecycle.fail(
+            latency_seconds=_elapsed(clock, started_at),
+            timed_out=True,
+        )
         _LOGGER.info("public demo request timed out request_id=%s", request_id)
         yield _sse_error("generation request timed out", "request_timeout")
     except (asyncio.CancelledError, GeneratorExit):
-        if not terminal_recorded:
-            metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        lifecycle.fail(latency_seconds=_elapsed(clock, started_at))
         raise
     except Exception:  # noqa: BLE001
-        if not terminal_recorded:
-            metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        lifecycle.fail(latency_seconds=_elapsed(clock, started_at))
         _log_request_failure(request_id)
         yield _sse_error("generation failed", "internal_error")
     finally:
-        if not completed_normally:
-            await _cancel_safely(runner, request_id)
-        await quota_lease.settle(generated_tokens)
-        await lease.release()
+        await lifecycle.cleanup(cancel=not completed_normally)
 
 
 async def _read_json_document(

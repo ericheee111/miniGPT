@@ -24,6 +24,7 @@ from minigpt.engine_runner import (
     RunnerConfig,
     RunnerResult,
     StreamEvent,
+    StreamEventType,
 )
 from minigpt.http_server import MODEL_ID, create_app
 from minigpt.model import GPT
@@ -99,9 +100,15 @@ _PUBLIC_POLICY = PublicDemoPolicy(
 
 @final
 class _ControlledRunner:
-    def __init__(self, *, failure: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        failure: BaseException | None = None,
+        cancel_delay_seconds: float = 0.0,
+    ) -> None:
         self.running = False
         self.failure = failure
+        self.cancel_delay_seconds = cancel_delay_seconds
         self.handles: list[RequestHandle] = []
         self.cancelled_request_ids: list[str] = []
 
@@ -133,6 +140,8 @@ class _ControlledRunner:
 
     def cancel(self, request_id: str, *, timeout_seconds: float = 1.0) -> None:
         del timeout_seconds
+        if self.cancel_delay_seconds > 0:
+            time.sleep(self.cancel_delay_seconds)
         self.cancelled_request_ids.append(request_id)
         for handle in self.handles:
             if handle.request_id == request_id and not handle.future.done():
@@ -190,8 +199,12 @@ def _build_controlled_public_app(
     *,
     policy: PublicDemoPolicy,
     failure: BaseException | None = None,
+    cancel_delay_seconds: float = 0.0,
 ) -> tuple[FastAPI, _ControlledRunner]:
-    runner = _ControlledRunner(failure=failure)
+    runner = _ControlledRunner(
+        failure=failure,
+        cancel_delay_seconds=cancel_delay_seconds,
+    )
     app = create_public_demo_app(
         runner=cast("EngineRunner", cast("object", runner)),
         tokenizer=CharTokenizer.from_text("AB"),
@@ -849,7 +862,7 @@ def test_public_demo_streaming_disabled_fails_closed_before_submission() -> None
 
 
 async def _check_public_demo_streaming_disabled() -> None:
-    # Given: the deployment-default non-streaming public policy.
+    # Given: an explicit non-streaming public policy.
     policy = replace(_PUBLIC_POLICY, streaming_enabled=False)
     app, runner = _build_controlled_public_app(policy=policy)
 
@@ -1100,6 +1113,79 @@ async def _check_public_demo_stream_start_disconnect() -> None:
     assert metrics["active_requests"] == 0
     assert metrics["queued_requests"] == 0
     assert metrics["failed_requests"] == 1
+
+
+def test_public_demo_stream_disconnect_after_token_records_one_failure() -> None:
+    asyncio.run(_check_public_demo_stream_token_disconnect())
+
+
+async def _check_public_demo_stream_token_disconnect() -> None:
+    # Given: a streaming request whose client disconnects after receiving one token event.
+    policy = replace(_PUBLIC_POLICY, max_concurrent_requests=1, max_queue_size=0)
+    app, runner = _build_controlled_public_app(
+        policy=policy,
+        cancel_delay_seconds=0.05,
+    )
+    body = json.dumps(_completion_payload(stream=True)).encode("utf-8")
+    receives: asyncio.Queue[Message] = asyncio.Queue()
+    await receives.put(
+        {
+            "type": "http.request",
+            "body": body,
+            "more_body": False,
+        }
+    )
+    scope = cast(
+        "Scope",
+        {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/v1/completions",
+            "raw_path": b"/v1/completions",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 8000),
+            "state": {},
+        },
+    )
+    disconnected = False
+
+    async def receive() -> Message:
+        return await receives.get()
+
+    async def send(message: Message) -> None:
+        nonlocal disconnected
+        if message["type"] == "http.response.body" and message.get("body") and not disconnected:
+            disconnected = True
+            await receives.put({"type": "http.disconnect"})
+
+    # When: the runner publishes one token and the ASGI disconnect cancels the stream task.
+    async with app.router.lifespan_context(app):
+        request_task = asyncio.create_task(app(scope, receive, send))
+        await _wait_until(lambda: len(runner.handles) == 1)
+        stream_queue = runner.handles[0].stream_queue
+        assert stream_queue is not None
+        stream_queue.put_nowait(StreamEvent(event_type=StreamEventType.TOKEN, token_id=0))
+        await asyncio.wait_for(request_task, timeout=1.0)
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url=_BASE_URL,
+        ) as client:
+            metrics = _response_body(await client.get("/demo/metrics"))
+
+    # Then: cancellation and failed-request accounting both occur exactly once.
+    assert len(runner.cancelled_request_ids) == 1
+    assert metrics["failed_requests"] == 1
+    assert metrics["active_requests"] == 0
+    assert metrics["queued_requests"] == 0
 
 
 def test_public_demo_kill_switch_and_safe_read_only_documents() -> None:
