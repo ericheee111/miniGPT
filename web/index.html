@@ -149,8 +149,8 @@
                 >
               </div>
               <div class="toggle-field">
-                <input id="stream" name="stream" type="checkbox" checked>
-                <label for="stream">Stream tokens</label>
+                <input id="stream" name="stream" type="checkbox" disabled>
+                <label for="stream">Stream tokens (after tunnel verification)</label>
               </div>
             </div>
 
@@ -203,14 +203,14 @@ But soft, what light through yonder window breaks?</pre>
             <h2 id="architecture-title">Static portfolio, local compute</h2>
           </div>
           <p class="section-summary">
-            GitHub Pages never receives model weights. The browser calls an account-bound ngrok
-            development domain, which forwards to the loopback-only runtime on the owner’s PC.
+            GitHub Pages never receives model weights. The browser calls a Tailscale Funnel HTTPS
+            endpoint, which forwards to the loopback-only runtime on the owner’s PC.
           </p>
         </div>
         <div class="architecture-flow" aria-label="Public Playground request architecture">
           <article><span>01</span><h3>GitHub Pages</h3><p>Always-on static HTML, CSS, JavaScript, evidence, and examples.</p></article>
           <div class="flow-arrow" aria-hidden="true">HTTPS →</div>
-          <article><span>02</span><h3>ngrok tunnel</h3><p>Assigned free development domain; no token or model asset in Git.</p></article>
+          <article><span>02</span><h3>Tailscale Funnel</h3><p>Public <code>*.ts.net</code> HTTPS endpoint; no model asset in Git.</p></article>
           <div class="flow-arrow" aria-hidden="true">→</div>
           <article><span>03</span><h3>127.0.0.1:8000</h3><p>Restricted FastAPI policy, CORS, queue, timeout, and rate limits.</p></article>
           <div class="flow-arrow" aria-hidden="true">→</div>
@@ -267,7 +267,7 @@ But soft, what light through yonder window breaks?</pre>
         </div>
         <div class="limit-copy">
           <p>
-            Prompts travel from your browser through ngrok to the owner’s local machine. miniGPT
+            Prompts travel from your browser through Tailscale Funnel to the owner’s local machine. miniGPT
             does not intentionally log prompts, this page uses no analytics or cookies, and prompts
             are not saved in localStorage. Do not submit sensitive information.
           </p>

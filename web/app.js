@@ -4,7 +4,6 @@
   const HEALTH_INTERVAL_MS = 60_000;
   const HEALTH_TIMEOUT_MS = 6_000;
   const STATIC_EXAMPLE = "ROMEO:\nBut soft, what light through yonder window breaks?";
-  const REQUEST_HEADERS = Object.freeze({ "ngrok-skip-browser-warning": "1" });
   const configuration = window.MINIGPT_DEMO_CONFIG ?? Object.freeze({ apiBase: "" });
   const apiBase = typeof configuration.apiBase === "string" ? configuration.apiBase : "";
 
@@ -45,6 +44,7 @@
     generatedTokens: 0,
     elapsedTimer: null,
     modelId: "minigpt-char",
+    streamingEnabled: false,
   };
 
   function apiUrl(path) {
@@ -58,7 +58,7 @@
       cache: "no-store",
       credentials: "omit",
       referrerPolicy: "no-referrer",
-      headers: { ...REQUEST_HEADERS, ...suppliedHeaders },
+      headers: suppliedHeaders,
     });
   }
 
@@ -320,7 +320,7 @@
       max_tokens: elements.maxTokens.valueAsNumber,
       temperature: elements.temperature.valueAsNumber,
       seed: elements.seed.valueAsNumber,
-      stream: elements.stream.checked,
+      stream: state.streamingEnabled && elements.stream.checked,
     };
     const controller = new AbortController();
     state.activeController = controller;
@@ -367,6 +367,11 @@
   }
 
   function applyInfo(info) {
+    state.streamingEnabled = info.streaming_enabled === true;
+    elements.stream.disabled = !state.streamingEnabled;
+    if (!state.streamingEnabled) {
+      elements.stream.checked = false;
+    }
     if (typeof info.model_id === "string") {
       state.modelId = info.model_id;
     }

@@ -48,25 +48,25 @@ The project is intentionally small enough to study end to end, but its contracts
 
 ## Public Playground / Deployment
 
-Post-v1 Public Playground 把 miniGPT 作为零月费个人作品集展示：GitHub Pages 托管无构建链的静态页面，模型、checkpoint、tokenizer 和 CPU 计算继续留在个人 Windows 电脑，ngrok 免费账户绑定的 assigned development domain 把 HTTPS completion/SSE 请求转发到 loopback-only backend。
+Post-v1 Public Playground 把 miniGPT 作为零月费个人作品集展示：GitHub Pages 托管无构建链的静态页面，模型、checkpoint、tokenizer 和 CPU 计算继续留在个人 Windows 电脑，Tailscale Funnel 用 `*.ts.net` HTTPS endpoint 把请求转发到 loopback-only backend。
 
 ```text
-GitHub Pages → ngrok HTTPS → 127.0.0.1:8000
-             → minigpt demo-serve → existing EngineRunner / ServingRuntime / GPT
+GitHub Pages → Tailscale Funnel HTTPS → 127.0.0.1:8000
+                         → minigpt demo-serve → existing EngineRunner / ServingRuntime / GPT
 ```
 
 页面明确定位为**字符级文本续写 systems demo**，不是通用问答助手或 ChatGPT 替代品。电脑或 tunnel 离线时，Generate 会禁用，但项目介绍、架构、Stage 1–21、Evidence 和静态示例仍可访问。
 
 当前 deployment 状态：本仓库包含完整实现与 workflow，但 GitHub Pages 尚需 repository owner 配置；预期 project URL 是 `https://ericheee111.github.io/miniGPT/`，在 Pages 设置和 `DEMO_API_BASE` 尚未完成前，不能视为已经在线。
 
-本地启动前先把 ngrok authtoken 写入 ngrok 自己的用户配置，绝不能放入仓库：
+本地启动前先安装、登录 Tailscale，并准备匹配的本地模型资产：
 
 ```powershell
 $env:PUBLIC_ORIGIN = "https://ericheee111.github.io"
 $env:DEMO_ENABLED = "1"
 $env:MINIGPT_CHECKPOINT = "checkpoints/reference/latest.pt"
 $env:MINIGPT_TOKENIZER = "data/processed/tokenizer.json"
-.\scripts\start_public_demo.ps1
+.\scripts\start_public_demo_tailscale.ps1
 ```
 
 只构建静态 offline-only 页面：
@@ -77,13 +77,13 @@ python scripts/build_public_demo_site.py --output _site
 python -m http.server 4173 --directory _site --bind 127.0.0.1
 ```
 
-公网入口使用独立 `minigpt demo-serve`；普通 `minigpt serve` 的默认行为没有改变。public mode 默认最多 8192-byte body、256 Prompt characters/tokens、96 generated tokens、2 active + 8 queued requests、45 秒 timeout，并同时使用 per-client 和不可由 XFF 绕过的 global limiter。CORS 是 exact browser allowlist，不是认证。Swagger/OpenAPI、Prompt logging、analytics、cookie、Prompt storage、checkpoint publication 和 query-string API override 都被禁用。
+公网入口使用独立 `minigpt demo-serve`；普通 `minigpt serve` 的默认行为没有改变。public mode 默认最多 8192-byte body、256 Prompt characters/tokens、96 generated tokens、2 active + 8 queued requests、45 秒 timeout、60 accepted requests/hour 和 10000 actual generated tokens/day。global quotas 与 client IP/XFF 无关。SSE 默认关闭，只有真实 Funnel 分块与取消验收通过后才启用。CORS 是 exact browser allowlist，不是认证。Swagger/OpenAPI、Prompt logging、analytics、cookie、Prompt storage、checkpoint publication 和 query-string API override 都被禁用。
 
 - [完整零成本部署步骤](docs/PUBLIC_DEMO_DEPLOYMENT.md)
 - [Public Demo threat model](docs/PUBLIC_DEMO_THREAT_MODEL.md)
 - [设计说明](docs/superpowers/specs/2026-08-30-post-v1-public-playground-design.md)
 
-这是非商业个人 Demo：不输入敏感信息、没有 24/7 SLA、ngrok 免费额度有限、不声明生产安全，也不宣称 paged KV/APC 或整体服务具有普遍 wall-clock 提升。
+这是非商业个人 Demo：不输入敏感信息、没有 24/7 SLA、免费 Funnel 有服务边界、不声明生产安全，也不宣称 paged KV/APC 或整体服务具有普遍 wall-clock 提升。
 
 ## 功能与边界
 

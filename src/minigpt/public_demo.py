@@ -62,6 +62,8 @@ _LOGGER = logging.getLogger("minigpt.public_demo")
 _MAX_SEED = 2**63
 _MAX_PORT = 65535
 _SERVER_ERROR_THRESHOLD = 500
+_HOUR_SECONDS = 3600.0
+_DAY_SECONDS = 86400.0
 _COMPLETION_FIELDS = frozenset({"model", "prompt", "max_tokens", "temperature", "stream", "seed"})
 _SERVER_KEYS = frozenset({"host", "port", "log_level"})
 _RUNTIME_KEYS = frozenset(
@@ -94,18 +96,16 @@ _POLICY_KEYS = frozenset(
         "request_timeout_seconds",
         "max_concurrent_requests",
         "max_queue_size",
-        "per_client_requests",
-        "per_client_window_seconds",
-        "global_requests",
-        "global_window_seconds",
+        "global_requests_per_hour",
+        "global_generated_tokens_per_day",
+        "streaming_enabled",
         "enabled",
-        "trust_proxy",
     }
 )
 _TOP_LEVEL_KEYS = frozenset({"schema_version", "server", "runtime", "policy", "allowed_origins"})
 _LOG_LEVELS = frozenset({"critical", "error", "warning", "info"})
 _CORS_METHODS = "GET, POST, OPTIONS"
-_CORS_HEADERS = frozenset({"content-type", "ngrok-skip-browser-warning"})
+_CORS_HEADERS = frozenset({"content-type"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,12 +143,10 @@ class PublicDemoPolicy:
     request_timeout_seconds: float = 45.0
     max_concurrent_requests: int = 2
     max_queue_size: int = 8
-    per_client_requests: int = 5
-    per_client_window_seconds: float = 600.0
-    global_requests: int = 60
-    global_window_seconds: float = 3600.0
+    global_requests_per_hour: int = 60
+    global_generated_tokens_per_day: int = 10_000
+    streaming_enabled: bool = False
     enabled: bool = False
-    trust_proxy: bool = False
     allowed_origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -159,8 +157,8 @@ class PublicDemoPolicy:
             ("max_prompt_tokens", self.max_prompt_tokens),
             ("max_new_tokens", self.max_new_tokens),
             ("max_concurrent_requests", self.max_concurrent_requests),
-            ("per_client_requests", self.per_client_requests),
-            ("global_requests", self.global_requests),
+            ("global_requests_per_hour", self.global_requests_per_hour),
+            ("global_generated_tokens_per_day", self.global_generated_tokens_per_day),
         ):
             _require_positive_integer(name, value)
         _require_non_negative_integer("max_queue_size", self.max_queue_size)
@@ -168,16 +166,18 @@ class PublicDemoPolicy:
             ("min_temperature", self.min_temperature),
             ("max_temperature", self.max_temperature),
             ("request_timeout_seconds", self.request_timeout_seconds),
-            ("per_client_window_seconds", self.per_client_window_seconds),
-            ("global_window_seconds", self.global_window_seconds),
         ):
             _require_positive_number(name, value)
         if self.min_temperature > self.max_temperature:
             _invalid("min_temperature must not exceed max_temperature")
-        if type(self.enabled) is not bool:
-            _invalid("enabled must be a boolean")
-        if type(self.trust_proxy) is not bool:
-            _invalid("trust_proxy must be a boolean")
+        if self.global_generated_tokens_per_day < self.max_new_tokens:
+            _invalid("global_generated_tokens_per_day must be at least max_new_tokens")
+        for name, value in (
+            ("streaming_enabled", self.streaming_enabled),
+            ("enabled", self.enabled),
+        ):
+            if type(value) is not bool:
+                _invalid(f"{name} must be a boolean")
         normalized = tuple(_normalize_origin(origin) for origin in self.allowed_origins)
         if len(normalized) != len(set(normalized)):
             _invalid("allowed_origins must not contain duplicates")
@@ -195,10 +195,8 @@ class PublicDemoPolicy:
             "request_timeout_seconds": self.request_timeout_seconds,
             "max_concurrent_requests": self.max_concurrent_requests,
             "max_queue_size": self.max_queue_size,
-            "per_client_requests": self.per_client_requests,
-            "per_client_window_seconds": self.per_client_window_seconds,
-            "global_requests": self.global_requests,
-            "global_window_seconds": self.global_window_seconds,
+            "global_requests_per_hour": self.global_requests_per_hour,
+            "global_generated_tokens_per_day": self.global_generated_tokens_per_day,
         }
 
 
@@ -344,7 +342,6 @@ class PublicDemoInfo:
     executor_name: str
     kv_cache_backend: str
     prefix_cache_enabled: bool
-    streaming_available: bool = True
 
 
 def load_public_demo_settings(path: Path | None) -> PublicDemoSettings:
@@ -372,7 +369,6 @@ def resolve_environment(
     settings: PublicDemoSettings,
     environment: Mapping[str, str],
     *,
-    trust_proxy: bool,
     origins: Sequence[str] | None,
 ) -> PublicDemoSettings:
     """Apply the small, explicit deployment environment surface."""
@@ -388,8 +384,6 @@ def resolve_environment(
         configured_origins = [] if not public_origin else [public_origin]
     if configured_origins is not None:
         policy = replace(policy, allowed_origins=tuple(configured_origins))
-    if trust_proxy:
-        policy = replace(policy, trust_proxy=True)
     return replace(settings, policy=policy)
 
 
@@ -397,13 +391,10 @@ def validate_bind_host(
     host: str,
     *,
     unsafe_allow_non_loopback: bool,
-    trust_proxy: bool,
 ) -> None:
     """Require loopback unless the operator names the unsafe exception."""
     if _is_loopback_host(host):
         return
-    if trust_proxy:
-        _invalid("trust_proxy requires a loopback server host")
     if not unsafe_allow_non_loopback:
         _invalid("public demo may only bind loopback; use --unsafe-allow-non-loopback to override")
 
@@ -466,14 +457,14 @@ def _parse_policy(
             document, "max_concurrent_requests", source, positive=True
         ),
         max_queue_size=_integer(document, "max_queue_size", source, non_negative=True),
-        per_client_requests=_integer(document, "per_client_requests", source, positive=True),
-        per_client_window_seconds=_number(
-            document, "per_client_window_seconds", source, positive=True
+        global_requests_per_hour=_integer(
+            document, "global_requests_per_hour", source, positive=True
         ),
-        global_requests=_integer(document, "global_requests", source, positive=True),
-        global_window_seconds=_number(document, "global_window_seconds", source, positive=True),
+        global_generated_tokens_per_day=_integer(
+            document, "global_generated_tokens_per_day", source, positive=True
+        ),
+        streaming_enabled=_boolean(document, "streaming_enabled", source),
         enabled=_boolean(document, "enabled", source),
-        trust_proxy=_boolean(document, "trust_proxy", source),
         allowed_origins=allowed_origins,
     )
 
@@ -736,6 +727,131 @@ class _CapacityGate:
         self._active -= 1
 
 
+@dataclass(frozen=True, slots=True)
+class _GlobalQuotaFullError(RuntimeError):
+    """Report an exhausted process-wide request or generated-token quota."""
+
+    retry_after: int
+
+
+@dataclass(slots=True)
+class _GlobalQuotaLease:
+    quota: _GlobalQuota
+    request_id: str
+    reserved_tokens: int
+    finalized: bool = False
+
+    async def cancel(self) -> None:
+        """Roll back a request that the model runner did not accept."""
+        if self.finalized:
+            return
+        self.finalized = True
+        await self.quota.cancel(self.request_id)
+
+    async def settle(self, generated_tokens: int) -> None:
+        """Replace the hard reservation with the actual generated-token count."""
+        if self.finalized:
+            return
+        self.finalized = True
+        await self.quota.settle(
+            self.request_id,
+            reserved_tokens=self.reserved_tokens,
+            generated_tokens=generated_tokens,
+        )
+
+
+@final
+class _GlobalQuota:
+    """Atomically enforce IP-independent hourly requests and daily output tokens."""
+
+    def __init__(
+        self,
+        *,
+        policy: PublicDemoPolicy,
+        clock: Callable[[], float],
+    ) -> None:
+        self._policy = policy
+        self._clock = clock
+        self._requests: deque[tuple[str, float]] = deque()
+        self._generated_tokens: deque[tuple[float, int]] = deque()
+        self._reservations: dict[str, int] = {}
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, request_id: str, maximum_tokens: int) -> _GlobalQuotaLease:
+        """Reserve quota immediately before a request is submitted to the runner."""
+        now = self._clock()
+        async with self._lock:
+            self._prune(now)
+            if len(self._requests) >= self._policy.global_requests_per_hour:
+                retry_after = max(
+                    1,
+                    math.ceil(self._requests[0][1] + _HOUR_SECONDS - now),
+                )
+                raise _GlobalQuotaFullError(retry_after)
+            generated = sum(count for _timestamp, count in self._generated_tokens)
+            reserved = sum(self._reservations.values())
+            if generated + reserved + maximum_tokens > self._policy.global_generated_tokens_per_day:
+                raise _GlobalQuotaFullError(
+                    self._token_retry_after(
+                        now=now,
+                        required=generated
+                        + reserved
+                        + maximum_tokens
+                        - self._policy.global_generated_tokens_per_day,
+                    )
+                )
+            self._requests.append((request_id, now))
+            self._reservations[request_id] = maximum_tokens
+        return _GlobalQuotaLease(self, request_id, maximum_tokens)
+
+    async def cancel(self, request_id: str) -> None:
+        """Remove both reservations for a submission rejected by the runner."""
+        async with self._lock:
+            _ = self._reservations.pop(request_id, None)
+            for record in self._requests:
+                if record[0] == request_id:
+                    self._requests.remove(record)
+                    break
+
+    async def settle(
+        self,
+        request_id: str,
+        *,
+        reserved_tokens: int,
+        generated_tokens: int,
+    ) -> None:
+        """Commit actual output tokens while retaining the accepted request record."""
+        if not 0 <= generated_tokens <= reserved_tokens:
+            reason = "generated-token settlement exceeds its public quota reservation"
+            raise RuntimeError(reason)
+        async with self._lock:
+            reserved = self._reservations.pop(request_id, None)
+            if reserved is None:
+                reason = "public quota settled without an active reservation"
+                raise RuntimeError(reason)
+            if reserved != reserved_tokens:
+                reason = "public quota reservation changed before settlement"
+                raise RuntimeError(reason)
+            if generated_tokens > 0:
+                self._generated_tokens.append((self._clock(), generated_tokens))
+
+    def _prune(self, now: float) -> None:
+        request_minimum = now - _HOUR_SECONDS
+        while self._requests and self._requests[0][1] <= request_minimum:
+            _ = self._requests.popleft()
+        token_minimum = now - _DAY_SECONDS
+        while self._generated_tokens and self._generated_tokens[0][0] <= token_minimum:
+            _ = self._generated_tokens.popleft()
+
+    def _token_retry_after(self, *, now: float, required: int) -> int:
+        released = 0
+        for timestamp, count in self._generated_tokens:
+            released += count
+            if released >= required:
+                return max(1, math.ceil(timestamp + _DAY_SECONDS - now))
+        return 1
+
+
 @dataclass(slots=True)
 class _PublicMetrics:
     completed_requests: int = 0
@@ -802,6 +918,7 @@ class _PublicStreamingResponse(StreamingResponse):
         runner: EngineRunner,
         request_id: str,
         lease: _CapacityLease,
+        quota_lease: _GlobalQuotaLease,
         metrics: _PublicMetrics,
         clock: Callable[[], float],
         started_at: float,
@@ -812,6 +929,7 @@ class _PublicStreamingResponse(StreamingResponse):
         self._runner = runner
         self._request_id = request_id
         self._lease = lease
+        self._quota_lease = quota_lease
         self._metrics = metrics
         self._clock = clock
         self._started_at = started_at
@@ -824,52 +942,14 @@ class _PublicStreamingResponse(StreamingResponse):
             try:
                 await self._content.aclose()
             finally:
+                if not self._quota_lease.finalized:
+                    await self._quota_lease.settle(0)
                 if not self._lease.released:
                     try:
                         await _cancel_safely(self._runner, self._request_id)
                     finally:
                         self._metrics.fail(latency_seconds=_elapsed(self._clock, self._started_at))
                         await self._lease.release()
-
-
-@final
-class _SlidingWindowLimiter:
-    """Apply one atomic global window and one in-memory per-client window."""
-
-    def __init__(
-        self,
-        *,
-        policy: PublicDemoPolicy,
-        clock: Callable[[], float],
-    ) -> None:
-        self._policy = policy
-        self._clock = clock
-        self._global: deque[float] = deque()
-        self._clients: dict[str, deque[float]] = {}
-        self._lock = asyncio.Lock()
-
-    async def allow(self, client_key: str) -> int | None:
-        """Return Retry-After seconds when either window is saturated."""
-        now = self._clock()
-        async with self._lock:
-            _prune(self._global, now - self._policy.global_window_seconds)
-            client = self._clients.setdefault(client_key, deque())
-            _prune(client, now - self._policy.per_client_window_seconds)
-            retries: list[float] = []
-            if len(self._global) >= self._policy.global_requests:
-                retries.append(self._global[0] + self._policy.global_window_seconds - now)
-            if len(client) >= self._policy.per_client_requests:
-                retries.append(client[0] + self._policy.per_client_window_seconds - now)
-            if retries:
-                return max(1, math.ceil(max(retries)))
-            self._global.append(now)
-            client.append(now)
-            return None
-
-
-def _prune(values: deque[float], minimum: float) -> None:
-    while values and values[0] <= minimum:
-        _ = values.popleft()
 
 
 @final
@@ -992,7 +1072,7 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         maximum=policy.max_concurrent_requests,
         max_queue_size=policy.max_queue_size,
     )
-    limiter = _SlidingWindowLimiter(policy=policy, clock=clock)
+    quota = _GlobalQuota(policy=policy, clock=clock)
     metrics = _PublicMetrics()
 
     @asynccontextmanager
@@ -1061,7 +1141,7 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
                 "executor": info.executor_name,
                 "kv_cache_backend": info.kv_cache_backend,
                 "prefix_cache_enabled": info.prefix_cache_enabled,
-                "streaming_available": info.streaming_available,
+                "streaming_enabled": policy.streaming_enabled,
             }
         )
 
@@ -1092,19 +1172,10 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
                 message="public demo is offline",
                 code="service_unavailable",
             )
-        retry_after = await limiter.allow(_client_key(request, policy))
-        if retry_after is not None:
-            metrics.reject(rate_limited=True)
-            return _public_error(
-                status_code=429,
-                message="request rate limit exceeded",
-                code="rate_limit_exceeded",
-                headers={"Retry-After": str(retry_after)},
-            )
-
         loop = asyncio.get_running_loop()
         deadline = loop.time() + policy.request_timeout_seconds
         lease: _CapacityLease | None = None
+        quota_lease: _GlobalQuotaLease | None = None
         handle: RequestHandle | None = None
         try:
             async with asyncio.timeout_at(deadline):
@@ -1117,6 +1188,7 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
                     policy=policy,
                 )
                 lease = await gate.acquire()
+                quota_lease = await quota.acquire(request_id, completion.max_tokens)
                 handle = runner.submit(
                     GenerationRequest(
                         request_id=request_id,
@@ -1130,6 +1202,8 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
                 )
         except _RequestError as error:
             metrics.reject()
+            if quota_lease is not None:
+                await quota_lease.cancel()
             if lease is not None:
                 await lease.release()
             return _public_error(
@@ -1137,6 +1211,16 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
                 message=error.message,
                 code=error.code,
                 param=error.param,
+            )
+        except _GlobalQuotaFullError as error:
+            metrics.reject(rate_limited=True)
+            if lease is not None:
+                await lease.release()
+            return _public_error(
+                status_code=429,
+                message="global public demo quota exceeded",
+                code="rate_limit_exceeded",
+                headers={"Retry-After": str(error.retry_after)},
             )
         except _CapacityFullError:
             metrics.reject()
@@ -1148,6 +1232,8 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
             )
         except RunnerQueueFullError:
             metrics.reject()
+            if quota_lease is not None:
+                await quota_lease.cancel()
             if lease is not None:
                 await lease.release()
             return _public_error(
@@ -1158,6 +1244,8 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
             )
         except RunnerUnavailableError:
             metrics.reject()
+            if quota_lease is not None:
+                await quota_lease.cancel()
             if lease is not None:
                 await lease.release()
             return _public_error(
@@ -1168,6 +1256,11 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         except TimeoutError:
             if handle is not None:
                 await _cancel_safely(runner, request_id)
+            if quota_lease is not None:
+                if handle is None:
+                    await quota_lease.cancel()
+                else:
+                    await quota_lease.settle(0)
             if lease is not None:
                 await lease.release()
             metrics.fail(
@@ -1182,6 +1275,11 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         except ClientDisconnect:
             if handle is not None:
                 await _cancel_safely(runner, request_id)
+            if quota_lease is not None:
+                if handle is None:
+                    await quota_lease.cancel()
+                else:
+                    await quota_lease.settle(0)
             if lease is not None:
                 await lease.release()
             metrics.fail(latency_seconds=_elapsed(clock, started_at))
@@ -1193,6 +1291,11 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         except asyncio.CancelledError:
             if handle is not None:
                 await _cancel_safely(runner, request_id)
+            if quota_lease is not None:
+                if handle is None:
+                    await quota_lease.cancel()
+                else:
+                    await quota_lease.settle(0)
             if lease is not None:
                 await lease.release()
             metrics.fail(latency_seconds=_elapsed(clock, started_at))
@@ -1200,6 +1303,11 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         except Exception:  # noqa: BLE001
             if handle is not None:
                 await _cancel_safely(runner, request_id)
+            if quota_lease is not None:
+                if handle is None:
+                    await quota_lease.cancel()
+                else:
+                    await quota_lease.settle(0)
             if lease is not None:
                 await lease.release()
             metrics.fail(latency_seconds=_elapsed(clock, started_at))
@@ -1217,6 +1325,7 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
                 runner=runner,
                 handle=handle,
                 lease=lease,
+                quota_lease=quota_lease,
                 tokenizer=tokenizer,
                 request_id=request_id,
                 created=created,
@@ -1232,6 +1341,7 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
                 runner=runner,
                 request_id=request_id,
                 lease=lease,
+                quota_lease=quota_lease,
                 metrics=metrics,
                 clock=clock,
                 started_at=started_at,
@@ -1245,6 +1355,7 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
             runner=runner,
             handle=handle,
             lease=lease,
+            quota_lease=quota_lease,
             tokenizer=tokenizer,
             request_id=request_id,
             created=created,
@@ -1266,6 +1377,7 @@ async def _non_stream_completion(  # noqa: PLR0913
     runner: EngineRunner,
     handle: RequestHandle,
     lease: _CapacityLease,
+    quota_lease: _GlobalQuotaLease,
     tokenizer: CharTokenizer,
     request_id: str,
     created: int,
@@ -1276,6 +1388,7 @@ async def _non_stream_completion(  # noqa: PLR0913
     clock: Callable[[], float],
     started_at: float,
 ) -> JSONResponse:
+    result: RunnerResult | None = None
     try:
         async with asyncio.timeout_at(deadline):
             result = await _wait_for_result_or_disconnect(request, handle)
@@ -1310,12 +1423,15 @@ async def _non_stream_completion(  # noqa: PLR0913
             code="internal_error",
         )
     finally:
+        generated_tokens = 0 if result is None else len(result.generated_tokens)
+        await quota_lease.settle(generated_tokens)
         await lease.release()
 
+    terminal_result = cast("RunnerResult", result)
     latency = _elapsed(clock, started_at)
-    if result.status is RequestStatus.FINISHED:
+    if terminal_result.status is RequestStatus.FINISHED:
         metrics.complete(
-            generated_tokens=len(result.generated_tokens),
+            generated_tokens=len(terminal_result.generated_tokens),
             latency_seconds=latency,
         )
         _LOGGER.info("public demo request completed request_id=%s", request_id)
@@ -1324,15 +1440,19 @@ async def _non_stream_completion(  # noqa: PLR0913
                 request_id=request_id,
                 created=created,
                 model_id=model_id,
-                text=tokenizer.decode(result.generated_tokens),
+                text=tokenizer.decode(terminal_result.generated_tokens),
                 finish_reason="length",
-                usage=_usage(prompt_tokens, len(result.generated_tokens)),
+                usage=_usage(prompt_tokens, len(terminal_result.generated_tokens)),
             )
         )
     metrics.fail(latency_seconds=latency)
     _LOGGER.error("public demo request failed request_id=%s", request_id)
-    status_code = 503 if result.status is RequestStatus.CANCELLED else 500
-    code = "request_cancelled" if result.status is RequestStatus.CANCELLED else "generation_failed"
+    status_code = 503 if terminal_result.status is RequestStatus.CANCELLED else 500
+    code = (
+        "request_cancelled"
+        if terminal_result.status is RequestStatus.CANCELLED
+        else "generation_failed"
+    )
     return _public_error(
         status_code=status_code,
         message="generation did not complete",
@@ -1370,11 +1490,12 @@ async def _wait_for_disconnect(request: Request, stop: asyncio.Event) -> None:
             continue
 
 
-async def _stream_completion(  # noqa: C901, PLR0913
+async def _stream_completion(  # noqa: C901, PLR0913, PLR0915
     *,
     runner: EngineRunner,
     handle: RequestHandle,
     lease: _CapacityLease,
+    quota_lease: _GlobalQuotaLease,
     tokenizer: CharTokenizer,
     request_id: str,
     created: int,
@@ -1387,11 +1508,15 @@ async def _stream_completion(  # noqa: C901, PLR0913
 ) -> AsyncGenerator[str, None]:
     stream_queue = handle.stream_queue
     if stream_queue is None:
+        await _cancel_safely(runner, request_id)
+        await quota_lease.settle(0)
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
         await lease.release()
         reason = "streaming request omitted its stream channel"
         raise RuntimeError(reason)
     completed_normally = False
     terminal_recorded = False
+    generated_tokens = 0
     try:
         async with asyncio.timeout_at(deadline):
             while True:
@@ -1402,6 +1527,7 @@ async def _stream_completion(  # noqa: C901, PLR0913
                         terminal_recorded = True
                         yield _sse_error("generation failed", "internal_error")
                         return
+                    generated_tokens += 1
                     yield _sse_data(
                         _completion_document(
                             request_id=request_id,
@@ -1455,6 +1581,7 @@ async def _stream_completion(  # noqa: C901, PLR0913
     finally:
         if not completed_normally:
             await _cancel_safely(runner, request_id)
+        await quota_lease.settle(generated_tokens)
         await lease.release()
 
 
@@ -1525,7 +1652,7 @@ def _reject_json_constant(value: str) -> Never:
     raise ValueError(reason)
 
 
-def _parse_completion(  # noqa: C901
+def _parse_completion(  # noqa: C901, PLR0912
     document: object,
     policy: PublicDemoPolicy,
 ) -> _CompletionInput:
@@ -1580,6 +1707,12 @@ def _parse_completion(  # noqa: C901
     stream = values.get("stream", False)
     if type(stream) is not bool:
         _request_error("stream must be a boolean", "stream")
+    if stream and not policy.streaming_enabled:
+        _request_error(
+            "streaming is disabled for this public deployment",
+            "stream",
+            code="streaming_disabled",
+        )
     seed = values.get("seed", 0)
     if type(seed) is not int or not 0 <= seed < _MAX_SEED:
         _request_error(f"seed must be an integer in [0, {_MAX_SEED})", "seed")
@@ -1616,20 +1749,6 @@ def _encode_prompt(
             code="prompt_too_long",
         )
     return tokens
-
-
-def _client_key(request: Request, policy: PublicDemoPolicy) -> str:
-    peer = request.client.host if request.client is not None else "unknown"
-    if not policy.trust_proxy:
-        return peer
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded is None:
-        return peer
-    candidate = forwarded.rsplit(",", maxsplit=1)[-1].strip()
-    try:
-        return ipaddress.ip_address(candidate).compressed
-    except ValueError:
-        return peer
 
 
 async def _cancel_safely(runner: EngineRunner, request_id: str) -> None:
@@ -1736,7 +1855,6 @@ def build_parser() -> argparse.ArgumentParser:
     _ = parser.add_argument("--port", type=int)
     _ = parser.add_argument("--log-level", choices=tuple(sorted(_LOG_LEVELS)))
     _ = parser.add_argument("--origin", action="append", dest="origins")
-    _ = parser.add_argument("--trust-proxy", action="store_true")
     _ = parser.add_argument("--unsafe-allow-non-loopback", action="store_true")
     return parser
 
@@ -1753,7 +1871,6 @@ def build_runtime(
     settings = resolve_environment(
         settings,
         environment_values,
-        trust_proxy=cast("bool", values["trust_proxy"]),
         origins=cast("list[str] | None", values["origins"]),
     )
     host = cast("str | None", values["host"])
@@ -1768,7 +1885,6 @@ def build_runtime(
     validate_bind_host(
         server.host,
         unsafe_allow_non_loopback=cast("bool", values["unsafe_allow_non_loopback"]),
-        trust_proxy=settings.policy.trust_proxy,
     )
     settings.runtime.validate_policy(settings.policy)
     checkpoint_path = cast("Path | None", values["checkpoint"])

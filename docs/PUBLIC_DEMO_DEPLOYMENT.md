@@ -1,16 +1,14 @@
 # Post-v1 Public Playground 零成本部署
 
-本文说明如何把 `web/` 作为始终可访问的 GitHub Pages 作品集发布，同时让模型、checkpoint、tokenizer 和计算继续留在个人 Windows 电脑。默认公网入口是 ngrok 免费账户绑定的 development domain；整个方案适合非商业个人作品集，没有 24/7 SLA，也不构成生产部署建议。
+Post-v1 Public Playground 使用 GitHub Pages 托管静态作品集，并通过 Tailscale Funnel 把公网 HTTPS 请求转发到个人 Windows 电脑上的 loopback backend。模型、checkpoint、tokenizer 和计算始终留在本机。它是非商业个人作品集，没有 24/7 SLA，也不声明生产安全。
 
-## 1. 边界与预期行为
-
-请求路径如下：
+## 1. 固定拓扑与边界
 
 ```text
 GitHub Pages static site
-        │ HTTPS fetch / SSE
+        │ HTTPS fetch / optional SSE
         ▼
-ngrok assigned development domain
+Tailscale Funnel (*.ts.net)
         │
         ▼
 127.0.0.1:8000
@@ -19,17 +17,16 @@ ngrok assigned development domain
 minigpt demo-serve → EngineRunner → ServingRuntime → local CPU model
 ```
 
-- GitHub Pages 只包含 HTML、CSS、JavaScript、项目介绍、Evidence 链接和静态示例；
-- checkpoint、tokenizer、ngrok authtoken、Prompt 和本机路径不会进入 Pages artifact；
-- Windows 电脑、backend 或 tunnel 停止后，生成按钮变为 offline，但静态作品集仍可访问；
-- 这是字符级文本续写模型，不是通用问答助手或 ChatGPT 替代品；
-- 不声明生产安全，也不宣称 paged KV、APC 或本 Demo 带来普遍性能提升；
-- 免费 tunnel 有额度和第三方服务边界，不承诺持续可用；
-- 不要向 Demo 输入个人信息、凭据、商业秘密或其他敏感内容。
+- Pages artifact 只包含 `web/` 的固定静态资源和 JSON 编码的 `DEMO_API_BASE`；
+- checkpoint、tokenizer、Tailscale 配置、Prompt、本机路径和日志不进入 Pages 或 Git；
+- backend/Funnel 离线时，Generate 禁用，静态项目介绍、架构、Evidence 和示例仍完整可用；
+- 页面只做字符级文本续写，不是通用问答助手或 ChatGPT 替代品；
+- 不要向 Demo 输入个人信息、凭据、商业秘密或其他敏感内容；
+- 其他本地插件和 tunnel 服务完全在本方案范围之外，launcher 不查询、不停止也不修改它们。
 
-## 2. 安装本地依赖
+## 2. 准备 miniGPT 本地环境和资产
 
-在普通 PowerShell 中运行，不需要管理员权限：
+在普通 PowerShell 中执行：
 
 ```powershell
 Set-Location "<REPO_ROOT>"
@@ -38,43 +35,31 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-把 `<REPO_ROOT>` 替换为你的 miniGPT checkout 目录。项目声明支持 Python 3.11–3.14；Windows canonical gate 使用 Python 3.14。不要使用空的 `requirements.txt` 作为安装入口。
-
-## 3. 准备本地 reference checkpoint
-
-准备一个与 tokenizer 匹配的 checkpoint v2，例如：
+准备相互匹配的 checkpoint v2 和 tokenizer，例如：
 
 ```text
 checkpoints/reference/latest.pt
 data/processed/tokenizer.json
 ```
 
-两者均为本地、gitignored 文件。不要把 checkpoint、tokenizer 的绝对路径或模型权重复制到 `web/`、`_site/`、GitHub Release 或 Git history。若尚无可用 checkpoint，请先按 README 的数据准备与训练流程生成，并用普通 `minigpt generate` 验证它能加载。
+这些目录已 gitignore。不要把权重、tokenizer 或它们的绝对路径复制到 `web/`、`_site/`、GitHub Release 或 Git history。
 
-## 4. 注册并配置 ngrok 免费账户
+## 3. 安装并登录 Tailscale
 
-1. 从 [ngrok Windows 安装页](https://ngrok.com/download/windows?tab=install) 安装官方 agent；
-2. 注册免费账户并在 dashboard 获取 authtoken；
-3. 只在你自己的 PowerShell 中执行官方配置命令：
+按 [Tailscale Windows 安装文档](https://tailscale.com/kb/1189/install-windows-msi/) 安装官方客户端，然后完成登录。Funnel 需要 MagicDNS、tailnet HTTPS 和允许 Funnel 的 node attribute；首次启用时可能打开浏览器要求 owner 批准。当前要求见 [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel)。
 
-   ```powershell
-   ngrok config add-authtoken "<YOUR_AUTHTOKEN>"
-   ```
+验证本机状态：
 
-4. 验证 agent：
+```powershell
+tailscale version
+tailscale status --json
+```
 
-   ```powershell
-   ngrok version
-   ngrok config check
-   ```
+`BackendState` 必须为 `Running`，当前设备的 `Self.Online` 必须为 `true`。launcher 对缺少 CLI、未登录或离线状态都会 fail closed，并提示先完成 `tailscale up` 登录。
 
-`scripts/start_public_demo.ps1` 不接收、不读取命令行 authtoken，也不会打印它。authtoken 必须保存在 ngrok 自己的用户配置中，绝不能写入仓库、`.env.public-demo.example`、Task Scheduler 参数、日志或 GitHub variable。
+## 4. 设置显式环境变量
 
-ngrok 免费计划当前提供一个账户绑定的 assigned development domain，并设置月度请求、流量和 event 等额度；以 [ngrok Free Plan Limits](https://ngrok.com/docs/pricing-limits/free-plan-limits) 和 dashboard 的 **Usage** 页面为准。
-
-## 5. 设置明确的本地环境变量
-
-`.env.public-demo.example` 只是非 secret 示例，项目不会自动加载 `.env`。在启动 backend 的同一个 PowerShell 会话中显式设置：
+`.env.public-demo.example` 只是非 secret 示例，项目不会自动加载 `.env`。在启动会话中设置：
 
 ```powershell
 $env:PUBLIC_ORIGIN = "https://ericheee111.github.io"
@@ -83,53 +68,40 @@ $env:MINIGPT_CHECKPOINT = "checkpoints/reference/latest.pt"
 $env:MINIGPT_TOKENIZER = "data/processed/tokenizer.json"
 ```
 
-`PUBLIC_ORIGIN` 是浏览器页面的 origin，不含 `/miniGPT/` path。它必须是确切 HTTPS origin，不能是 `*`。`DEMO_ENABLED=1` 是显式 kill-switch 授权；缺少它时 launcher 会拒绝启动。
+`PUBLIC_ORIGIN` 是确切的 GitHub Pages HTTPS origin，不包含 `/miniGPT/` path，也不能是 `*`。`DEMO_ENABLED=1` 是显式 kill switch 授权。
 
-## 6. 启动本地 backend 与 ngrok tunnel
+## 5. 启动 backend 和 Tailscale Funnel
 
 ```powershell
-.\scripts\start_public_demo.ps1
+.\scripts\start_public_demo_tailscale.ps1
 ```
 
 脚本会：
 
-1. 切换到仓库根目录；
-2. 检查 `.venv`、checkpoint、tokenizer、`PUBLIC_ORIGIN` 和 `DEMO_ENABLED`；
-3. 用 `minigpt demo-serve` 在 `127.0.0.1:8000` 启动 backend；
-4. 等待 `GET /healthz` 返回成功；
-5. 检查 `ngrok.exe` 并执行 `ngrok http http://127.0.0.1:8000`；
-6. 查询本机 ngrok management API `http://127.0.0.1:4040/api/tunnels`；
-7. 打印当前 HTTPS public URL；
-8. 把 stdout/stderr 写入 gitignored 的 `outputs/public-demo/`；
-9. 在 Ctrl+C 或子进程失败时清理本次启动的 backend 和 tunnel PID。
+1. 检查 Tailscale CLI、登录/online 状态、`.venv`、config、checkpoint、tokenizer、origin 与 kill switch；
+2. 仅用 `127.0.0.1:8000` 启动 `minigpt demo-serve`；
+3. 等待 `/healthz` 和安全的 `/demo/info`；
+4. 检查 `tailscale funnel status --json`，拒绝覆盖 443 上的其他 Serve/Funnel target；
+5. 执行 `tailscale funnel --bg --yes 8000`，再从 JSON 状态精确解析 `*.ts.net` URL；
+6. 打印 `DEMO_API_BASE=https://minigpt-demo.<tailnet>.ts.net`；
+7. 把 backend stdout/stderr 和精确 PID/start-time 状态写到 gitignored 的 `outputs/public-demo/`；
+8. 重复执行时复用健康的同一 backend/Funnel，不创建重复进程或 endpoint。
 
-脚本不会修改 Windows 防火墙，不做路由器端口映射，不要求管理员权限，也不会把本地服务监听到 `0.0.0.0`。
+脚本不打开 public bind，不修改 Windows firewall/router，不运行 node-wide Tailscale shutdown，也不按进程名批量停止服务。若 8000 已被非本脚本管理的 HTTP 服务占用，它会报错而不会接管或终止该进程。
 
-## 7. 配置 GitHub repository variable
+## 6. 配置 GitHub Pages
 
-把 launcher 打印的 HTTPS URL（例如 `https://assigned-name.ngrok-free.app`）写入 GitHub：
+在 repository **Settings → Secrets and variables → Actions → Variables** 中创建或更新 `DEMO_API_BASE`，值使用 launcher 打印的完整 HTTPS origin，例如：
 
-1. 打开 repository **Settings**；
-2. 进入 **Secrets and variables → Actions → Variables**；
-3. 新建或更新 `DEMO_API_BASE`；
-4. 值必须是完整 HTTPS origin，不含 path、query、fragment 或末尾 secret；
-5. 不要把它放在 Secrets：这个 URL 会进入公开的 `config.js`，它不是凭据。
+```text
+https://minigpt-demo.example-tailnet.ts.net
+```
 
-构建脚本只接受空值或 HTTPS origin，并使用 Python `json.dumps` 生成 JavaScript 字符串；workflow 不把 GitHub expression 拼入 shell 或 JavaScript。若 variable 未配置，构建会成功生成 offline-only 页面。
+该 URL 是公开配置，不是 secret。它必须为空或是无 credentials/path/query/fragment 的 HTTPS origin。构建器用 `json.dumps` 生成 `config.js`；空值会得到完整的 offline-only 作品集。
 
-## 8. 启用 GitHub Pages
+然后在 **Settings → Pages** 选择 **GitHub Actions**。`.github/workflows/pages.yml` 仅在 `main` push 或手工 `workflow_dispatch` 时部署。功能分支在完成独立审查前不合入 `main`，因此不会因为本次实现自动发布 Pages。
 
-1. 打开 repository **Settings → Pages**；
-2. 在 **Build and deployment** 中选择 **GitHub Actions**；
-3. `.github/workflows/pages.yml` 只在 `main` push 或手工 `workflow_dispatch` 时部署；
-4. workflow 从 `web/` 构建 `_site/`，上传官方 Pages artifact，再用官方 deploy action 发布；
-5. 页面使用 `./styles.css`、`./config.js` 和 `./app.js`，兼容 `/miniGPT/` project path。
-
-代码合入 `main` 只会触发 Pages workflow，不等于公网地址已经上线。repository owner 仍须完成 Pages source 与 `DEMO_API_BASE` 设置，并核对 deploy job 成功；README 在这些步骤完成前不会把预期地址写成已上线事实。GitHub 官方的自定义 workflow 说明见 [Using custom workflows with GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。
-
-## 9. 本地预览静态站点
-
-离线构建：
+## 7. 本地静态页面预览
 
 ```powershell
 $env:DEMO_API_BASE = ""
@@ -137,30 +109,34 @@ $env:DEMO_API_BASE = ""
 .\.venv\Scripts\python.exe -m http.server 4173 --directory _site --bind 127.0.0.1
 ```
 
-打开 `http://127.0.0.1:4173/`。页面应显示 `Offline-only build`，Generate 禁用，静态示例、架构、Stage 1–21 和 Evidence 仍完整可用。
+打开 `http://127.0.0.1:4173/`。页面应显示 `Offline-only build`，Generate 禁用，但其余内容完整。模拟 Funnel 配置时把 `DEMO_API_BASE` 改为一个 `https://*.ts.net` origin。API Base 不能由 query string、Prompt、localStorage 或 cookie 覆盖。
 
-模拟线上 API Base：
+页面 health polling 最短间隔为 60 秒；hidden tab 停止 polling，恢复可见后才继续。前端不发送 tunnel-provider-specific header。
 
-```powershell
-$env:DEMO_API_BASE = "https://assigned-name.ngrok-free.app"
-.\.venv\Scripts\python.exe scripts\build_public_demo_site.py --output _site
-```
+## 8. 默认配额和 kill switch
 
-`_site/` 和 `web/config.js` 均被 gitignore。不要手工编辑生成的 `config.js`。
+`configs/public_demo.yaml` 的默认公网限制为：
 
-## 10. 验证 health、非流式与流式生成
+- 2 个 active requests、8 个 queued requests；
+- Prompt 最多 256 characters/encoded tokens；
+- 每次最多 96 generated tokens；
+- 45 秒总 timeout；
+- `global_requests_per_hour: 60`；
+- `global_generated_tokens_per_day: 10000`；
+- `streaming_enabled: false`；
+- `enabled: false`，只能由 `DEMO_ENABLED=1` 显式打开。
 
-本机 health：
+两个 global quotas 都是单进程、线程安全且与 client IP/XFF 无关。请求 quota 只在 runner 接受提交时计数；token quota 在活跃请求期间先做 hard reservation，终态再结算实际生成 token。流式和非流式使用同一配额与 cleanup 路径。
+
+## 9. localhost 验收
+
+先验证默认非流式模式：
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/healthz
 Invoke-RestMethod http://127.0.0.1:8000/demo/info
 Invoke-RestMethod http://127.0.0.1:8000/demo/metrics
-```
 
-非流式：
-
-```powershell
 $body = @{
     model = "minigpt-char"
     prompt = "ROMEO:"
@@ -174,141 +150,93 @@ Invoke-RestMethod `
     -Uri http://127.0.0.1:8000/v1/completions `
     -Method Post `
     -ContentType application/json `
-    -Headers @{ "ngrok-skip-browser-warning" = "1" } `
     -Body $body
 ```
 
-流式：
+localhost SSE smoke 必须使用一份临时 config 把 `streaming_enabled` 设为 `true`，重启 backend 后执行：
 
 ```powershell
 $streamBody = $body -replace '"stream":\s*false', '"stream": true'
-curl.exe -N `
+curl.exe -N --no-buffer `
     -H "Content-Type: application/json" `
-    -H "ngrok-skip-browser-warning: 1" `
     --data $streamBody `
     http://127.0.0.1:8000/v1/completions
 ```
 
-浏览器中的每次 API 请求也发送 `ngrok-skip-browser-warning: 1`。前端使用 `fetch()` 和 `ReadableStream` reader 解析现有 SSE `data:` 行，因为 EventSource 不能携带该自定义 header。
+验证 `[DONE]`、Stop/cancel、`active_requests=0`、`queued_requests=0`，以及 engine/KV 资源归零后，把 committed config 保持为 `streaming_enabled: false`。
 
-## 11. 验证 Pages online/offline 行为
+## 10. 真实 Funnel 验收与 streaming 决策
 
-Backend online 时：
+在默认 `streaming_enabled: false` 下先从公网完成：
 
-- 顶部状态为 `Backend online`；
-- Generate 可用；
-- stream/non-stream 都只提交一次 completion；
-- Stop 使用 AbortController，backend 接收取消并释放资源；
-- live panel 显示 TTFT、elapsed、generated tokens、tokens/s、executor、KV backend 和 queue depth。
+1. `GET /healthz` 为 200；
+2. Pages origin 的 CORS preflight 只允许 `content-type`；
+3. 一次非流式 completion 成功；
+4. Stop、timeout 和离线切换释放 slot/KV；
+5. Pages 不出现 console error，且离线静态内容完整。
 
-Backend offline 时：
+只有随后真实 Funnel SSE 验收全部通过，才可把 production config 的 `streaming_enabled` 改为 `true`：
 
-1. 在 launcher 窗口按 Ctrl+C；
-2. 等待 tunnel 与 backend 子进程退出；
-3. 刷新 Pages，或等待下一次最多 60 秒的 health check；
-4. 确认状态变为 offline、Generate 禁用、静态示例出现；
-5. 确认项目、架构、Evidence 和文档链接仍可使用；
-6. 切到后台 tab 时 health polling 停止，恢复可见后才按 60 秒节奏继续，不会无限快速重试。
+- 至少两个 token chunk 在请求结束前分开到达，不能在终态一次性缓冲；
+- `[DONE]` 正常到达；
+- 浏览器 Stop/Abort 立即停止后续输出；
+- `/demo/metrics` 的 active/queued 回到 0；
+- EngineRunner active/waiting/cached/reserved KV 均回到 0。
 
-## 12. Windows 防休眠
+若 Funnel SSE 失败或无法证明未缓冲，部署仍可继续，但必须保持 `streaming_enabled: false`。前端会禁用 stream 选项并直接发送一次 non-stream 请求，不会在 stream 失败后自动重试同一 Prompt。
 
-若希望较长时间展示：
+## 11. 停止与紧急关闭
 
-1. 在 **Settings → System → Power & battery → Screen and sleep** 中，仅对接通电源时调整 sleep；
-2. 保留屏幕关闭，不必保持屏幕常亮；
-3. 确认散热、电源和网络稳定；
-4. 不建议在无人看管时长期暴露个人电脑。
+```powershell
+.\scripts\stop_public_demo_tailscale.ps1
+```
 
-可选 Task Scheduler：
+stopper 从 Funnel JSON 中确认 target 是 `http://127.0.0.1:8000` 后，只执行该 HTTPS 443 Funnel 的 `off`，并仅在 PID、可执行路径和 process start time 全部匹配 runtime state 时停止 backend。它不会执行 `tailscale down`，不会终止其他进程，也不会删除 Tailscale 登录状态。
 
-1. 使用当前普通用户创建“登录时”任务；
-2. Program 为 `powershell.exe`；
-3. Arguments 为 `-NoProfile -ExecutionPolicy RemoteSigned -File "<REPO_ROOT>\scripts\start_public_demo.ps1"`；
-4. Start in 为仓库根目录；
-5. 环境变量应由受控的用户会话或单独安全包装提供，不要把 authtoken 放入 Arguments；
-6. 先在交互式窗口验证 Ctrl+C cleanup，再考虑调度；
-7. 不选择“Run with highest privileges”。
-
-Task Scheduler 只是可选便利，不建立 24/7 SLA。
-
-## 13. 紧急关闭与 kill switch
-
-首选：在 launcher 窗口按 Ctrl+C。脚本会停止它创建的 tunnel 与 backend。
-
-进一步 fail-closed：
+进一步 fail closed：
 
 ```powershell
 $env:DEMO_ENABLED = "0"
+$env:DEMO_API_BASE = ""
 ```
 
-该值会阻止下一次 public runtime 启用。若 launcher 异常退出，先用以下只读命令核对精确 PID，再手工停止对应进程：
+随后重新构建 Pages 即成为 offline-only。若 stopper 报错，不要批量 kill；先只读检查 `tailscale funnel status --json`、`outputs/public-demo/runtime-state.json` 和 `Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8000`。
 
-```powershell
-Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8000 -State Listen
-Get-Process ngrok -ErrorAction SilentlyContinue
+## 12. Windows 防休眠与 Task Scheduler
+
+较长时间展示时，只对接通电源调整 Windows sleep；屏幕可以关闭。个人电脑公网暴露没有 SLA，不建议无人看管长期运行。
+
+可选 Task Scheduler 使用当前普通用户，在登录时执行：
+
+```text
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "<REPO_ROOT>\scripts\start_public_demo_tailscale.ps1"
 ```
 
-不要使用模糊的批量 kill。还可以在 ngrok dashboard 停止 endpoint 或撤销/轮换 authtoken；若怀疑 token 泄漏，应立即在 ngrok 账户中撤销，而不是只删除本地文件。
+不要选择 `Run with highest privileges`。先交互式验证 start/stop、配额和错误日志，再考虑调度。
 
-## 14. 查看免费额度
+## 13. 备用 public share
 
-打开 ngrok dashboard 的 **Usage** 页面，检查 HTTP requests、data transfer、online endpoints 和 logs/events。免费额度和限制可能变化；不要把文档中的数字当作永久配额，以 [官方 Free Plan Limits](https://ngrok.com/docs/pricing-limits/free-plan-limits) 为准。
+zrok 只保留为 public share fallback，不进入默认脚本或 Pages 配置。官方 HTTP share 语法和当前限制见 [zrok Sharing HTTP Servers](https://docs.zrok.io/docs/1.0/concepts/http/)。启用前必须另做稳定 URL、HTTPS、CORS、SSE 分块、disconnect cleanup 和停止范围审查；未通过 SSE 验收时同样保持非流式。
 
-本地 `/demo/metrics` 只报告当前进程的安全聚合值，不是 ngrok billing/quota 数据，也不会包含 Prompt 或用户标识。
+Cloudflare Quick Tunnel **不推荐**：它使用不稳定的随机 URL、没有 SLA，而且官方明确说明不支持 Server-Sent Events。它最多用于临时 non-stream 测试，不能作为本项目默认或 streaming 路径。参见 [Cloudflare Quick Tunnels limitations](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)。
 
-## 15. 轮换 public URL
+## 14. 轮换 public URL 与完全卸载
 
-ngrok 免费账户通常使用 assigned development domain。若账户、domain 或 tunnel 方案变化：
+轮换 public URL：
 
-1. 停止旧 tunnel；
-2. 启动新 tunnel并从 management API 核对 HTTPS URL；
-3. 更新 repository variable `DEMO_API_BASE`；
-4. 重新运行 Pages workflow；
-5. 验证生成的公开 `config.js` 只含新 HTTPS origin；
-6. 从外网验证 health、stream 和 offline；
-7. 确认旧 URL 已停止转发。
+1. 运行 stopper；
+2. 重新启动并从 `tailscale funnel status --json` 核对唯一 HTTPS URL 与 loopback target；
+3. 更新 `DEMO_API_BASE`；
+4. 手工运行 Pages workflow；
+5. 验证公开 `config.js` 只含新 origin，旧 URL 不再转发。
 
-API Base 不能从 query string、Prompt 或浏览器 localStorage 覆盖。
+完全卸载：
 
-## 16. Tailscale Funnel 备用方案
+1. 运行 `stop_public_demo_tailscale.ps1`；
+2. 清空 `DEMO_API_BASE` 并重新部署 offline-only Pages；
+3. 删除可选 Task Scheduler task；
+4. 按 Tailscale 官方方式从 tailnet 删除本设备并卸载客户端；
+5. 按需删除 gitignored 的 `outputs/public-demo/` 与 `_site/`；
+6. checkpoint/tokenizer 只在明确不再需要时单独删除。
 
-Tailscale Funnel 可以把本机服务通过 `*.ts.net` HTTPS 名称暴露到公网。它不是默认实现，可能需要在 tailnet 管理界面批准 Funnel、满足 MagicDNS/HTTPS/policy 条件，并在 Windows 上完成相应权限步骤。以 [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) 和当前 [CLI reference](https://tailscale.com/docs/reference/tailscale-cli/funnel) 为准。
-
-Backend 仍保持 loopback：
-
-```powershell
-minigpt demo-serve `
-    --config configs/public_demo.yaml `
-    --checkpoint $env:MINIGPT_CHECKPOINT `
-    --tokenizer $env:MINIGPT_TOKENIZER
-
-tailscale funnel localhost:8000
-tailscale funnel status --json
-```
-
-把 Funnel HTTPS origin 写入 `DEMO_API_BASE`，而 `PUBLIC_ORIGIN` 仍是 GitHub Pages origin。停止时使用与当前 Tailscale 版本匹配的 `off` 或 `tailscale funnel reset`。Funnel 目前是 beta，并有 hostname、port 和 bandwidth 限制；同样不构成 SLA。
-
-## 17. Cloudflare Quick Tunnel 仅用于临时非流式测试
-
-可以临时运行：
-
-```powershell
-cloudflared tunnel --url http://127.0.0.1:8000
-```
-
-但 TryCloudflare Quick Tunnel 官方明确说明**不支持 Server-Sent Events**，并且定位为测试/开发用途，因此不能作为本项目 `fetch` streaming 主路径。若只做临时验证，应关闭页面的 stream toggle，并预期随机 URL、无 SLA 和额外并发限制。参见 [Cloudflare Quick Tunnels limitations](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)。正式的 Cloudflare named tunnel 是另一套账户、DNS 和安全设计，不属于本轮零月费默认方案。
-
-## 18. 完全卸载
-
-1. Ctrl+C 停止 launcher；
-2. 确认 `127.0.0.1:8000` 和 ngrok endpoint 已关闭；
-3. 从 GitHub 删除 `DEMO_API_BASE` variable，或将 Pages workflow 保持 offline-only；
-4. 在 GitHub Pages 设置中禁用站点（如不再需要静态作品集）；
-5. 使用安装 ngrok 时的同一工具卸载 agent；
-6. 运行 `ngrok config check` 定位用户配置，确认无需保留后再手工删除或撤销其中的 authtoken；
-7. 按需删除 gitignored 的 `outputs/public-demo/` 和 `_site/`；
-8. checkpoint/tokenizer 是本地模型资产，只在你明确不再需要时单独删除；
-9. 删除可选 Task Scheduler 任务；
-10. 不需要修改 Windows 防火墙或路由器，因为默认流程从未创建这些规则。
-
-卸载 tunnel 不影响 GitHub Pages 上的静态项目介绍；若保留 Pages 但清空 `DEMO_API_BASE` 后重新部署，页面会明确显示 offline-only。
+卸载 Funnel 不影响 GitHub Pages 上的静态作品集。

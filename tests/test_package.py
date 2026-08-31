@@ -139,7 +139,7 @@ def test_public_site_build_is_offline_safe_deterministic_and_secret_free(
 def test_public_site_build_json_encodes_config_and_preserves_relative_assets(
     tmp_path: Path,
 ) -> None:
-    # Given: an HTTPS ngrok-style API origin and the repository web source.
+    # Given: an HTTPS Tailscale Funnel API origin and the repository web source.
     project_root = Path(__file__).resolve().parents[1]
     output = tmp_path / "site"
 
@@ -152,7 +152,7 @@ def test_public_site_build_json_encodes_config_and_preserves_relative_assets(
             "--output",
             str(output),
             "--api-base",
-            "https://example.ngrok-free.app",
+            "https://minigpt-demo.example-tailnet.ts.net",
         ],
     )
     assert result.returncode == 0, result.stderr
@@ -162,7 +162,7 @@ def test_public_site_build_json_encodes_config_and_preserves_relative_assets(
     parser.feed(index)
 
     # Then: config is generated data and every local asset works under /miniGPT/.
-    assert 'apiBase: "https://example.ngrok-free.app"' in config
+    assert 'apiBase: "https://minigpt-demo.example-tailnet.ts.net"' in config
     assert "__DEMO_API_BASE_JSON__" not in config
     local_assets = [url for url in parser.urls if url.startswith("./")]
     assert local_assets == ["./styles.css", "./config.js", "./app.js"]
@@ -178,13 +178,16 @@ def test_public_site_client_uses_safe_streaming_and_bounded_offline_polling() ->
     app_source = (project_root / "web" / "app.js").read_text(encoding="utf-8")
     index = (project_root / "web" / "index.html").read_text(encoding="utf-8")
 
-    # When/Then: output stays text-only and every API call carries the ngrok header.
+    # When/Then: output stays text-only and API calls carry no provider-specific header.
     assert "innerHTML" not in app_source
     assert "textContent" in app_source
-    assert '"ngrok-skip-browser-warning": "1"' in app_source
+    assert "ngrok-skip-browser-warning" not in app_source
     assert "response.body" in app_source
     assert ".getReader()" in app_source
     assert "AbortController" in app_source
+    assert "info.streaming_enabled === true" in app_source
+    assert "stream: state.streamingEnabled && elements.stream.checked" in app_source
+    assert '<input id="stream" name="stream" type="checkbox" disabled>' in index
     non_stream_source = app_source.split("async function readNonStream", maxsplit=1)[1].split(
         "async function refreshMetrics", maxsplit=1
     )[0]

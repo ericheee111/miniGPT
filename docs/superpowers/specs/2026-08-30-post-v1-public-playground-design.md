@@ -13,7 +13,7 @@ GitHub Pages static site
         |
         | HTTPS fetch + optional SSE
         v
-ngrok assigned development domain
+Tailscale Funnel (*.ts.net)
         |
         v
 127.0.0.1:8000
@@ -66,24 +66,23 @@ public-demo HTTP 层只做公网策略和适配：输入限制、CORS、速率�
 安全指标和错误收敛。请求调度、请求 RNG、KV ownership、取消和终态资源释放仍由现有
 ServingEngine/EngineRunner 负责，不创建第二个 scheduler，也不重写模型。
 
-### 3.3 默认 ngrok 入口
+### 3.3 默认 Tailscale Funnel 入口
 
-默认公网路径是已绑定免费账户的 ngrok assigned development domain。ngrok 免费计划目前提供
-一个自动分配的开发域名，并对流量、请求和 endpoint 数量设有额度；额度应从 ngrok dashboard
-查看，而不是在代码中假设无限。当前官方说明见
-[ngrok Free Plan Limits](https://ngrok.com/docs/pricing-limits/free-plan-limits)。
+默认公网路径是 Tailscale Funnel 提供的 `*.ts.net` HTTPS origin。backend 固定为
+`127.0.0.1:8000`；launcher 使用 `tailscale funnel --bg 8000`，并从
+`tailscale funnel status --json` 的 `AllowFunnel`/`Web` 映射核对 hostname、443 和确切 target。
+重复启动复用同一健康 endpoint；443 已指向其他 target 时 fail closed。
 
-启动脚本只执行 `ngrok http 8000`，不接收、不读取、不打印 authtoken。操作者必须预先用 ngrok
-自己的用户配置完成账户绑定。脚本从本地管理 API `127.0.0.1:4040/api/tunnels` 读取当前 HTTPS
-public URL，并在 Ctrl+C 或失败时清理自己创建的 backend/tunnel 子进程。
-
-### 3.4 Tailscale Funnel 备用
-
-Tailscale Funnel 是手工备用方案，不进入默认启动脚本。它可以把 loopback HTTP service 通过
-Tailscale 提供的 HTTPS 域名暴露到公网；需要 Tailscale 账户、客户端、MagicDNS/HTTPS 和
-tailnet policy 中的 Funnel 权限。Funnel 仍有 beta、端口和带宽等限制，操作前应查看
+start/stop 脚本以 PID、executable path 和 process start time 标识 backend。stopper 只关闭指向
+miniGPT target 的当前 443 Funnel，不执行 `tailscale down`，也不控制任何其他插件、tunnel 或进程。
+Tailscale 需要账户、客户端、MagicDNS/HTTPS 和 tailnet Funnel 权限；操作前应查看
 [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) 和
 [funnel CLI](https://tailscale.com/docs/reference/tailscale-cli/funnel) 的当前合同。
+
+### 3.4 zrok 备用
+
+zrok 只保留为 public share fallback，不进入默认启动脚本。若未来启用，必须独立验证 HTTPS、
+URL 稳定性、CORS、SSE 分块、disconnect cleanup 和精确停止范围；验证前只允许 non-stream。
 
 ### 3.5 不把 Cloudflare Quick Tunnel 作为 SSE 正式路径
 
@@ -120,24 +119,24 @@ string、fragment、用户输入或 localStorage 来覆盖 API base。
 ~~~text
 browser POST /v1/completions
   -> CORS + body byte limit
-  -> kill switch + global/per-client limiter
   -> strict JSON/schema/prompt/token/policy validation
   -> FIFO public capacity gate
+  -> IP-independent global request/token quota reservation
   -> EngineRunner.submit
   -> await terminal Future under request deadline
   -> safe completion JSON or generic error
-  -> release public concurrency lease
+  -> settle actual generated tokens + release public concurrency lease
 ~~~
 
 ### 5.2 流式
 
-前端使用 `fetch`、`ReadableStream` 和增量 `TextDecoder` 解析已有 SSE `data:` lines。不能使用
-EventSource，因为请求必须携带 `ngrok-skip-browser-warning: 1`。正常结束才处理 `[DONE]` 和 usage；
-HTTP error、SSE error、超时、AbortController、client disconnect 或解析失败均结束当前请求并显示
-短错误。
+`PublicDemoPolicy.streaming_enabled` 默认 `false`，`/demo/info` 原样公开该布尔值。前端只有看到
+`true` 才启用 stream 控件；否则首次请求直接使用 `stream=false`。流式请求一旦发出，失败后不自动
+重试非流式，避免第一次已经在后端执行时发生双重生成。
 
-如果浏览器在发送前不支持 `ReadableStream`，同一次生成直接以 `stream=false` 提交。流式请求
-一旦发出，不自动再次提交非流式请求，避免第一次已经在后端执行时发生双重生成。
+启用时前端使用 `fetch`、`ReadableStream` 和增量 `TextDecoder` 解析已有 SSE `data:` lines。正常
+结束才处理 `[DONE]` 和 usage；HTTP error、SSE error、超时、AbortController、client disconnect 或
+解析失败均结束当前请求并显示短错误。
 
 服务端 streaming generator 持有并发 lease 到最终 body 结束，在 `finally` 中取消尚未终态的
 runner request 并释放 lease。超时和 client disconnect 走同一取消路径；失败、取消或断连不发送
@@ -159,12 +158,10 @@ runner request 并释放 lease。超时和 client disconnect 走同一取消路�
 | `request_timeout_seconds` | 45 |
 | `max_concurrent_requests` | 2 |
 | `max_queue_size` | 8 |
-| `per_client_requests` | 5 |
-| `per_client_window_seconds` | 600 |
-| `global_requests` | 60 |
-| `global_window_seconds` | 3600 |
+| `global_requests_per_hour` | 60 |
+| `global_generated_tokens_per_day` | 10000 |
+| `streaming_enabled` | `false`，真实 Funnel SSE 验收通过前保持关闭 |
 | `enabled` | `false`，由 `DEMO_ENABLED=1` 显式开启 |
-| `trust_proxy` | `false`，只能由 typed config/明确 CLI 选项开启 |
 
 `configs/public_demo.yaml` 是 schema-versioned、未知字段拒绝的 typed config。默认 executor 为
 `continuous`、KV backend 为 `dense`，并使 EngineRunner/ServingRuntime 的 active/command/stream
@@ -190,27 +187,19 @@ runner request 并释放 lease。超时和 client disconnect 走同一取消路�
 EngineRunner request，等待取消命令被 owner 接收，再释放 public lease。普通 handler 取消和
 stream generator 关闭执行同样的 cleanup。ServingEngine 继续负责 KV/reservation 终态回收。
 
-滑动窗口 rate limiter 也由单 lock 原子 prune/check/append：
+global quota 由单 lock 原子维护：
 
-- global limiter 对所有请求共用，始终启用且不依赖 IP；
-- per-client limiter 默认使用 ASGI TCP peer；
-- 429 返回整数 `Retry-After`，由最早仍在窗口内的记录计算；
-- 内存中只保存 limiter key 和时间，不把 key、IP 或 Prompt 写入日志/metrics；
-- 进程重启会清空窗口，这是个人 demo 的明确限制，不构成认证或配额系统。
+- `global_requests_per_hour` 只在 `EngineRunner.submit` 接受请求时计数；
+- `global_generated_tokens_per_day` 在活跃期按 `max_tokens` hard-reserve，终态按实际生成 token 结算；
+- streaming/non-stream、timeout、disconnect、错误和取消共用同一幂等 cleanup；
+- 429 返回整数 `Retry-After`；
+- 进程重启会清空内存 quota，这是个人 demo 的明确限制，不构成认证或 durable billing。
 
-## 8. 客户端 IP 与代理头信任模型
+## 8. 客户端 IP 不作为身份边界
 
-默认不信任 `X-Forwarded-For`。在 ngrok 场景中，TCP peer 通常是本机 tunnel，因而默认
-per-client bucket 会保守地把公网访问者合并；global limiter 仍始终生效。
-
-只有 `trust_proxy=true` 且 backend 仍为 loopback bind 时才解析 `X-Forwarded-For`。解析必须：
-
-1. 使用 `ipaddress` 验证地址；
-2. 采用最右侧有效地址，避免把用户可前置的 left-most 值直接当身份；
-3. 缺失或非法时回退 TCP peer；
-4. 绝不把该值当认证、授权、审计身份或绕过 global limiter 的依据。
-
-显式 unsafe non-loopback bind 与 proxy trust 组合在 threat model 中标为高风险，文档不推荐。
+ASGI peer、client IP 和 `X-Forwarded-For` 均不可信，backend 不解析它们来建立 quota key，也没有
+`trust_proxy` 配置面。所有访问者共享同一 global request/token quota。本设计不返回、记录或在
+metrics 中聚合 IP。
 
 ## 9. CORS 与浏览器边界
 
@@ -221,7 +210,7 @@ origin；拒绝 `*`、userinfo、path、query 和 fragment。公网 origin 只�
 允许的跨域表面只有：
 
 - methods：`GET`、`POST`、`OPTIONS`；
-- headers：`Content-Type`、`ngrok-skip-browser-warning`；
+- headers：`Content-Type`；
 - credentials：false；
 - exact origin，例如 `https://ericheee111.github.io`。
 
@@ -235,7 +224,7 @@ Uvicorn access log 在 demo 模式关闭，避免记录 client IP。应用日志
 PID、checkpoint hash、tokenizer hash、环境变量或 traceback。
 
 `GET /demo/info` 的响应字段严格限于：project version、model id、demo mode、configured public
-limits、executor name、KV backend、prefix-cache enabled 和 streaming available。
+limits、executor name、KV backend、prefix-cache enabled 和 `streaming_enabled`。
 
 `GET /demo/metrics` 的响应字段严格限于：online、active、queued、completed、failed、rejected、
 rate-limited、timeout、generated token count 和可选 aggregate latency。它不返回 request 明细、
@@ -247,12 +236,12 @@ traceback 只可留在受控本地 stderr，默认启动脚本把它写入 gitig
 ## 11. Kill switch 与本地模型资产
 
 `DEMO_ENABLED` 默认关闭，只有严格值 `1` 开启。关闭时 `/healthz` 报不可用、生成端点不提交
-模型工作、metrics 的 online 为 false，静态前端转入 offline。紧急关闭的首选仍是 Ctrl+C 停止
-backend/tunnel；kill switch 是重启后 fail-closed 的第二层，不是远程管理 API。
+模型工作、metrics 的 online 为 false，静态前端转入 offline。紧急关闭使用
+`stop_public_demo_tailscale.ps1`；kill switch 是重启后 fail-closed 的第二层，不是远程管理 API。
 
 checkpoint/tokenizer 由参数或 `MINIGPT_CHECKPOINT`/`MINIGPT_TOKENIZER` 指向本地 gitignored
-路径。启动脚本在启动进程前检查文件存在，不复制、不上传、不打印绝对路径到公网响应。ngrok
-authtoken 只保存在 ngrok 用户配置；`.env`、本地 config、logs、`_site/` 和模型资产保持 ignored。
+路径。启动脚本在启动进程前检查文件存在，不复制、不上传、不打印绝对路径到公网响应。
+Tailscale 本机状态、`.env`、本地 logs、`_site/` 和模型资产保持 ignored。
 
 ## 12. GitHub Pages 构建安全
 
@@ -272,7 +261,7 @@ Python 从环境读取并 JSON encode。这样 URL 不能变成 shell/JavaScript
 
 ## 13. 测试与验收方案
 
-不访问公网、ngrok、GitHub Pages 或外部账户。保持 Stage 21 的 `tests/test_*.py` inventory：public
+不访问公网、真实 Tailscale、GitHub Pages 或外部账户。保持 Stage 21 的 `tests/test_*.py` inventory：public
 demo tests 追加到现有 HTTP、CLI、serve subprocess、package 和 README 测试文件。
 
 自动测试覆盖：
@@ -280,12 +269,13 @@ demo tests 追加到现有 HTTP、CLI、serve subprocess、package 和 README �
 - loopback/unsafe bind、strict config、kill switch 和 no-docs；
 - exact CORS、OPTIONS、wildcard 拒绝；
 - body bytes、Prompt chars/tokens、max tokens、temperature 和未知字段；
-- per-client/global limit、Retry-After、伪造 XFF 与 global limiter；
+- global request/token quota、Retry-After、actual-token settlement 与伪造 XFF；
 - FIFO queue full、timeout、handler cancellation、stream close、lease 回收；
 - model failure generic error、no Prompt logging、info/metrics allowlist；
 - runner/ServingEngine terminal state与 KV/resource 零泄漏；
 - API base URL 校验、offline-only、deterministic config.js 和 Pages base path；
-- no innerHTML output path、ngrok header、AbortController、offline UI、local links；
+- no innerHTML/provider header、streaming false fallback、AbortController、offline UI、local links；
+- mock Funnel status JSON、missing CLI/login、idempotent start、exact stop 和 no node-wide shutdown；
 - CLI lazy import、wheel membership、README/deployment/threat-model links。
 
 手工 QA 使用 tiny fixture：启动真实 localhost backend，验证 health、非流式和 SSE；构建 `_site`，
@@ -299,8 +289,8 @@ pytest、quick/CI doctor、site build、localhost smoke、diff check 和 clean-w
 
 | 威胁 | 控制 | 剩余风险 |
 |---|---|---|
-| CORS 被当认证 | 文档明确否定；global/per-client/queue/limits 始终执行 | 非浏览器客户端可直接调用 |
-| 伪造 XFF | 默认不信任；显式模式取 right-most valid；global 永不按 IP 分片 | 代理链变化可能合并或误分 client |
+| CORS 被当认证 | 文档明确否定；global quotas/queue/limits 始终执行 | 非浏览器客户端可直接调用 |
+| 伪造 XFF | 不解析 client IP/XFF；global quotas 永不按 IP 分片 | 公开无认证 URL 仍可被直接调用 |
 | 无限/慢 SSE | token cap、45 秒 deadline、有界 stream buffer、disconnect cancel | tunnel/network 可在边缘额外缓冲 |
 | 并发/queue race | 单 asyncio lock、FIFO waiter、idempotent lease release | 仅单进程内有效 |
 | timeout 后继续执行 | timeout/stream finally 调用 runner.cancel 并等待 owner 接收 | 进程强杀依赖 OS 回收 |
@@ -310,9 +300,9 @@ pytest、quick/CI doctor、site build、localhost smoke、diff check 和 clean-w
 | API base 注入 | build-time HTTPS validation；无 query/user override | 仓库管理员可把变量指向任意 HTTPS API |
 | Actions expression 注入 | variable 仅进 environment；Python JSON encode | workflow/action supply chain 仍依赖 GitHub |
 | secret 进入 artifact | 固定文件 allowlist、determinism/secret scan tests | 人工把 secret 写入 web source 仍需 review 阻止 |
-| ngrok token 进入 Git | 脚本不接收 token；`.env*` ignored；Git secret scan | 用户需保护 ngrok 用户配置 |
+| Tailscale 状态进入 Git | Pages 固定 allowlist；runtime state/logs ignored；Git secret scan | 用户需保护 tailnet 账户与本机状态 |
 | 意外监听公网网卡 | loopback default；非-loopback 要 unsafe flag；启动脚本固定 loopback | 显式 unsafe flag 可绕过保护 |
-| 配额耗尽/DoS | global limit、per-client、queue、body/token/time bounds、kill switch | 无认证的免费 demo 仍可被额度消耗 |
+| 配额耗尽/DoS | global request/token quotas、queue、body/token/time bounds、kill switch | 无认证的免费 demo 仍可被额度消耗 |
 | Stage 21 Evidence inventory 破坏 | 不新增 test file；release verifier不修改；quick/CI doctor复跑 | post-v1 新行为不纳入历史 v1 capstone |
 
 该 threat model 只支持个人、非商业、低流量作品集 demo，不是 production-security readiness

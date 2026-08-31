@@ -273,10 +273,11 @@ def test_serve_cli_lazy_kv_runtime_starts_and_exits_on_localhost(tmp_path: Path)
 def test_public_demo_build_runtime_uses_existing_runner_and_safe_info(tmp_path: Path) -> None:
     # Given: a tiny local checkpoint and the conservative public demo config.
     checkpoint_path, tokenizer_path = _write_service_checkpoint(tmp_path)
+    config_path = _write_public_demo_config(tmp_path, streaming_enabled=True)
     arguments = public_demo.build_parser().parse_args(
         [
             "--config",
-            "configs/public_demo.yaml",
+            str(config_path),
             "--checkpoint",
             str(checkpoint_path),
             "--tokenizer",
@@ -346,6 +347,7 @@ def test_public_demo_build_runtime_uses_existing_runner_and_safe_info(tmp_path: 
 def test_public_demo_cli_serves_real_localhost_completion_and_stream(tmp_path: Path) -> None:
     # Given: a real tiny checkpoint, a free loopback port, and the explicit kill switch enabled.
     checkpoint_path, tokenizer_path = _write_service_checkpoint(tmp_path)
+    config_path = _write_public_demo_config(tmp_path, streaming_enabled=True)
     port = _free_port()
     project_root = Path(__file__).resolve().parents[1]
     command = [
@@ -354,7 +356,7 @@ def test_public_demo_cli_serves_real_localhost_completion_and_stream(tmp_path: P
         "minigpt",
         "demo-serve",
         "--config",
-        str(project_root / "configs" / "public_demo.yaml"),
+        str(config_path),
         "--checkpoint",
         str(checkpoint_path),
         "--tokenizer",
@@ -379,10 +381,8 @@ def test_public_demo_cli_serves_real_localhost_completion_and_stream(tmp_path: P
     )
     try:
         _wait_for_health(process, port)
-        headers = {"ngrok-skip-browser-warning": "1"}
         completion = httpx.post(
             f"http://127.0.0.1:{port}/v1/completions",
-            headers=headers,
             json={
                 "model": "minigpt-char",
                 "prompt": "A",
@@ -395,7 +395,6 @@ def test_public_demo_cli_serves_real_localhost_completion_and_stream(tmp_path: P
         )
         stream = httpx.post(
             f"http://127.0.0.1:{port}/v1/completions",
-            headers=headers,
             json={
                 "model": "minigpt-char",
                 "prompt": "A",
@@ -415,6 +414,20 @@ def test_public_demo_cli_serves_real_localhost_completion_and_stream(tmp_path: P
     assert stream.status_code == 200
     assert "data: [DONE]" in stream.text
     assert process.returncode is not None
+
+
+def _write_public_demo_config(tmp_path: Path, *, streaming_enabled: bool) -> Path:
+    project_root = Path(__file__).resolve().parents[1]
+    source = (project_root / "configs" / "public_demo.yaml").read_text(encoding="utf-8")
+    expected = "streaming_enabled: false"
+    assert source.count(expected) == 1
+    configured = source.replace(
+        expected,
+        f"streaming_enabled: {str(streaming_enabled).lower()}",
+    )
+    path = tmp_path / "public_demo.yaml"
+    _ = path.write_text(configured, encoding="utf-8")
+    return path
 
 
 def _write_service_checkpoint(tmp_path: Path) -> tuple[Path, Path]:

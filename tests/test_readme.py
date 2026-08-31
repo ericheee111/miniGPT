@@ -1,6 +1,13 @@
+import base64
+import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import cast
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).parents[1]
 README_PATH = PROJECT_ROOT / "README.md"
@@ -158,17 +165,18 @@ def test_public_demo_deployment_and_threat_documents_cover_operational_contracts
 
     # When/Then: the complete zero-cost operator path is documented.
     for contract in (
-        "ngrok config add-authtoken",
         "DEMO_API_BASE",
         "GitHub Actions",
-        "start_public_demo.ps1",
-        "ngrok-skip-browser-warning",
+        "start_public_demo_tailscale.ps1",
+        "stop_public_demo_tailscale.ps1",
         "Task Scheduler",
-        "Ctrl+C",
-        "Usage",
+        "tailscale funnel status --json",
+        "global_requests_per_hour",
+        "global_generated_tokens_per_day",
         "轮换 public URL",
         "完全卸载",
         "Tailscale Funnel",
+        "zrok",
         "Cloudflare Quick Tunnel",
         "不支持 Server-Sent Events",
         "没有 24/7 SLA",
@@ -205,10 +213,15 @@ def test_public_demo_deployment_and_threat_documents_cover_operational_contracts
 
 def test_public_demo_launcher_is_loopback_scoped_and_never_accepts_token() -> None:
     # Given: the Windows launcher and its non-secret environment example.
-    launcher = (PROJECT_ROOT / "scripts" / "start_public_demo.ps1").read_text(encoding="utf-8")
+    launcher = (PROJECT_ROOT / "scripts" / "start_public_demo_tailscale.ps1").read_text(
+        encoding="utf-8"
+    )
+    stopper = (PROJECT_ROOT / "scripts" / "stop_public_demo_tailscale.ps1").read_text(
+        encoding="utf-8"
+    )
     example = (PROJECT_ROOT / ".env.public-demo.example").read_text(encoding="utf-8")
 
-    # When/Then: startup, readiness, management API, logs, and exact cleanup are present.
+    # When/Then: startup, readiness, status parsing, logs, and exact cleanup are present.
     for contract in (
         ".venv\\Scripts\\python.exe",
         "MINIGPT_CHECKPOINT",
@@ -217,15 +230,26 @@ def test_public_demo_launcher_is_loopback_scoped_and_never_accepts_token() -> No
         "DEMO_ENABLED",
         '"127.0.0.1"',
         "http://127.0.0.1:8000/healthz",
-        "http://127.0.0.1:4040/api/tunnels",
+        '@("status", "--json")',
+        '@("funnel", "status", "--json")',
+        '@("funnel", "--bg", "--yes", "8000")',
+        "Get-MiniGPTFunnel",
+        "Read-RuntimeState",
+        "Get-ManagedBackendProcess",
         "outputs\\public-demo",
         "-WindowStyle Hidden",
         "Stop-Process -Id $Process.Id",
     ):
         assert contract in launcher
 
-    # And: credentials, firewall, port mapping, and public bind are absent.
-    assert "authtoken" not in launcher.lower()
+    # And: neither script can touch another tunnel provider or the Tailscale node state.
+    scripts = f"{launcher}\n{stopper}".lower()
+    assert "ngrok" not in scripts
+    assert "127.0.0.1:4040" not in scripts
+    assert "127.0.0.1:8787" not in scripts
+    assert "tailscale down" not in scripts
+    assert "stop-process -name" not in scripts
+    assert '@("funnel", "--https=443", "off")' in stopper
     assert "0.0.0.0" not in launcher  # noqa: S104 - assert the unsafe bind is absent
     assert "New-NetFirewallRule" not in launcher
     assert "portproxy" not in launcher
@@ -235,3 +259,114 @@ def test_public_demo_launcher_is_loopback_scoped_and_never_accepts_token() -> No
         "MINIGPT_CHECKPOINT=checkpoints/reference/latest.pt",
         "MINIGPT_TOKENIZER=data/processed/tokenizer.json",
     ]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell launcher tests require Windows")
+def test_public_demo_tailscale_status_parsing_and_preflight_failures_are_mocked() -> None:
+    # Given: mocked Tailscale status documents and the dot-sourceable launcher functions.
+    funnel_status = json.dumps(
+        {
+            "TCP": {"443": {"HTTPS": True}},
+            "Web": {
+                "minigpt-demo.example-tailnet.ts.net:443": {
+                    "Handlers": {"/": {"Proxy": "http://127.0.0.1:8000"}}
+                }
+            },
+            "AllowFunnel": {"minigpt-demo.example-tailnet.ts.net:443": True},
+        }
+    )
+    logged_out = json.dumps({"BackendState": "NeedsLogin", "Self": {"Online": False}})
+    conflicting_funnel = json.dumps(
+        {
+            "Web": {
+                "other.example-tailnet.ts.net:443": {
+                    "Handlers": {"/": {"Proxy": "http://127.0.0.1:9000"}}
+                }
+            },
+            "AllowFunnel": {"other.example-tailnet.ts.net:443": True},
+        }
+    )
+
+    # When: parser, login validation, and CLI discovery run without invoking real Tailscale.
+    parsed = _run_powershell_launcher_probe(
+        funnel_status,
+        "$result = Get-MiniGPTFunnel -StatusJson $mockJson; $result | ConvertTo-Json -Compress",
+    )
+    login_error = _run_powershell_launcher_probe(
+        logged_out,
+        (
+            "try { Assert-TailscaleLoggedIn -StatusJson $mockJson } "
+            "catch { Write-Output $_.Exception.Message }"
+        ),
+    )
+    missing_cli = _run_powershell_launcher_probe(
+        "{}",
+        (
+            'try { Resolve-TailscaleCommand -Name "minigpt-definitely-missing.exe" } '
+            "catch { Write-Output $_.Exception.Message }"
+        ),
+    )
+    reuse_action = _run_powershell_launcher_probe(
+        funnel_status,
+        "Get-MiniGPTFunnelAction -StatusJson $mockJson",
+    )
+    create_action = _run_powershell_launcher_probe(
+        "{}",
+        "Get-MiniGPTFunnelAction -StatusJson $mockJson",
+    )
+    conflict_error = _run_powershell_launcher_probe(
+        conflicting_funnel,
+        (
+            "try { Get-MiniGPTFunnelAction -StatusJson $mockJson } "
+            "catch { Write-Output $_.Exception.Message }"
+        ),
+    )
+
+    # Then: the ts.net origin is exact and missing login/CLI fail with actionable errors.
+    assert parsed.returncode == 0, parsed.stderr
+    document = cast("dict[str, object]", json.loads(parsed.stdout))
+    assert document == {
+        "HostPort": "minigpt-demo.example-tailnet.ts.net:443",
+        "PublicUrl": "https://minigpt-demo.example-tailnet.ts.net",
+        "Proxy": "http://127.0.0.1:8000",
+    }
+    assert "not logged in and online" in login_error.stdout
+    assert "not installed or is not available on PATH" in missing_cli.stdout
+    assert reuse_action.stdout.strip() == "reuse"
+    assert create_action.stdout.strip() == "create"
+    assert "port 443 already serves another target" in conflict_error.stdout
+
+
+def _run_powershell_launcher_probe(
+    mock_json: str,
+    probe: str,
+) -> subprocess.CompletedProcess[str]:
+    encoded = base64.b64encode(mock_json.encode()).decode("ascii")
+    launcher = str(PROJECT_ROOT / "scripts" / "start_public_demo_tailscale.ps1").replace("'", "''")
+    command = (
+        f". '{launcher}'; "
+        f"$mockJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')); "
+        f"{probe}"
+    )
+    powershell = (
+        Path(os.environ.get("SYSTEMROOT", "C:\\Windows"))
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    return subprocess.run(  # noqa: S603
+        [
+            str(powershell),
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )

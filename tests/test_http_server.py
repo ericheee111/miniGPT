@@ -92,9 +92,8 @@ def build_app() -> FastAPI:
 _PUBLIC_ORIGIN = "https://portfolio.example"
 _PUBLIC_POLICY = PublicDemoPolicy(
     enabled=True,
+    streaming_enabled=True,
     allowed_origins=(_PUBLIC_ORIGIN,),
-    per_client_requests=100,
-    global_requests=100,
 )
 
 
@@ -637,21 +636,17 @@ def test_public_demo_bind_and_origin_configuration_fail_closed() -> None:
         validate_bind_host(
             "0.0.0.0",  # noqa: S104 - deliberate rejected bind test
             unsafe_allow_non_loopback=False,
-            trust_proxy=False,
         )
 
-    # And: loopback is accepted while proxy trust cannot accompany a public bind.
+    # And: loopback is accepted and the explicit unsafe escape hatch remains separate.
     validate_bind_host(
         "127.0.0.1",
         unsafe_allow_non_loopback=False,
-        trust_proxy=False,
     )
-    with pytest.raises(InvalidPublicDemoConfigError, match="requires a loopback"):
-        validate_bind_host(
-            "0.0.0.0",  # noqa: S104 - deliberate rejected bind test
-            unsafe_allow_non_loopback=True,
-            trust_proxy=True,
-        )
+    validate_bind_host(
+        "0.0.0.0",  # noqa: S104 - deliberate explicit unsafe bind test
+        unsafe_allow_non_loopback=True,
+    )
 
 
 def test_public_demo_cors_allows_only_configured_origin_and_preflight() -> None:
@@ -674,7 +669,15 @@ async def _check_public_demo_cors() -> None:
             headers={
                 "Origin": _PUBLIC_ORIGIN,
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": ("content-type, ngrok-skip-browser-warning"),
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        legacy_header = await client.options(
+            "/v1/completions",
+            headers={
+                "Origin": _PUBLIC_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type, ngrok-skip-browser-warning",
             },
         )
 
@@ -686,10 +689,8 @@ async def _check_public_demo_cors() -> None:
     assert preflight.status_code == 204
     assert preflight.headers["access-control-allow-origin"] == _PUBLIC_ORIGIN
     assert preflight.headers["access-control-allow-methods"] == "GET, POST, OPTIONS"
-    assert (
-        preflight.headers["access-control-allow-headers"]
-        == "content-type, ngrok-skip-browser-warning"
-    )
+    assert preflight.headers["access-control-allow-headers"] == "content-type"
+    assert legacy_header.status_code == 403
 
 
 def test_public_demo_rejects_body_prompt_and_generation_limit_violations() -> None:
@@ -759,49 +760,112 @@ async def _check_public_demo_request_limits() -> None:
     assert hot_response.status_code == 400
 
 
-def test_public_demo_enforces_per_client_and_global_rate_limits() -> None:
-    asyncio.run(_check_public_demo_rate_limits())
+def test_public_demo_enforces_ip_independent_global_quotas() -> None:
+    asyncio.run(_check_public_demo_global_quotas())
 
 
-async def _check_public_demo_rate_limits() -> None:
-    # Given: separate apps with a two-request client limit and a two-request global limit.
-    client_app, _runner = _build_public_app(
+async def _check_public_demo_global_quotas() -> None:
+    # Given: separate apps with strict hourly request and daily generated-token quotas.
+    request_app, _runner = _build_public_app(
         replace(
             _PUBLIC_POLICY,
-            per_client_requests=2,
-            global_requests=100,
+            global_requests_per_hour=2,
         )
     )
-    global_app, _runner = _build_public_app(
+    token_app, _runner = _build_public_app(
         replace(
             _PUBLIC_POLICY,
-            trust_proxy=True,
-            per_client_requests=100,
-            global_requests=2,
+            max_new_tokens=1,
+            global_generated_tokens_per_day=1,
         )
     )
-    payload = _completion_payload(max_tokens=0)
 
-    # When: one peer exceeds its limit and spoofed client keys try to bypass global capacity.
-    async with _test_client(client_app) as client:
-        client_responses = [
-            await client.post("/v1/completions", json=payload) for _index in range(3)
-        ]
-    async with _test_client(global_app) as client:
-        global_responses = [
+    # When: spoofed XFF values rotate and zero-token output precedes one generated token.
+    async with _test_client(request_app) as client:
+        request_responses = [
             await client.post(
                 "/v1/completions",
-                json=payload,
+                json=_completion_payload(max_tokens=0),
                 headers={"X-Forwarded-For": f"192.0.2.{index}"},
             )
             for index in range(1, 4)
         ]
+    async with _test_client(token_app) as client:
+        zero_token = await client.post(
+            "/v1/completions",
+            json=_completion_payload(max_tokens=0),
+        )
+        one_token = await client.post(
+            "/v1/completions",
+            json=_completion_payload(max_tokens=1),
+        )
+        token_limited = await client.post(
+            "/v1/completions",
+            json=_completion_payload(max_tokens=1),
+        )
 
-    # Then: both third requests receive 429 and a bounded Retry-After value.
-    assert [response.status_code for response in client_responses] == [200, 200, 429]
-    assert [response.status_code for response in global_responses] == [200, 200, 429]
-    assert int(client_responses[-1].headers["retry-after"]) >= 1
-    assert int(global_responses[-1].headers["retry-after"]) >= 1
+    # Then: XFF cannot bypass the global bucket and quota counts actual generated output.
+    assert [response.status_code for response in request_responses] == [200, 200, 429]
+    assert [zero_token.status_code, one_token.status_code, token_limited.status_code] == [
+        200,
+        200,
+        429,
+    ]
+    assert int(request_responses[-1].headers["retry-after"]) >= 1
+    assert int(token_limited.headers["retry-after"]) >= 1
+
+
+def test_public_demo_counts_only_valid_runner_accepted_requests() -> None:
+    asyncio.run(_check_public_demo_accepted_request_accounting())
+
+
+async def _check_public_demo_accepted_request_accounting() -> None:
+    # Given: a one-request global quota.
+    app, runner = _build_public_app(replace(_PUBLIC_POLICY, global_requests_per_hour=1))
+
+    # When: an invalid Prompt is followed by two otherwise valid completions.
+    async with _test_client(app) as client:
+        invalid = await client.post(
+            "/v1/completions",
+            json=_completion_payload(prompt="Z", max_tokens=0),
+        )
+        accepted = await client.post(
+            "/v1/completions",
+            json=_completion_payload(max_tokens=0),
+        )
+        limited = await client.post(
+            "/v1/completions",
+            json=_completion_payload(max_tokens=0),
+        )
+        completed_requests = runner.metrics().completed_requests
+
+    # Then: validation consumes no quota and only one request reaches the runner.
+    assert [invalid.status_code, accepted.status_code, limited.status_code] == [400, 200, 429]
+    assert completed_requests == 1
+
+
+def test_public_demo_streaming_disabled_fails_closed_before_submission() -> None:
+    asyncio.run(_check_public_demo_streaming_disabled())
+
+
+async def _check_public_demo_streaming_disabled() -> None:
+    # Given: the deployment-default non-streaming public policy.
+    policy = replace(_PUBLIC_POLICY, streaming_enabled=False)
+    app, runner = _build_controlled_public_app(policy=policy)
+
+    # When: metadata is read and a direct client still asks for SSE.
+    async with _test_client(app) as client:
+        info = _response_body(await client.get("/demo/info"))
+        response = await client.post(
+            "/v1/completions",
+            json=_completion_payload(stream=True),
+        )
+
+    # Then: the UI contract is false and no model request is submitted.
+    assert info["streaming_enabled"] is False
+    assert response.status_code == 400
+    assert _error_code(_response_json(response)) == "streaming_disabled"
+    assert runner.handles == []
 
 
 async def _wait_until(predicate: object, *, timeout_seconds: float = 1.0) -> None:
@@ -861,18 +925,26 @@ def test_public_demo_timeout_cancels_runner_and_releases_capacity() -> None:
 
 async def _check_public_demo_timeout() -> None:
     # Given: a pending runner behind a short public request deadline.
-    policy = replace(_PUBLIC_POLICY, request_timeout_seconds=0.02)
+    policy = replace(
+        _PUBLIC_POLICY,
+        max_new_tokens=3,
+        global_generated_tokens_per_day=3,
+        request_timeout_seconds=0.02,
+    )
     app, runner = _build_controlled_public_app(policy=policy)
 
-    # When: generation outlives that deadline.
+    # When: generation outlives that deadline and a second request uses the same quota window.
     async with _test_client(app) as client:
         response = await client.post("/v1/completions", json=_completion_payload())
+        second = await client.post("/v1/completions", json=_completion_payload())
         metrics = _response_body(await client.get("/demo/metrics"))
 
-    # Then: the request is cancelled, counted as timed out, and holds no slot.
+    # Then: both requests reach the runner because timeout released capacity and token reservation.
     assert response.status_code == 504
-    assert len(runner.cancelled_request_ids) == 1
-    assert metrics["timeout_requests"] == 1
+    assert second.status_code == 504
+    assert len(runner.handles) == 2
+    assert len(runner.cancelled_request_ids) == 2
+    assert metrics["timeout_requests"] == 2
     assert metrics["active_requests"] == 0
     assert metrics["queued_requests"] == 0
 
@@ -1060,7 +1132,7 @@ async def _check_public_demo_kill_switch_and_documents() -> None:
         "executor",
         "kv_cache_backend",
         "prefix_cache_enabled",
-        "streaming_available",
+        "streaming_enabled",
     }
     assert set(metrics) == {
         "online",
