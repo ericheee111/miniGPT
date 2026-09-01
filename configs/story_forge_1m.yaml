@@ -31,7 +31,7 @@ training:
   checkpoint_interval: 500
   sample_interval: 500
   sample_tokens: 96
-  sample_prompt: "Once upon a time, "
+  sample_prompt: "<bos><world_space><tone_adventurous><theme_discovery><story>Once upon a time, "
   output_dir: outputs/story_forge_1m
   checkpoint_dir: checkpoints/story_forge_1m
   tensorboard_dir: outputs/story_forge_1m/tensorboard
