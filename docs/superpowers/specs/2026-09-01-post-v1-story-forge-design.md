@@ -222,3 +222,57 @@ existing `BPETokenizer` contract.
 Character tokenizers are explicitly rejected by both
 `story_control_prefix_ids` and `frame_story_prompt` because they lack the
 required special tokens.
+
+## Model training, evaluation, and evidence
+
+The 5M candidate config (`configs/story_forge_5m.yaml`, 6 layers / 4 heads /
+208 embedding / block 512 / vocab 4096) resolves to exactly 4,928,144 trainable
+parameters (untied embedding and head, `bias=False`), as computed by
+`minigpt.model.expected_gpt_parameter_count`. A single 3000-step CPU run was
+trained in segments with intentional exact resume (`--run-until-step 3000
+--resume ...`), producing 3000 strictly ordered metric steps (0..2999) with 60
+validation points at every 50th step and checkpoints at steps 499, 1499, and
+2999. Identity, tokenizer/data hashes, and resume behavior were verified.
+
+### Bounded deterministic evaluation
+
+`src/minigpt/story_evaluation.py` and the thin `evaluate_stories.py` entrypoint
+load a Story Forge checkpoint/tokenizer through public APIs and evaluate all 16
+`STORY_EVALUATION_CASES` with fixed per-case seeds. It reports bounded metrics
+only:
+
+- validation loss/perplexity on 20 fixed deterministic recorded batches
+  (fresh val batcher seeded with `seed + 1`);
+- EOS stop rate and generated length;
+- special-token leakage outside the natural EOS stop;
+- invalid decode;
+- repeated 3/4-grams and the longest immediate tail loop;
+- distinct 1/2/3 ratios;
+- lexical proxy scores for world/tone/theme (alias-phrase keyword counts);
+- same-seed determinism, different-seed diversity, and cached-vs-uncached
+  exact token equality.
+
+The lexical proxy scores are keyword-presence surrogates only. They do **not**
+measure semantic understanding, story quality, or authorship, and no such claim
+is made. The conservative public default is temperature 0.8 / top_k 20, chosen
+from measured samples rather than guessed claims.
+
+### Local serving smoke
+
+An isolated localhost `serve.py` smoke (subprocess on a free non-8000 port plus
+an in-process ASGI run) exercises health, models, non-stream and SSE completion,
+three concurrent independent completions, disconnect cancellation, zero
+active/queued return, and verifies no checkpoint/tokenizer path leaks. It does
+not cut over the live demo backend.
+
+### Evidence package
+
+`generate_story_forge_evidence.py` (with `minigpt.story_forge_evidence`)
+assembles the hash-bound package at `docs/results/story-forge-model/`, binding
+source commit, canonical tokenizer/data hashes, parameter count, training
+trajectory, evaluator outputs/samples, serving smoke, resource cleanup, and the
+bounded claim policy. Checkpoint and canonical data remain external/ignored.
+The package is deliberately outside the Stage 7A-20 doctor registry (mirroring
+the Stage 21 capstone) so its own loop can be verified without self-
+registration. The verdict is `descriptive_only`; no production readiness,
+general-chat, semantic-understanding, or universal-speedup claim is made.

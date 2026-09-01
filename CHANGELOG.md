@@ -11,6 +11,7 @@ All notable project changes are documented here. miniGPT follows semantic versio
 - Post-v1 Public Playground: a build-chain-free GitHub Pages portfolio with online/offline status, character-level completion controls, fetch-based SSE, architecture, Stage 1–21 summary, Evidence links, privacy limits, and static offline output.
 - Restricted `minigpt demo-serve` entrypoint with loopback-only default, typed public policy, exact CORS allowlist, body/Prompt/generation bounds, bounded FIFO HTTP capacity, IP/XFF-independent global request/token quotas, opt-in verified SSE, request timeout, disconnect cancellation, generic errors, safe aggregate metrics, and an explicit `DEMO_ENABLED` kill switch.
 - Deterministic static-site builder, official GitHub Pages workflow, idempotent Windows/Tailscale Funnel start/stop launchers, zero-cost deployment guide, and public-demo threat model.
+- Story Forge post-v1 research: deterministic SimpleStories data pipeline, ByteLevel BPE tokenizer, unified `load_tokenizer`, `StoryControls`/`frame_story_prompt` control framing, the 16-case `STORY_EVALUATION_CASES`, a bounded deterministic evaluator (`minigpt.story_evaluation` + `evaluate_stories.py`), a local serving smoke, and a hash-bound evidence package under `docs/results/story-forge-model/`. The 5M config (`configs/story_forge_5m.yaml`) resolves to exactly 4,928,144 parameters. The evidence verdict is `descriptive_only`; no semantic-understanding, story-quality, production, general-chat, or universal-speedup claim is made.
 
 ### Security
 
@@ -18,7 +19,7 @@ All notable project changes are documented here. miniGPT follows semantic versio
 - Model output is inserted with `textContent`; API Base is build-time-only, accepts empty or credential-free HTTPS origin, and is JSON encoded before entering `config.js`.
 - Checkpoint, tokenizer, Tailscale node state, `.env`, local runtime logs, generated `_site/`, and machine paths remain local and outside Pages artifacts.
 
-This is a deployment extension after v1 closure. It is not Stage 22 and does not alter historical v1.0 Evidence, scope, or performance verdicts.
+This is a deployment extension after v1 closure. It is not Stage 22 and does not alter historical v1.0 Evidence, scope, or performance verdicts. The Story Forge model/evaluation/evidence work is likewise a post-v1 research extension and does not change the meaning of historical Stage 7A-21 Evidence.
 
 ## 1.0.0 — 2026-08-27
 
