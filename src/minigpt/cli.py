@@ -21,10 +21,20 @@ class CommandSpec:
     module_name: str
     help_text: str
     optional_modules: frozenset[str] = frozenset()
+    extras: str = ".[serve]"
+    dependency_label: str = "serving"
 
 
 _COMMANDS = (
     CommandSpec("prepare-data", "prepare_data", "prepare tokenizer and train/validation arrays"),
+    CommandSpec(
+        "prepare-stories",
+        "prepare_stories",
+        "prepare deterministic SimpleStories Story Forge data",
+        frozenset({"huggingface_hub", "pyarrow", "tokenizers"}),
+        ".[story]",
+        "story",
+    ),
     CommandSpec("train", "train", "train or exactly resume a GPT experiment"),
     CommandSpec("generate", "generate", "generate text from a checkpoint"),
     CommandSpec("simulate", "simulate_serving", "run a deterministic serving simulation"),
@@ -64,10 +74,9 @@ def _load_command(spec: CommandSpec) -> CommandMain:
         module = importlib.import_module(spec.module_name)
     except ModuleNotFoundError as error:
         if error.name in spec.optional_modules:
-            extras = ".[serve]"
             reason = (
-                f"command {spec.name!r} requires optional serving dependencies; "
-                f'install with: python -m pip install -e "{extras}"'
+                f"command {spec.name!r} requires optional {spec.dependency_label} dependencies; "
+                f'install with: python -m pip install -e "{spec.extras}"'
             )
             raise RuntimeError(reason) from error
         raise

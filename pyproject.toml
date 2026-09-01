@@ -27,6 +27,11 @@ serve = [
 report = [
     "matplotlib>=3.10",
 ]
+story = [
+    "tokenizers>=0.22,<0.23",
+    "huggingface-hub>=0.35,<1.0",
+    "pyarrow>=21,<22",
+]
 dev = [
     "build>=1.2",
     "basedpyright>=1.39.9",
@@ -47,7 +52,7 @@ version = {attr = "minigpt._version.__version__"}
 [tool.setuptools]
 packages = ["minigpt"]
 package-dir = {minigpt = "src/minigpt"}
-py-modules = ["prepare_data", "train", "generate", "simulate_serving", "serve"]
+py-modules = ["prepare_data", "prepare_stories", "train", "generate", "simulate_serving", "serve"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

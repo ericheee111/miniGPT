@@ -20,6 +20,7 @@ def test_root_help_lists_stable_commands(capsys: pytest.CaptureFixture[str]) -> 
     assert "Usage:" in captured.out
     for command in (
         "prepare-data",
+        "prepare-stories",
         "train",
         "generate",
         "simulate",
@@ -89,6 +90,24 @@ def test_optional_serve_dependency_failure_is_actionable(
     assert ".[serve]" in captured.err
 
 
+def test_optional_story_dependency_failure_is_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def missing_optional(_name: str) -> object:
+        reason = "No module named 'huggingface_hub'"
+        raise ModuleNotFoundError(reason, name="huggingface_hub")
+
+    monkeypatch.setattr(importlib, "import_module", missing_optional)
+
+    exit_code = cli.main(["prepare-stories", "--help"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "optional story dependencies" in captured.err
+    assert ".[story]" in captured.err
+
+
 def test_unknown_command_returns_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = cli.main(["unknown-command"])
 
@@ -145,7 +164,8 @@ def test_pyproject_includes_repository_command_modules() -> None:
     document = Path("pyproject.toml").read_text(encoding="utf-8")
 
     assert 'minigpt = "minigpt.cli:main"' in document
-    for module in ("prepare_data", "train", "generate", "simulate_serving", "serve"):
+    modules = ("prepare_data", "prepare_stories", "train", "generate", "simulate_serving", "serve")
+    for module in modules:
         assert f'"{module}"' in document
 
 

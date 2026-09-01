@@ -40,6 +40,8 @@ TINY_SHAKESPEARE_URL: Final = (
 )
 TRAIN_SPLIT_RATIO: Final = 0.9
 TOKENIZER_FORMAT_VERSION: Final = 1
+CHAR_TOKENIZER_TYPE: Final = "char"
+CHAR_MODEL_FAMILY: Final = "char_gpt"
 DOWNLOAD_TIMEOUT_SECONDS: Final = 30.0
 MINIMUM_CORPUS_TOKENS: Final = 2
 DEFAULT_DATA_DIR: Final = Path("data")
@@ -163,6 +165,35 @@ class CharTokenizer:
         """Return the number of representable characters."""
         return len(self._vocabulary)
 
+    @property
+    def tokenizer_type(self) -> str:
+        """Return the stable tokenizer family label for the common protocol."""
+        return CHAR_TOKENIZER_TYPE
+
+    @property
+    def model_family(self) -> str:
+        """Return the stable model-family label for the common protocol."""
+        return CHAR_MODEL_FAMILY
+
+    @property
+    def bos_token_id(self) -> None:
+        """Return ``None``; the char vocabulary defines no BOS token."""
+        return None
+
+    @property
+    def eos_token_id(self) -> None:
+        """Return ``None``; the char vocabulary defines no EOS token."""
+        return None
+
+    @property
+    def pad_token_id(self) -> None:
+        """Return ``None``; the char vocabulary defines no pad token."""
+        return None
+
+    def special_token_id(self, token: str) -> None:
+        """Return ``None``; the char vocabulary defines no special tokens."""
+        del token
+
     def encode(self, text: str) -> list[int]:
         """Convert text to token IDs, rejecting unknown characters."""
         token_ids: list[int] = []
@@ -173,8 +204,14 @@ class CharTokenizer:
                 raise UnknownCharacterError(character, position) from None
         return token_ids
 
-    def decode(self, token_ids: Sequence[int]) -> str:
+    def decode(
+        self,
+        token_ids: Sequence[int],
+        *,
+        skip_special_tokens: bool = True,
+    ) -> str:
         """Convert token IDs back to text, rejecting IDs outside the vocabulary."""
+        del skip_special_tokens
         characters: list[str] = []
         for position, token_id in enumerate(token_ids):
             if token_id < 0 or token_id >= self.vocab_size:

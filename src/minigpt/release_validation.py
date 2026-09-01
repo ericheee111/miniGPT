@@ -282,6 +282,7 @@ def validate_release_artifacts(root: Path) -> ReleaseArtifactValidation:
             "minigpt/stage20_evidence.py",
             "minigpt/stage21_evidence.py",
             "prepare_data.py",
+            "prepare_stories.py",
             "train.py",
             "generate.py",
             "simulate_serving.py",
