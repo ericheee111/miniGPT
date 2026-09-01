@@ -193,3 +193,32 @@ Selection summary: 200,000 train stories, 5,000 validation stories, no
 train/validation overlap, 4096 vocabulary, `mapping_version` 2, and equal world
 marginals. These numbers describe what the deterministic pipeline produced, not
 a claim that Story Forge training has achieved any downstream quality target.
+
+## Story controls and framing
+
+`src/minigpt/story.py` adds user-facing controls and context-aware framing on
+top of the data layer. It does not change the training tokenization or the
+existing `BPETokenizer` contract.
+
+- `StoryControls(world, tone, theme)`: frozen, slotted, validates that each
+  selector belongs to the current canonical vocabulary.
+- `story_control_prefix_ids(tokenizer)`: returns the five-token
+  `<bos> <world_space> <tone_adventurous> <theme_discovery> <story>` prefix
+  for the default controls; training, serving, and evaluation share this
+  single source of truth.
+- `frame_story_prompt(tokenizer, controls, opening, *, max_context_tokens=None,
+  reserved_generation_tokens=0)`: validates the opening (rejects empty text,
+  `<...>` control syntax, NUL, and other control characters; caps at 10,000
+  characters), encodes it through the BPE tokenizer, preserves the control
+  prefix in full, and left-truncates the opening at a token boundary when the
+  caller-supplied context budget is exceeded. The control prefix is never
+  truncated; the function raises when the budget is too small to hold it.
+- `STORY_EVALUATION_CASES`: 16 original cases covering every
+  (world × tone) combination with a rotating theme index so each of the four
+  themes appears exactly four times. Each case carries a stable `id`, original
+  `opening`, and deterministic `seed`. No copyrighted IP or franchise
+  references.
+
+Character tokenizers are explicitly rejected by both
+`story_control_prefix_ids` and `frame_story_prompt` because they lack the
+required special tokens.

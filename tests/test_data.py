@@ -4,6 +4,7 @@ import gc
 import json
 import tempfile
 import weakref
+from collections import Counter
 from importlib import import_module
 from pathlib import Path
 from typing import Final, Protocol, TypeAlias, cast
@@ -14,6 +15,14 @@ import pytest
 import torch
 
 from minigpt import data, story_data
+from minigpt.story import (
+    STORY_EVALUATION_CASES,
+    StoryControlError,
+    StoryControls,
+    StoryFramingError,
+    frame_story_prompt,
+    story_control_prefix_ids,
+)
 from minigpt.tokenizer import (
     BPE_COUNT_SPECIAL_TOKENS,
     BPE_MAX_VOCAB_SIZE,
@@ -1371,3 +1380,469 @@ def test_story_forge_split_selection_is_order_independent(tmp_path: Path) -> Non
     forward_train = cast("dict[str, object]", forward_meta["train"])
     reversed_train = cast("dict[str, object]", reversed_meta["train"])
     assert forward_train["generation_ids_sha256"] == reversed_train["generation_ids_sha256"]
+
+
+# ============================================================================
+# StoryControls and framing tests (Post-v1 Story Forge Controls)
+# ============================================================================
+
+
+def test_story_controls_accepts_all_valid_combinations() -> None:
+    """StoryControls accepts every combination of WORLDS, TONES, and THEMES."""
+
+    # When/Then: all combinations are valid
+    for world in story_data.WORLDS:
+        for tone in story_data.TONES:
+            for theme in story_data.THEMES:
+                controls = StoryControls(world=world, tone=tone, theme=theme)
+                assert controls.world == world
+                assert controls.tone == tone
+                assert controls.theme == theme
+
+
+def test_story_controls_rejects_invalid_world() -> None:
+    """StoryControls rejects invalid world values."""
+
+    # When/Then: invalid world is rejected
+    with pytest.raises(StoryControlError, match=r"world.*invalid"):
+        _ = StoryControls(world="invalid", tone="adventurous", theme="discovery")
+
+
+def test_story_controls_rejects_invalid_tone() -> None:
+    """StoryControls rejects invalid tone values."""
+
+    # When/Then: invalid tone is rejected
+    with pytest.raises(StoryControlError, match=r"tone.*invalid"):
+        _ = StoryControls(world="space", tone="invalid", theme="discovery")
+
+
+def test_story_controls_rejects_invalid_theme() -> None:
+    """StoryControls rejects invalid theme values."""
+
+    # When/Then: invalid theme is rejected
+    with pytest.raises(StoryControlError, match=r"theme.*invalid"):
+        _ = StoryControls(world="space", tone="adventurous", theme="invalid")
+
+
+def test_story_controls_is_frozen() -> None:
+    """StoryControls instances are immutable (frozen dataclass)."""
+
+    # Given: a valid controls instance
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+
+    # When/Then: mutation attempts fail
+    with pytest.raises(AttributeError):
+        controls.__setattr__("world", "forest")
+
+
+def test_story_control_prefix_ids_returns_correct_sequence() -> None:
+    """story_control_prefix_ids returns the canonical 5-token prefix."""
+
+    # Given: a valid Story Forge tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+
+    # Request the prefix
+    prefix = story_control_prefix_ids(tokenizer)
+
+    # Then: prefix contains exactly 5 tokens in the correct order
+    assert len(prefix) == 5
+    assert prefix[0] == tokenizer.special_token_id("<bos>")
+    assert prefix[1] == tokenizer.special_token_id("<world_space>")
+    assert prefix[2] == tokenizer.special_token_id("<tone_adventurous>")
+    assert prefix[3] == tokenizer.special_token_id("<theme_discovery>")
+    assert prefix[4] == tokenizer.special_token_id("<story>")
+
+
+def test_story_control_prefix_ids_rejects_char_tokenizer() -> None:
+    """story_control_prefix_ids rejects character tokenizers."""
+
+    # Given: a character tokenizer
+    char_tokenizer = data.CharTokenizer.from_text("hello world")
+
+    # When/Then: char tokenizer is rejected
+    with pytest.raises(StoryFramingError, match=r"model_family.*story_forge"):
+        _ = story_control_prefix_ids(char_tokenizer)
+
+
+def test_frame_story_prompt_basic_framing() -> None:
+    """frame_story_prompt creates a valid framed prompt."""
+
+    # Given: valid controls and a simple opening
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+    opening = "The rocket launched into the starry night."
+
+    # Frame the prompt
+    framed = frame_story_prompt(tokenizer, controls, opening)
+
+    # Then: framing succeeds with correct structure
+    assert framed.control_prefix_length == 5
+    assert framed.truncated is False
+    assert len(framed.token_ids) > 5
+    assert framed.retained_history_tokens == len(framed.token_ids) - 5
+
+    # And: prefix tokens are correct
+    assert framed.token_ids[0] == tokenizer.special_token_id("<bos>")
+    assert framed.token_ids[1] == tokenizer.special_token_id("<world_space>")
+    assert framed.token_ids[2] == tokenizer.special_token_id("<tone_adventurous>")
+    assert framed.token_ids[3] == tokenizer.special_token_id("<theme_discovery>")
+    assert framed.token_ids[4] == tokenizer.special_token_id("<story>")
+
+
+def test_frame_story_prompt_rejects_char_tokenizer() -> None:
+    """frame_story_prompt rejects character tokenizers."""
+
+    # Given: a character tokenizer and valid controls
+    char_tokenizer = data.CharTokenizer.from_text("The rocket launched.")
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+
+    # When/Then: char tokenizer is rejected
+    with pytest.raises(StoryFramingError, match=r"model_family.*story_forge"):
+        _ = frame_story_prompt(char_tokenizer, controls, "The rocket launched.")
+
+
+def test_frame_story_prompt_rejects_empty_opening() -> None:
+    """frame_story_prompt rejects empty or whitespace-only openings."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+
+    # When/Then: empty opening is rejected
+    with pytest.raises(StoryFramingError, match="empty"):
+        _ = frame_story_prompt(tokenizer, controls, "")
+
+    with pytest.raises(StoryFramingError, match="empty"):
+        _ = frame_story_prompt(tokenizer, controls, "   ")
+
+
+def test_frame_story_prompt_rejects_control_syntax() -> None:
+    """frame_story_prompt rejects openings containing control syntax."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+
+    # When/Then: control syntax is rejected
+    with pytest.raises(StoryFramingError, match="control syntax"):
+        _ = frame_story_prompt(tokenizer, controls, "The <bos> rocket launched.")
+
+    with pytest.raises(StoryFramingError, match="control syntax"):
+        _ = frame_story_prompt(tokenizer, controls, "The <world_space> rocket launched.")
+
+
+def test_frame_story_prompt_rejects_nul_characters() -> None:
+    """frame_story_prompt rejects openings containing NUL characters."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+
+    # When/Then: NUL character is rejected
+    with pytest.raises(StoryFramingError, match="NUL"):
+        _ = frame_story_prompt(tokenizer, controls, "The\x00rocket launched.")
+
+
+def test_frame_story_prompt_rejects_control_characters() -> None:
+    """frame_story_prompt rejects openings containing control characters."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+
+    # When/Then: control characters are rejected
+    with pytest.raises(StoryFramingError, match="control characters"):
+        _ = frame_story_prompt(tokenizer, controls, "The\x01rocket launched.")
+
+    with pytest.raises(StoryFramingError, match="control characters"):
+        _ = frame_story_prompt(tokenizer, controls, "The\x1frocket launched.")
+
+
+def test_frame_story_prompt_accepts_unicode_openings() -> None:
+    """frame_story_prompt accepts Unicode openings including emoji and scripts."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+
+    # When/Then: various Unicode openings are accepted
+    test_openings = [
+        "火箭发射到星空中 🚀✨",
+        "Le fusée a décollé dans la nuit étoilée.",
+        "Ракета взлетела в звездное небо.",
+        "ロケットは星空に打ち上げられた。",
+        "A🌟rocket🚀launched!",
+    ]
+
+    for opening in test_openings:
+        framed = frame_story_prompt(tokenizer, controls, opening)
+        assert framed.control_prefix_length == 5
+        assert framed.truncated is False
+        assert len(framed.token_ids) > 5
+
+
+def test_frame_story_prompt_respects_max_context_tokens() -> None:
+    """frame_story_prompt truncates history when context budget is exceeded."""
+
+    # Given: valid controls, tokenizer, and a long opening
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+    long_opening = "The rocket launched into the starry night. " * 20
+
+    # When: framing with a small context budget
+    framed = frame_story_prompt(
+        tokenizer,
+        controls,
+        long_opening,
+        max_context_tokens=20,
+        reserved_generation_tokens=5,
+    )
+
+    # Then: history is truncated at token boundaries
+    assert framed.truncated is True
+    assert framed.control_prefix_length == 5
+    assert len(framed.token_ids) <= 20
+    assert framed.retained_history_tokens <= 15  # 20 - 5 prefix
+
+
+def test_frame_story_prompt_preserves_prefix_during_truncation() -> None:
+    """frame_story_prompt never truncates the control prefix."""
+
+    # Given: valid controls, tokenizer, and a long opening
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+    long_opening = "A" * 1000  # Very long opening
+
+    # When: framing with a tight context budget
+    framed = frame_story_prompt(
+        tokenizer,
+        controls,
+        long_opening,
+        max_context_tokens=10,
+        reserved_generation_tokens=2,
+    )
+
+    # Then: prefix is preserved, only history is truncated
+    assert framed.control_prefix_length == 5
+    assert framed.token_ids[0] == tokenizer.special_token_id("<bos>")
+    assert framed.token_ids[1] == tokenizer.special_token_id("<world_space>")
+    assert framed.token_ids[2] == tokenizer.special_token_id("<tone_adventurous>")
+    assert framed.token_ids[3] == tokenizer.special_token_id("<theme_discovery>")
+    assert framed.token_ids[4] == tokenizer.special_token_id("<story>")
+    assert framed.truncated is True
+
+
+def test_frame_story_prompt_rejects_context_too_small_for_prefix() -> None:
+    """frame_story_prompt rejects context budgets smaller than the prefix."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+    opening = "The rocket launched."
+
+    # When/Then: context too small for prefix is rejected
+    with pytest.raises(StoryFramingError, match=r"smaller than.*prefix"):
+        _ = frame_story_prompt(
+            tokenizer,
+            controls,
+            opening,
+            max_context_tokens=4,  # Less than 5-token prefix
+            reserved_generation_tokens=0,
+        )
+
+
+def test_frame_story_prompt_rejects_context_too_small_with_reserved() -> None:
+    """frame_story_prompt rejects when reserved tokens leave no room for prefix."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+    opening = "The rocket launched."
+
+    # When/Then: context minus reserved is too small
+    with pytest.raises(StoryFramingError, match=r"leaves.*smaller than.*prefix"):
+        _ = frame_story_prompt(
+            tokenizer,
+            controls,
+            opening,
+            max_context_tokens=10,
+            reserved_generation_tokens=6,  # Leaves only 4 tokens, less than 5-token prefix
+        )
+
+
+def test_frame_story_prompt_handles_zero_reserved_tokens() -> None:
+    """frame_story_prompt works correctly with zero reserved generation tokens."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+    opening = "The rocket launched into the starry night."
+
+    # When: framing with zero reserved tokens
+    framed = frame_story_prompt(
+        tokenizer,
+        controls,
+        opening,
+        max_context_tokens=15,
+        reserved_generation_tokens=0,
+    )
+
+    # Then: framing succeeds with correct budget
+    assert framed.control_prefix_length == 5
+    assert len(framed.token_ids) <= 15
+
+
+def test_frame_story_prompt_exact_context_boundary() -> None:
+    """frame_story_prompt handles openings that exactly fit the context budget."""
+
+    # Given: valid controls and tokenizer
+    _require_tokenizers()
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="adventurous", theme="discovery")
+    opening = "Launch"  # Short opening
+
+    # Frame once to get the token count
+    framed_no_limit = frame_story_prompt(tokenizer, controls, opening)
+    total_tokens = len(framed_no_limit.token_ids)
+
+    # When: framing with exact context budget
+    framed_exact = frame_story_prompt(
+        tokenizer,
+        controls,
+        opening,
+        max_context_tokens=total_tokens,
+        reserved_generation_tokens=0,
+    )
+
+    # Then: no truncation occurs
+    assert framed_exact.truncated is False
+    assert len(framed_exact.token_ids) == total_tokens
+
+
+def test_story_evaluation_cases_coverage() -> None:
+    """STORY_EVALUATION_CASES covers all 16 WORLDS x TONES combinations."""
+
+    # When/Then: all 16 combinations are present
+    assert len(STORY_EVALUATION_CASES) == 16
+
+    seen_combinations: set[tuple[str, str]] = set()
+    for case in STORY_EVALUATION_CASES:
+        assert case.world in story_data.WORLDS
+        assert case.tone in story_data.TONES
+        assert case.theme in story_data.THEMES
+        seen_combinations.add((case.world, case.tone))
+
+    # And: all 16 combinations are covered
+    expected_combinations = {
+        (world, tone) for world in story_data.WORLDS for tone in story_data.TONES
+    }
+    assert seen_combinations == expected_combinations
+
+
+def test_story_evaluation_cases_theme_distribution() -> None:
+    """Each theme appears exactly 4 times across the 16 evaluation cases."""
+
+    # When: counting theme occurrences
+    theme_counts = Counter(case.theme for case in STORY_EVALUATION_CASES)
+
+    # Then: each theme appears exactly 4 times
+    assert len(theme_counts) == 4
+    assert all(count == 4 for count in theme_counts.values())
+    assert set(theme_counts.keys()) == set(story_data.THEMES)
+
+
+def test_story_evaluation_cases_unique_ids() -> None:
+    """All evaluation cases have unique, non-empty IDs."""
+
+    # When/Then: all IDs are unique and non-empty
+    ids = [case.id for case in STORY_EVALUATION_CASES]
+    assert len(ids) == 16
+    assert len(set(ids)) == 16  # All unique
+    assert all(case_id for case_id in ids)  # All non-empty
+
+
+def test_story_evaluation_cases_valid_seeds() -> None:
+    """All evaluation cases have valid, distinct seeds."""
+
+    # When/Then: all seeds are non-negative and distinct
+    seeds = [case.seed for case in STORY_EVALUATION_CASES]
+    assert len(seeds) == 16
+    assert len(set(seeds)) == 16  # All distinct
+    assert all(seed >= 0 for seed in seeds)  # All non-negative
+
+
+def test_story_evaluation_cases_non_empty_openings() -> None:
+    """All evaluation cases have non-empty, valid openings."""
+
+    # When/Then: all openings are non-empty and contain no control syntax
+    for case in STORY_EVALUATION_CASES:
+        assert case.opening
+        assert case.opening.strip()
+        assert "<" not in case.opening or ">" not in case.opening
+        assert "\x00" not in case.opening
+
+
+def test_story_control_prefix_ids_uses_requested_controls() -> None:
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="robot", tone="funny", theme="logic")
+
+    prefix = story_control_prefix_ids(tokenizer, controls)
+
+    assert prefix == (2, 7, 12, 15, 4)
+
+
+@pytest.mark.parametrize(
+    ("max_context_tokens", "reserved_generation_tokens", "message"),
+    [
+        (True, 0, "max_context_tokens must be an integer"),
+        (10, True, "reserved_generation_tokens must be an integer"),
+        (10, -1, "reserved_generation_tokens must be non-negative"),
+        (None, 1, "requires max_context_tokens"),
+        (0, 0, "max_context_tokens must be positive"),
+    ],
+)
+def test_frame_story_prompt_rejects_invalid_context_arguments(
+    max_context_tokens: int | None,
+    reserved_generation_tokens: int,
+    message: str,
+) -> None:
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="space", tone="warm", theme="friendship")
+
+    with pytest.raises(StoryFramingError, match=message):
+        _ = frame_story_prompt(
+            tokenizer,
+            controls,
+            "A small signal appeared.",
+            max_context_tokens=max_context_tokens,
+            reserved_generation_tokens=reserved_generation_tokens,
+        )
+
+
+def test_frame_story_prompt_rejects_unicode_control_character() -> None:
+    tokenizer = _story_tokenizer()
+    controls = StoryControls(world="forest", tone="mysterious", theme="discovery")
+
+    with pytest.raises(StoryFramingError, match="control characters"):
+        _ = frame_story_prompt(tokenizer, controls, f"A hidden path{chr(0x85)}opened.")
+
+
+def test_story_controls_rejects_non_string_value() -> None:
+    with pytest.raises(StoryControlError, match="world must be a string"):
+        _ = StoryControls(
+            world=cast("str", cast("object", 1)),
+            tone="adventurous",
+            theme="courage",
+        )
