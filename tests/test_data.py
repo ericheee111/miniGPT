@@ -14,7 +14,7 @@ import numpy.typing as npt
 import pytest
 import torch
 
-from minigpt import data, story_data
+from minigpt import data, story_data, story_forge_evidence
 from minigpt.story import (
     STORY_EVALUATION_CASES,
     StoryControlError,
@@ -1903,3 +1903,107 @@ def test_story_lexical_proxy_scores_count_keyword_hits() -> None:
     # Then: each dimension reports non-negative integer hits.
     assert all(isinstance(value, int) and value >= 0 for value in scores.values())
     assert scores["world"] > 0
+
+
+# ============================================================================
+# Story Forge evidence verifier (bounded claims + hash-bound membership)
+# ============================================================================
+
+
+def test_story_forge_evidence_verifier_rejects_empty_package(tmp_path: Path) -> None:
+    # Given: an empty candidate package root.
+    package = tmp_path / "story-forge-model"
+
+    # When/Then: verification fails because the manifest is absent.
+    with pytest.raises(story_forge_evidence.StoryForgeEvidenceVerificationError):
+        _ = story_forge_evidence.verify_story_forge_evidence(package)
+
+
+def test_story_forge_evidence_verifier_rejects_tampered_claim_policy(tmp_path: Path) -> None:
+    # Given: a complete, self-consistent package then a flipped claim flag.
+    paths = _story_evidence_package(tmp_path, production_claim=False)
+    summary_document = cast(
+        "dict[str, object]",
+        json.loads(paths["summary"].read_text(encoding="utf-8")),
+    )
+    claim_policy = cast(
+        "dict[str, object]",
+        summary_document["claim_policy"],
+    )
+    claim_policy["production_claim"] = True
+    _ = paths["summary"].write_text(
+        json.dumps(summary_document, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    # When/Then: verification fails because the claim policy was broadened.
+    with pytest.raises(story_forge_evidence.StoryForgeEvidenceVerificationError):
+        _ = story_forge_evidence.verify_story_forge_evidence(paths["package"])
+
+
+def _story_evidence_package(tmp_path: Path, *, production_claim: bool) -> dict[str, Path]:
+    """Build a minimal, self-consistent Story Forge evidence package for verifier tests."""
+    package = tmp_path / "story-forge-model"
+    package.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "schema_version": 1,
+        "stage": "story-forge-model",
+        "source_commit": "0" * 40,
+        "model": {
+            "vocab_size": 4096,
+            "n_layer": 6,
+            "n_head": 4,
+            "n_embd": 208,
+            "block_size": 512,
+            "bias": False,
+            "parameter_count": 4_928_144,
+        },
+        "data_identity": {
+            "tokenizer_sha256": story_forge_evidence.CANONICAL_TOKENIZER_SHA256,
+            "train_sha256": story_forge_evidence.CANONICAL_TRAIN_SHA256,
+            "val_sha256": story_forge_evidence.CANONICAL_VAL_SHA256,
+        },
+        "training": {"final_step": 2999, "eval_points": 60, "max_steps": 3000},
+        "final_evaluation": {
+            "case_count": 16,
+            "sampling": {"temperature": 0.8, "top_k": 20},
+            "eos_hits": 5,
+            "special_token_leaks": 0,
+            "invalid_decode": 0,
+            "max_immediate_loop": 0,
+            "determinism": {"all_identical": True},
+            "diversity": {"differing_count": 16},
+            "cached_uncached": {"all_exact_equal": True},
+            "serving_smoke": {},
+        },
+        "claim_policy": {
+            "verdict": "descriptive_only",
+            "production_claim": production_claim,
+            "general_chat_claim": False,
+            "semantic_understanding_claim": False,
+            "universal_speedup_claim": False,
+        },
+    }
+    summary_path = package / "summary.json"
+    _ = summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    # The verifier only inspects summary.json + artifact_manifest.json membership.
+    manifest = {
+        "schema_version": 1,
+        "stage": "story-forge-model",
+        "source_commit": "0" * 40,
+        "artifacts": [
+            {
+                "path": "summary.json",
+                "bytes": summary_path.stat().st_size,
+                "sha256": story_forge_evidence.sha256_file(summary_path),
+            }
+        ],
+    }
+    manifest_path = package / "artifact_manifest.json"
+    _ = manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    return {"package": package, "summary": summary_path}
