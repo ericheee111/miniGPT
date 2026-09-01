@@ -23,6 +23,12 @@ from minigpt.story import (
     frame_story_prompt,
     story_control_prefix_ids,
 )
+from minigpt.story_evaluation import (
+    distinct_ngram_ratio,
+    longest_immediate_tail_loop,
+    special_token_leak_count,
+    story_lexical_proxy_scores,
+)
 from minigpt.tokenizer import (
     BPE_COUNT_SPECIAL_TOKENS,
     BPE_MAX_VOCAB_SIZE,
@@ -1846,3 +1852,54 @@ def test_story_controls_rejects_non_string_value() -> None:
             tone="adventurous",
             theme="courage",
         )
+
+
+# ============================================================================
+# Story Forge evaluation helpers (bounded lexical/distributional metrics)
+# ============================================================================
+
+
+def test_longest_immediate_tail_loop_finds_repeating_pair() -> None:
+    # Given: a sequence ending in a repeated 2-token tail.
+    tokens = [5, 6, 7, 8, 9, 10, 9, 10]
+
+    # Then: the longest immediate tail loop is 2.
+    assert longest_immediate_tail_loop(tokens) == 2
+
+
+def test_longest_immediate_tail_loop_returns_zero_without_repeat() -> None:
+    # Given: a sequence with no immediate repeat at the tail.
+    tokens = [1, 2, 3, 4, 5]
+
+    # Then: no loop is detected.
+    assert longest_immediate_tail_loop(tokens) == 0
+
+
+def test_distinct_ngram_ratio_empty_and_full() -> None:
+    # Given: a short and a rich sequence.
+    short = [1, 2]
+    rich = [1, 2, 3, 4, 5]
+
+    # Then: below the n-gram order the ratio is zero; distinct full otherwise.
+    assert distinct_ngram_ratio(short, 3) == 0.0
+    assert distinct_ngram_ratio(rich, 3) == 1.0
+
+
+def test_special_token_leak_count_excludes_natural_eos() -> None:
+    # Given: special token IDs and an EOS that is allowed on the natural stop.
+    tokens = [2, 4, 5, 3, 6]
+
+    # Then: only non-EOS specials are counted as leaks.
+    assert special_token_leak_count(tokens, eos_token_id=3) == 4
+
+
+def test_story_lexical_proxy_scores_count_keyword_hits() -> None:
+    # Given: decoded text containing a few canonical alias phrases.
+    text = "The robot explored outer space and space travel was discovered."
+
+    # When: lexical proxy scores are computed.
+    scores = story_lexical_proxy_scores(text)
+
+    # Then: each dimension reports non-negative integer hits.
+    assert all(isinstance(value, int) and value >= 0 for value in scores.values())
+    assert scores["world"] > 0
