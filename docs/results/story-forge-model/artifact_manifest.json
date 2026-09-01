@@ -1,0 +1,42 @@
+{
+  "artifacts": [
+    {
+      "bytes": 13163,
+      "path": "evaluation_final.json",
+      "sha256": "59b38e858c7bebbf746421be56b603bdd4dc24126e71ac8ef7548c797a8ea5f8"
+    },
+    {
+      "bytes": 13379,
+      "path": "evaluation_step-0500.json",
+      "sha256": "0968927a26b650b159f7dcc51891b79e634c99412b78336ed5f76779328a895b"
+    },
+    {
+      "bytes": 12910,
+      "path": "evaluation_step-1500.json",
+      "sha256": "1ca9da8b3e318420aed27d25515862b2ad569eb8a92908c3339c8ff543fdda6d"
+    },
+    {
+      "bytes": 29696,
+      "path": "metrics_reporter.json",
+      "sha256": "dacf69ae720793a9faceeda51809b6b3cb58347361ced9796184c6dbc08b70ef"
+    },
+    {
+      "bytes": 919,
+      "path": "README.md",
+      "sha256": "a13a0db72750173f43001a0517d1644534c63da1f901fb57a5119d3345ea7b1b"
+    },
+    {
+      "bytes": 305,
+      "path": "serving_smoke.json",
+      "sha256": "4815126ccab534c60a3dee9c37cf3cf6066a431fb19d22da816cdb85f73c8a40"
+    },
+    {
+      "bytes": 2587,
+      "path": "summary.json",
+      "sha256": "d5b5c9e973a4330414201c9a24d8f270c3026a2aba23b4e91d8fc770b0a4805f"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "cf296dfc3b028b4b0fd2f7b349ba39607da32773",
+  "stage": "story-forge-model"
+}

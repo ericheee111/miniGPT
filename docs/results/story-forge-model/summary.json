@@ -1,0 +1,96 @@
+{
+  "checkpoint": {
+    "basename": "latest.pt",
+    "bytes": 59211531,
+    "note": "final training checkpoint; external checkpoint tracked only by SHA-256; see evaluation_final.json for exact byte/sha identity",
+    "sha256": "9abcf022471df6766d4676fc93a3ecc6a8eaa9ec95c79a391227c2906b85e710"
+  },
+  "claim_policy": {
+    "general_chat_claim": false,
+    "production_claim": false,
+    "semantic_understanding_claim": false,
+    "universal_speedup_claim": false,
+    "verdict": "descriptive_only"
+  },
+  "data_identity": {
+    "tokenizer_sha256": "7c897e0d51d135f6bb24bdbd18b0e40db88c0e62defcff9d23f3a204e092585c",
+    "train_sha256": "d7d979d1c55c6eb3596b6b36cfda344cfdc8db0856291d7421a92e657288a42e",
+    "val_sha256": "e40251b9d47484306b35ab714dedc541807a920a9e4fc59d0564a073d69a4b77"
+  },
+  "final_evaluation": {
+    "cached_uncached": {
+      "all_exact_equal": true,
+      "cases_checked": 16,
+      "exact_equal_count": 16
+    },
+    "case_count": 16,
+    "determinism": {
+      "all_identical": true,
+      "cases_checked": 16,
+      "identical_count": 16
+    },
+    "diversity": {
+      "cases_checked": 16,
+      "differing_count": 16,
+      "seed_delta": 4096
+    },
+    "eos_hits": 5,
+    "invalid_decode": 0,
+    "max_immediate_loop": 0,
+    "sampling": {
+      "case_count": 16,
+      "max_new_tokens": 96,
+      "temperature": 0.8,
+      "top_k": 20
+    },
+    "serving_smoke": {
+      "asgi": {
+        "active_requests_zero": true,
+        "waiting_requests_zero": true
+      },
+      "schema_version": 1,
+      "subprocess": {
+        "concurrent": true,
+        "disconnect_cancellation": true,
+        "health": true,
+        "models": true,
+        "non_stream": true,
+        "path_leakage": false,
+        "stream": true
+      }
+    },
+    "special_token_leaks": 0
+  },
+  "milestones": {
+    "step-0500": {
+      "completed_step": 499,
+      "val_loss": 4.066542661190033,
+      "val_perplexity": 58.35486090085292
+    },
+    "step-1500": {
+      "completed_step": 1499,
+      "val_loss": 3.540342390537262,
+      "val_perplexity": 34.47872235836803
+    }
+  },
+  "model": {
+    "bias": false,
+    "block_size": 512,
+    "n_embd": 208,
+    "n_head": 4,
+    "n_layer": 6,
+    "parameter_count": 4928144,
+    "vocab_size": 4096
+  },
+  "schema_version": 1,
+  "source_commit": "cf296dfc3b028b4b0fd2f7b349ba39607da32773",
+  "stage": "story-forge-model",
+  "training": {
+    "eval_points": 60,
+    "final_step": 2999,
+    "final_val_loss": 3.3333596110343935,
+    "final_val_perplexity": 28.03236151086359,
+    "intentionally_resumed": true,
+    "max_steps": 3000
+  }
+}

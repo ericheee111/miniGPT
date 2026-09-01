@@ -1,0 +1,16 @@
+{
+  "asgi": {
+    "active_requests_zero": true,
+    "waiting_requests_zero": true
+  },
+  "schema_version": 1,
+  "subprocess": {
+    "concurrent": true,
+    "disconnect_cancellation": true,
+    "health": true,
+    "models": true,
+    "non_stream": true,
+    "path_leakage": false,
+    "stream": true
+  }
+}
