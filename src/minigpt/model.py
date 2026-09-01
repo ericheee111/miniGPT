@@ -687,12 +687,13 @@ class GPT(nn.Module):
         logits = cast("Tensor", self.lm_head(normalized))
         return logits, tuple(cache_delta)
 
-    @staticmethod
     def _validate_generation_config(
+        self,
         *,
         max_new_tokens: int,
         temperature: float,
         top_k: int | None,
+        eos_token_id: int | None,
     ) -> None:
         if max_new_tokens < 0:
             raise InvalidGenerationConfigError(_GENERATION_LENGTH_REASON)
@@ -700,6 +701,9 @@ class GPT(nn.Module):
             raise InvalidGenerationConfigError(_TEMPERATURE_REASON)
         if top_k is not None and top_k <= 0:
             raise InvalidGenerationConfigError(_TOP_K_REASON)
+        if eos_token_id is not None and not 0 <= eos_token_id < self.config.vocab_size:
+            reason = f"eos_token_id {eos_token_id} must be in [0, {self.config.vocab_size})"
+            raise InvalidGenerationConfigError(reason)
 
     def _sample_next_token(
         self,
@@ -725,8 +729,11 @@ class GPT(nn.Module):
             generator=generator,
         )
 
+    def _is_eos(self, next_token: Tensor, eos_token_id: int | None) -> bool:
+        return eos_token_id is not None and int(next_token[0, 0].item()) == eos_token_id
+
     @torch.no_grad()
-    def generate(
+    def generate(  # noqa: PLR0913
         self,
         token_ids: Tensor,
         *,
@@ -734,13 +741,15 @@ class GPT(nn.Module):
         temperature: float = 1.0,
         top_k: int | None = None,
         generator: torch.Generator | None = None,
+        eos_token_id: int | None = None,
     ) -> Tensor:
-        """Autoregressively append sampled token IDs to a prompt."""
+        """Autoregressively append sampled token IDs, stopping on an optional EOS."""
         self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
         self._validate_generation_config(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k,
+            eos_token_id=eos_token_id,
         )
 
         generated = token_ids
@@ -754,10 +763,12 @@ class GPT(nn.Module):
                 generator=generator,
             )
             generated = torch.cat((generated, next_token), dim=1)
+            if self._is_eos(next_token, eos_token_id):
+                break
         return generated
 
     @torch.no_grad()
-    def generate_cached(
+    def generate_cached(  # noqa: PLR0913
         self,
         token_ids: Tensor,
         *,
@@ -765,13 +776,15 @@ class GPT(nn.Module):
         temperature: float = 1.0,
         top_k: int | None = None,
         generator: torch.Generator | None = None,
+        eos_token_id: int | None = None,
     ) -> Tensor:
-        """Append sampled tokens while reusing valid historical key/value states."""
+        """Append sampled tokens while reusing KV states, stopping on an optional EOS."""
         self._validate_token_tensor(token_ids, name=_PROMPT_NAME)
         self._validate_generation_config(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k,
+            eos_token_id=eos_token_id,
         )
         if max_new_tokens == 0:
             return token_ids
@@ -787,6 +800,8 @@ class GPT(nn.Module):
                 generator=generator,
             )
             generated = torch.cat((generated, next_token), dim=1)
+            if self._is_eos(next_token, eos_token_id):
+                break
             if generated_index + 1 == max_new_tokens:
                 break
             if cache[0].length < self.config.block_size:

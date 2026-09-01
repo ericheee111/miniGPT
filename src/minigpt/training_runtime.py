@@ -18,7 +18,6 @@ from minigpt.checkpoint import (
     DatasetFingerprints,
     compute_dataset_fingerprints,
 )
-from minigpt.data import CharTokenizer
 from minigpt.metrics import TrainingMetrics, cpu_memory_mb
 from minigpt.model import GPT
 from minigpt.optimization import (
@@ -28,6 +27,7 @@ from minigpt.optimization import (
     seed_everything,
     set_learning_rate,
 )
+from minigpt.tokenizer import TokenizerProtocol, load_tokenizer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -114,7 +114,7 @@ class TrainingComponents:
     """Hold the resolved objects shared by all training steps."""
 
     config: ExperimentConfig
-    tokenizer: CharTokenizer
+    tokenizer: TokenizerProtocol
     model: GPT
     optimizer: torch.optim.AdamW
     train_batcher: TokenBatcher
@@ -143,7 +143,7 @@ def evaluate(model: GPT, batcher: TokenBatcher, batch_count: int) -> float:
 def build_training_components(config: ExperimentConfig) -> TrainingComponents:
     """Resolve vocabulary, load token arrays, and construct trainable objects."""
     seed_everything(config.runtime.seed, config.runtime.num_threads)
-    tokenizer = CharTokenizer.load(config.data.tokenizer_path)
+    tokenizer = load_tokenizer(config.data.tokenizer_path)
     resolved = config.resolve_vocab_size(tokenizer.vocab_size)
     train_tokens = cast(
         "npt.NDArray[np.uint16]",

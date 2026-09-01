@@ -310,6 +310,114 @@ def test_generate_cached_validates_sampling_configuration(
         )
 
 
+class _ScriptedSampler:
+    """Return a fixed token sequence, recording how many calls were consumed."""
+
+    _sequence: list[int]
+    calls: int
+
+    def __init__(self, sequence: list[int]) -> None:
+        self._sequence = list(sequence)
+        self.calls = 0
+
+    def __call__(
+        self,
+        logits: Tensor,
+        *,
+        temperature: float,
+        top_k: int | None,
+        generator: torch.Generator | None,
+    ) -> Tensor:
+        del logits, temperature, top_k, generator
+        token_id = self._sequence[min(self.calls, len(self._sequence) - 1)]
+        self.calls += 1
+        return torch.tensor([[token_id]], dtype=torch.long)
+
+
+def test_generate_stops_at_eos_token_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: an eval model and a scripted sampler whose third token is EOS.
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2]], dtype=torch.long)
+    sampler = _ScriptedSampler([4, 5, 3, 9])
+    monkeypatch.setattr(gpt, "_sample_next_token", sampler)
+
+    # When: generation runs with an EOS id and ample budget.
+    generated = gpt.generate(prompt, max_new_tokens=10, eos_token_id=3)
+
+    # Then: it keeps the prompt and stops precisely at (and including) the EOS token.
+    assert torch.equal(generated, torch.tensor([[1, 2, 4, 5, 3]], dtype=torch.long))
+    assert sampler.calls == 3
+
+
+def test_generate_cached_stops_at_eos_token_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: an eval model and a scripted sampler emitting EOS at the fourth token.
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2]], dtype=torch.long)
+    sampler = _ScriptedSampler([7, 8, 9, 3, 4])
+    monkeypatch.setattr(gpt, "_sample_next_token", sampler)
+
+    # When: cached generation runs with an EOS id.
+    generated = gpt.generate_cached(prompt, max_new_tokens=10, eos_token_id=3)
+
+    # Then: it terminates on EOS and never samples the trailing scripted token.
+    assert torch.equal(generated, torch.tensor([[1, 2, 7, 8, 9, 3]], dtype=torch.long))
+    assert sampler.calls == 4
+
+
+def test_generate_without_eos_uses_full_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: a scripted sampler that never emits the configured EOS id.
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[2]], dtype=torch.long)
+    sampler = _ScriptedSampler([4, 5, 4, 5])
+    monkeypatch.setattr(gpt, "_sample_next_token", sampler)
+
+    # When: the EOS id is an otherwise valid token that the script never returns.
+    generated = gpt.generate(prompt, max_new_tokens=3, eos_token_id=3)
+
+    # Then: generation respects the requested budget when EOS never appears.
+    assert torch.equal(generated, torch.tensor([[2, 4, 5, 4]], dtype=torch.long))
+    assert sampler.calls == 3
+
+
+@pytest.mark.parametrize("eos_token_id", [-1, 11, 100])
+def test_generate_rejects_out_of_range_eos_token_id(eos_token_id: int) -> None:
+    # Given: a valid prompt and an EOS id outside the vocabulary.
+    gpt = model.GPT(tiny_config())
+
+    # When/Then: both generation modes reject it as an invalid generation config.
+    prompt = torch.tensor([[1]], dtype=torch.long)
+    with pytest.raises(model.InvalidGenerationConfigError, match="eos_token_id"):
+        _ = gpt.generate(prompt, max_new_tokens=1, eos_token_id=eos_token_id)
+    with pytest.raises(model.InvalidGenerationConfigError, match="eos_token_id"):
+        _ = gpt.generate_cached(prompt, max_new_tokens=1, eos_token_id=eos_token_id)
+
+
+def test_eos_stopping_preserves_cached_uncached_equivalence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: one model where both modes share the same scripted token stream.
+    _ = torch.default_generator.manual_seed(71)
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    eos_token_id = 3
+    uncached_sampler = _ScriptedSampler([4, 5, eos_token_id, 6, 7])
+    cached_sampler = _ScriptedSampler([4, 5, eos_token_id, 6, 7])
+    monkeypatch.setattr(gpt, "_sample_next_token", uncached_sampler)
+    uncached = gpt.generate(prompt, max_new_tokens=5, eos_token_id=eos_token_id)
+
+    # When: the cached path replays the identical stream through the EOS gate.
+    monkeypatch.setattr(gpt, "_sample_next_token", cached_sampler)
+    cached = gpt.generate_cached(prompt, max_new_tokens=5, eos_token_id=eos_token_id)
+
+    # Then: EOS handling consumes the same number of samples in both modes.
+    assert torch.equal(uncached, cached)
+    assert uncached_sampler.calls == cached_sampler.calls == 3
+
+
 def test_causal_mask_prevents_future_tokens_affecting_prefix_logits() -> None:
     # Given: two sequences with the same prefix but different future tokens.
     _ = torch.default_generator.manual_seed(11)

@@ -14,7 +14,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from minigpt.data import CharTokenizer, JsonValue, UnknownCharacterError
+from minigpt.data import JsonValue, UnknownCharacterError
 from minigpt.engine_runner import (
     EngineRunner,
     RequestHandle,
@@ -32,6 +32,8 @@ _COMPLETION_FIELDS = frozenset({"model", "prompt", "max_tokens", "temperature", 
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
+
+    from minigpt.tokenizer import TokenizerProtocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +56,7 @@ class _RequestError(ValueError):
 def create_app(  # noqa: C901
     *,
     runner: EngineRunner,
-    tokenizer: CharTokenizer,
+    tokenizer: TokenizerProtocol,
     model_id: str = MODEL_ID,
     block_size: int,
 ) -> FastAPI:
@@ -230,7 +232,7 @@ async def _stream_completion(  # noqa: PLR0913
     *,
     runner: EngineRunner,
     handle: RequestHandle,
-    tokenizer: CharTokenizer,
+    tokenizer: TokenizerProtocol,
     completion_id: str,
     created: int,
     model_id: str,
@@ -281,7 +283,7 @@ async def _stream_completion(  # noqa: PLR0913
 def _result_response(  # noqa: PLR0913
     *,
     result: RunnerResult,
-    tokenizer: CharTokenizer,
+    tokenizer: TokenizerProtocol,
     completion_id: str,
     created: int,
     model_id: str,

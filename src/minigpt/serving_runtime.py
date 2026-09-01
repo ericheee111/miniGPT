@@ -208,6 +208,8 @@ def build_serving_runtime(  # noqa: PLR0913
     checkpoint_sha256: str,
     tokenizer_sha256: str,
     config: ServingRuntimeConfig,
+    tokenizer_type: str | None = None,
+    model_family: str | None = None,
 ) -> ServingRuntime:
     """Construct the real engine/runner path used by the HTTP process."""
     raw_block_size = cast("object", block_size)
@@ -273,6 +275,8 @@ def build_serving_runtime(  # noqa: PLR0913
         scheduler=scheduler,
         paged_config=paged_config,
         runner_config=runner_config,
+        tokenizer_type=tokenizer_type,
+        model_family=model_family,
     )
     return ServingRuntime(
         config=config,
@@ -294,14 +298,24 @@ def runtime_manifest_document(  # noqa: PLR0913
     scheduler: SchedulerConfig,
     paged_config: PagedKVCacheConfig | None,
     runner_config: RunnerConfig,
+    tokenizer_type: str | None = None,
+    model_family: str | None = None,
 ) -> dict[str, JsonValue]:
     """Build the portable, deterministic Stage 19 runtime document."""
+    tokenizer: dict[str, JsonValue] = {
+        "sha256": tokenizer_sha256,
+    }
+    if tokenizer_type is not None:
+        tokenizer["type"] = tokenizer_type
+    if model_family is not None:
+        tokenizer["model_family"] = model_family
     return {
         "schema_version": _RUNTIME_MANIFEST_SCHEMA,
         "stage": _RUNTIME_FEATURE_STAGE,
         "project_version": installed_project_version(),
         "checkpoint_sha256": checkpoint_sha256,
         "tokenizer_sha256": tokenizer_sha256,
+        "tokenizer": tokenizer,
         "model": cast("JsonValue", asdict(model.config)),
         "block_size": block_size,
         "cpu_threads": num_threads,

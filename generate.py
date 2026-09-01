@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 import torch
 
 from minigpt.checkpoint import load_checkpoint_config, load_model_state
-from minigpt.data import CharTokenizer
 from minigpt.model import GPT
+from minigpt.tokenizer import load_tokenizer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -38,7 +38,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Load a checkpoint and sample text from its persisted configuration."""
     arguments = build_parser().parse_args(argv)
     config = load_checkpoint_config(arguments.checkpoint)
-    tokenizer = CharTokenizer.load(config.data.tokenizer_path)
+    tokenizer = load_tokenizer(config.data.tokenizer_path)
     model = GPT(config.model.to_gpt_config(config.data.block_size))
     load_model_state(arguments.checkpoint, model)
     _ = model.eval()
@@ -53,6 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         temperature=arguments.temperature,
         top_k=arguments.top_k,
         generator=generator,
+        eos_token_id=tokenizer.eos_token_id,
     )
     token_ids = [int(generated[0, index]) for index in range(generated.shape[1])]
     _ = stdout.write(tokenizer.decode(token_ids) + "\n")

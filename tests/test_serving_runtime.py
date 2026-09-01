@@ -91,6 +91,55 @@ def test_legacy_runtime_defaults_preserve_continuous_dense_contract() -> None:
     assert prefix == {"enabled": False, "apc_prefill_strategy": "sequential"}
 
 
+def _typed_runtime(config: ServingRuntimeConfig) -> ServingRuntime:
+    return build_serving_runtime(
+        model=_model(),
+        block_size=8,
+        num_threads=1,
+        checkpoint_sha256=_digest("checkpoint"),
+        tokenizer_sha256=_digest("tokenizer"),
+        config=config,
+        tokenizer_type="bpe",
+        model_family="story_forge",
+    )
+
+
+def test_runtime_manifest_records_tokenizer_type_and_family() -> None:
+    # Given: a nominal runtime with explicit tokenizer identity labels.
+    runtime = _typed_runtime(
+        ServingRuntimeConfig(
+            executor=ServingExecutorName.CONTINUOUS,
+            max_active_requests=2,
+            max_cached_tokens=16,
+        )
+    )
+
+    # When: the tokenizer descriptor is read from the manifest.
+    tokenizer = cast("dict[str, object]", runtime.manifest["tokenizer"])
+
+    # Then: the identity is recorded without exposing any path.
+    assert tokenizer["sha256"] == _digest("tokenizer")
+    assert tokenizer["type"] == "bpe"
+    assert tokenizer["model_family"] == "story_forge"
+
+
+def test_runtime_manifest_omits_tokenizer_labels_when_unknown() -> None:
+    # Given: a runtime built without tokenizer identity labels.
+    runtime = _runtime(
+        ServingRuntimeConfig(
+            executor=ServingExecutorName.CONTINUOUS,
+            max_active_requests=2,
+            max_cached_tokens=16,
+        )
+    )
+
+    # When: the tokenizer descriptor is read.
+    tokenizer = cast("dict[str, object]", runtime.manifest["tokenizer"])
+
+    # Then: only the SHA-256 identity is present, with no invented labels.
+    assert tokenizer == {"sha256": _digest("tokenizer")}
+
+
 InvalidRuntimeFactory = Callable[[], ServingRuntimeConfig]
 
 

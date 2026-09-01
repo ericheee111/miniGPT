@@ -10,7 +10,6 @@ import torch
 import uvicorn
 
 from minigpt.checkpoint import load_checkpoint_config, load_model_state
-from minigpt.data import CharTokenizer
 from minigpt.http_server import MODEL_ID, create_app
 from minigpt.model import GPT
 from minigpt.paged_kv_cache import KVCacheBackend
@@ -22,6 +21,7 @@ from minigpt.serving_runtime import (
     file_sha256,
     write_runtime_manifest,
 )
+from minigpt.tokenizer import load_tokenizer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -89,7 +89,7 @@ def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]
     """Load immutable resources and return the app plus its observable runner."""
     checkpoint_path = cast("Path", arguments.checkpoint)
     tokenizer_path = cast("Path", arguments.tokenizer)
-    tokenizer = CharTokenizer.load(tokenizer_path)
+    tokenizer = load_tokenizer(tokenizer_path)
     experiment = load_checkpoint_config(checkpoint_path).resolve_vocab_size(tokenizer.vocab_size)
     if experiment.runtime.device != "cpu":
         reason = "Stage 12 HTTP serving supports CPU checkpoints only"
@@ -130,6 +130,8 @@ def build_runtime(arguments: argparse.Namespace) -> tuple[FastAPI, EngineRunner]
         checkpoint_sha256=file_sha256(checkpoint_path),
         tokenizer_sha256=file_sha256(tokenizer_path),
         config=config,
+        tokenizer_type=tokenizer.tokenizer_type,
+        model_family=tokenizer.model_family,
     )
     manifest_path = cast("Path | None", getattr(arguments, "runtime_manifest", None))
     if manifest_path is not None:
