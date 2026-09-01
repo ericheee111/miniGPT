@@ -46,6 +46,9 @@ __all__ = (
     "MAPPING_VERSION",
     "MAX_STORY_CHARS",
     "MODEL_FAMILY",
+    "PINNED_STYLE_PHRASES",
+    "PINNED_THEME_PHRASES",
+    "PINNED_TOPIC_PHRASES",
     "SCHEMA_VERSION",
     "SIMPLE_STORIES_CITATION",
     "SIMPLE_STORIES_FILENAME",
@@ -58,6 +61,7 @@ __all__ = (
     "TONES",
     "VALIDATION_PERCENT",
     "WORLDS",
+    "WORLD_UI_LABELS",
     "DuplicateGenerationIdError",
     "InsufficientStoriesError",
     "PreparedStories",
@@ -72,6 +76,7 @@ __all__ = (
     "prepare_simple_stories",
     "resolve_story_labels",
     "selection_rank_for",
+    "validate_mapping_tables",
     "verify_official_source",
 )
 
@@ -91,7 +96,7 @@ SIMPLE_STORIES_CITATION: Final = (
 
 # -- Preparation defaults ------------------------------------------------------
 SCHEMA_VERSION: Final = 1
-MAPPING_VERSION: Final = 1
+MAPPING_VERSION: Final = 2
 MODEL_FAMILY: Final = "story_forge"
 VALIDATION_PERCENT: Final = 5
 DEFAULT_MIN_FREQUENCY: Final = 2
@@ -118,9 +123,21 @@ THEMES: Final = ("discovery", "friendship", "logic", "courage")
 # Alias phrases are already normalized: lowercase, hyphen/underscore turned into
 # spaces, whitespace collapsed. Source metadata is normalized the same way and
 # matched as whole normalized phrases (word-boundary aware).
+#
+# The tables cover the complete downstream ``topic`` (47), ``theme`` (61), and
+# ``style`` (24) vocabularies actually present in the pinned
+# ``processed.parquet`` (MAPPING_VERSION 2). Each upstream phrase is assigned to
+# exactly one canonical label so that a substantial fraction of the 782k rows is
+# eligible without fabricating labels from story text. Groupings are documented,
+# deterministic, and covered by :func:`validate_mapping_tables` plus the design
+# document ``docs/superpowers/specs/2026-09-01-post-v1-story-forge-design.md``.
 WORLD_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
     "space": (
+        "alien encounters",
+        "outer space",
         "space",
+        "space exploration",
+        "the sky",
         "universe",
         "galaxy",
         "galaxies",
@@ -136,8 +153,19 @@ WORLD_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "cosmic",
     ),
     "forest": (
+        "enchanted forests",
         "forest",
         "forests",
+        "gardens",
+        "giant creatures",
+        "island adventures",
+        "magical lands",
+        "mystical creatures",
+        "seasonal changes",
+        "snowy adventures",
+        "subterranean worlds",
+        "talking animals",
+        "underwater adventures",
         "woodland",
         "woodlands",
         "tree",
@@ -153,6 +181,7 @@ WORLD_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "biodiversity",
     ),
     "robot": (
+        "robots and technology",
         "robot",
         "robots",
         "robotics",
@@ -163,8 +192,39 @@ WORLD_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "automation",
         "computer science",
         "engineering",
+        "invisibility",
+        "living objects",
+        "shape shifting",
+        "time travel",
+        "unusual vehicles",
+        "virtual worlds",
+        "dream worlds",
+        "miniature worlds",
     ),
     "mystery": (
+        "hidden treasures",
+        "lost cities",
+        "lost civilizations",
+        "mysterious maps",
+        "pirates",
+        "riddles",
+        "secret societies",
+        "superheroes",
+        "treasure hunts",
+        "undercover missions",
+        "haunted places",
+        "royal kingdoms",
+        "bygone eras",
+        "fairy tales",
+        "fantasy worlds",
+        "magical objects",
+        "dinosaurs",
+        "cultural traditions",
+        "holidays",
+        "school life",
+        "sibling rivalry",
+        "sports",
+        "the arts",
         "detective",
         "detectives",
         "mystery",
@@ -185,8 +245,11 @@ TONE_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
     "adventurous": (
         "action packed",
         "adventurous",
+        "epic",
         "fast paced",
         "heroic",
+        "mythological",
+        "modern",
         "exciting",
         "adventure",
         "exploration",
@@ -196,7 +259,10 @@ TONE_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
     ),
     "mysterious": (
         "mysterious",
+        "mystical",
+        "noir",
         "suspenseful",
+        "surreal",
         "sinister",
         "cryptic",
         "eerie",
@@ -204,6 +270,9 @@ TONE_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "dark",
         "mystery",
         "curiosity",
+        "philosophical",
+        "tragic",
+        "melancholic",
     ),
     "warm": (
         "heartwarming",
@@ -213,11 +282,20 @@ TONE_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "wholesome",
         "uplifting",
         "compassionate",
+        "romantic",
+        "lighthearted",
+        "classic",
+        "fable like",
+        "folk tale like",
+        "fairy tale like",
+        "lyric",
+        "whimsical",
         "kindness",
         "friendship",
         "love",
         "empathy",
         "compassion",
+        "minimalist",
     ),
     "funny": (
         "humorous",
@@ -241,6 +319,19 @@ THEME_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "education",
         "science",
         "wonder",
+        "imagination",
+        "creativity",
+        "innovation",
+        "magic",
+        "dreams",
+        "travel",
+        "the five senses",
+        "growth",
+        "transformation",
+        "surprises",
+        "adventure",
+        "coming of age",
+        "self acceptance",
     ),
     "friendship": (
         "friendship",
@@ -252,6 +343,19 @@ THEME_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "community",
         "teamwork",
         "helping others",
+        "cooperation",
+        "family",
+        "trust",
+        "belonging",
+        "generosity",
+        "happiness",
+        "hope",
+        "optimism",
+        "celebration",
+        "tradition",
+        "romance",
+        "humor",
+        "conscience",
     ),
     "logic": (
         "problem solving",
@@ -259,9 +363,17 @@ THEME_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "logic",
         "strategy",
         "reasoning",
-        "creativity",
         "patience",
         "resourcefulness",
+        "planning",
+        "intelligence",
+        "agency",
+        "responsibility",
+        "independence",
+        "consciousness",
+        "morality",
+        "honesty",
+        "long term thinking",
     ),
     "courage": (
         "courage",
@@ -269,8 +381,19 @@ THEME_ALIASES: Final[Mapping[str, tuple[str, ...]]] = {
         "perseverance",
         "resilience",
         "determination",
+        "overcoming",
         "overcoming challenges",
         "strength",
+        "challenge",
+        "hardship",
+        "failure",
+        "loss",
+        "conflict",
+        "deception",
+        "betrayal",
+        "revenge",
+        "scheming",
+        "power",
     ),
 }
 
@@ -286,6 +409,164 @@ _DIMENSION_SOURCES: Final[Mapping[str, tuple[str, ...]]] = {
     "tone": ("style", "theme"),
     "theme": ("theme", "topic"),
 }
+
+# Product-domain UI labels for the four public world controls. These are
+# presentation buckets for the Story Forge product surface, NOT literal
+# classification claims. The label mapping above is deterministic and
+# one-to-one; these strings only document the human-facing names.
+WORLD_UI_LABELS: Final[Mapping[str, str]] = {
+    "space": "Space Expedition",
+    "forest": "Enchanted Wilds",
+    "robot": "Wonder Workshop",
+    "mystery": "Curious Mystery",
+}
+
+# The complete downstream metadata vocabularies actually present in the pinned
+# ``processed.parquet`` (MAPPING_VERSION 2). These are the 47 ``topic`` phrases,
+# 61 ``theme`` phrases, and 24 ``style`` phrases counted from the official
+# source. Each upstream phrase must map to exactly one canonical label in the
+# matching alias table; :func:`validate_mapping_tables` enforces that coverage
+# and that no normalized alias appears under more than one label per dimension.
+PINNED_TOPIC_PHRASES: Final[tuple[str, ...]] = (
+    "alien encounters",
+    "bygone eras",
+    "cultural traditions",
+    "dinosaurs",
+    "dream worlds",
+    "enchanted forests",
+    "fairy tales",
+    "fantasy worlds",
+    "gardens",
+    "giant creatures",
+    "haunted places",
+    "hidden treasures",
+    "holidays",
+    "invisibility",
+    "island adventures",
+    "living objects",
+    "lost cities",
+    "lost civilizations",
+    "magical lands",
+    "magical objects",
+    "miniature worlds",
+    "mysterious maps",
+    "mystical creatures",
+    "outer space",
+    "pirates",
+    "riddles",
+    "robots and technology",
+    "royal kingdoms",
+    "school life",
+    "seasonal changes",
+    "secret societies",
+    "shape-shifting",
+    "sibling rivalry",
+    "snowy adventures",
+    "space exploration",
+    "sports",
+    "subterranean worlds",
+    "superheroes",
+    "talking animals",
+    "the arts",
+    "the sky",
+    "time travel",
+    "treasure hunts",
+    "undercover missions",
+    "underwater adventures",
+    "unusual vehicles",
+    "virtual worlds",
+)
+
+PINNED_THEME_PHRASES: Final[tuple[str, ...]] = (
+    "adventure",
+    "agency",
+    "belonging",
+    "betrayal",
+    "celebration",
+    "challenge",
+    "coming of age",
+    "conflict",
+    "conscience",
+    "consciousness",
+    "cooperation",
+    "courage",
+    "creativity",
+    "curiosity",
+    "deception",
+    "discovery",
+    "dreams",
+    "failure",
+    "family",
+    "friendship",
+    "generosity",
+    "growth",
+    "happiness",
+    "hardship",
+    "helping others",
+    "honesty",
+    "hope",
+    "humor",
+    "imagination",
+    "independence",
+    "innovation",
+    "intelligence",
+    "kindness",
+    "logic",
+    "long-term thinking",
+    "loss",
+    "love",
+    "magic",
+    "morality",
+    "optimism",
+    "overcoming",
+    "perseverance",
+    "planning",
+    "power",
+    "problem-solving",
+    "resilience",
+    "resourcefulness",
+    "responsibility",
+    "revenge",
+    "romance",
+    "scheming",
+    "self-acceptance",
+    "strategy",
+    "surprises",
+    "teamwork",
+    "the five senses",
+    "tradition",
+    "transformation",
+    "travel",
+    "trust",
+    "wonder",
+)
+
+PINNED_STYLE_PHRASES: Final[tuple[str, ...]] = (
+    "action-packed",
+    "adventurous",
+    "classic",
+    "epic",
+    "fable-like",
+    "fairy tale-like",
+    "folk tale-like",
+    "heartwarming",
+    "humorous",
+    "lighthearted",
+    "lyric",
+    "melancholic",
+    "minimalist",
+    "modern",
+    "mystical",
+    "mythological",
+    "noir",
+    "philosophical",
+    "playful",
+    "romantic",
+    "surreal",
+    "suspenseful",
+    "tragic",
+    "whimsical",
+)
 
 
 # -- Errors --------------------------------------------------------------------
@@ -457,13 +738,22 @@ class _PyarrowModule(Protocol):
 
 
 class _HubModule(Protocol):
-    def hf_hub_download(self, repo_id: str, filename: str, *, revision: str) -> str: ...
+    def hf_hub_download(
+        self,
+        repo_id: str,
+        filename: str,
+        *,
+        revision: str,
+        repo_type: str,
+    ) -> str: ...
 
 
 def _pyarrow() -> _PyarrowModule:
     """Import the optional Parquet backend with an actionable failure hint."""
     try:
         module = import_module("pyarrow")
+        _ = import_module("pyarrow.parquet")
+        _ = import_module("pyarrow.types")
     except ImportError as error:
         raise StoryOptionalDependencyError from error
     return cast("_PyarrowModule", cast("object", module))
@@ -493,6 +783,56 @@ def _normalize_phrase(phrase: str) -> str:
 def _contains_phrase(normalized_text: str, phrase: str) -> bool:
     """Return whether ``phrase`` appears as a whole phrase in ``normalized_text``."""
     return f" {phrase} " in f" {normalized_text} "
+
+
+def _empty_alias_reason(dimension: str, label: str) -> str:
+    return f"{dimension} alias for {label!r} normalizes to an empty phrase"
+
+
+def _duplicate_alias_reason(dimension: str, phrase: str, first: str, second: str) -> str:
+    return f"{dimension} alias {phrase!r} maps to both {first!r} and {second!r}"
+
+
+def _missing_pinned_reason(dimension: str, missing: Sequence[str]) -> str:
+    return f"{dimension} alias table is missing pinned phrases: {', '.join(missing)}"
+
+
+def _validate_alias_table(dimension: str, table: Mapping[str, tuple[str, ...]]) -> None:
+    """Reject any normalized alias phrase appearing under more than one label."""
+    owner: dict[str, str] = {}
+    for label, phrases in table.items():
+        for phrase in phrases:
+            normalized = _normalize_phrase(phrase)
+            if not normalized:
+                raise StoryDataError(_empty_alias_reason(dimension, label))
+            existing = owner.get(normalized)
+            if existing is not None and existing != label:
+                raise StoryDataError(_duplicate_alias_reason(dimension, phrase, existing, label))
+            owner[normalized] = label
+
+
+def validate_mapping_tables() -> None:
+    """Validate mapping-table uniqueness and pinned-vocabulary coverage.
+
+    This deterministic gate fails on any of three conditions: an alias phrase is
+    empty after normalization; the same normalized phrase appears under more than
+    one canonical label in a dimension; or one of the pinned upstream top-level
+    vocabulary phrases (``topic`` for world, ``style`` for tone, ``theme`` for
+    theme) is not covered by its dimension's alias table. World/phrase coverage is
+    a conservative gate over the curated phrase lists, not a claim of semantic
+    truth: the ``topic``/``theme``/``style`` phrases are product-domain buckets.
+    """
+    for dimension, table in _ALIAS_TABLES.items():
+        _validate_alias_table(dimension, table)
+    for dimension, (pinned, table) in (
+        ("world", (PINNED_TOPIC_PHRASES, WORLD_ALIASES)),
+        ("tone", (PINNED_STYLE_PHRASES, TONE_ALIASES)),
+        ("theme", (PINNED_THEME_PHRASES, THEME_ALIASES)),
+    ):
+        covered = {_normalize_phrase(p) for phrases in table.values() for p in phrases}
+        missing = [phrase for phrase in pinned if _normalize_phrase(phrase) not in covered]
+        if missing:
+            raise StoryDataError(_missing_pinned_reason(dimension, missing))
 
 
 def _digest_int(*parts: object) -> int:
@@ -598,12 +938,24 @@ def compute_quotas(  # noqa: C901, PLR0912 - four documented redistribution step
         target = world_base + (1 if world_index < world_rem else 0)
         cells = [(world, tone) for tone in TONES]
         current = sum(quota[cell] for cell in cells)
-        for cell in cells:
-            if current >= target:
-                break
-            take = min(avail[cell] - quota[cell], target - current)
-            quota[cell] += take
-            current += take
+        delta = target - current
+        if delta >= 0:
+            for cell in cells:
+                if delta <= 0:
+                    break
+                take = min(avail[cell] - quota[cell], delta)
+                quota[cell] += take
+                delta -= take
+        else:
+            # Trim over-allocated worlds back to their exact marginal so the
+            # equal-per-cell remainder never drives the total above ``desired``.
+            excess = -delta
+            for cell in reversed(cells):
+                if excess <= 0:
+                    break
+                remove = min(quota[cell], excess)
+                quota[cell] -= remove
+                excess -= remove
 
     deficit = desired - sum(quota.values())
     while deficit > 0:
@@ -1160,6 +1512,9 @@ def prepare_simple_stories(  # noqa: PLR0913 - public preparation parameter set.
         batch_size=batch_size,
         seed=seed,
     )
+    # Enforce mapping-table integrity in production, not only in unit tests.
+    # This fails fast on duplicate/empty aliases or unpinned-vocabulary gaps.
+    validate_mapping_tables()
 
     source = _resolve_source(source_parquet)
     pass_one = _scan_counts(source.path, seed, batch_size)
@@ -1264,6 +1619,7 @@ def _resolve_source(source_parquet: Path | None) -> SourceInfo:
             SIMPLE_STORIES_REPO,
             SIMPLE_STORIES_FILENAME,
             revision=SIMPLE_STORIES_REVISION,
+            repo_type="dataset",
         )
     )
     size = int(path.stat().st_size)

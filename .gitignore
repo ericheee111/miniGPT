@@ -18,6 +18,7 @@ Thumbs.db
 # Training data and generated artifacts
 data/raw/
 data/processed/
+data/story_forge/
 checkpoints/
 outputs/
 reports/
@@ -26,6 +27,7 @@ runs/
 *.pth
 *.prof
 *.trace.json
+*.parquet
 
 # Local tooling
 .ai-bridge/

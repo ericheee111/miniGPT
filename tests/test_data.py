@@ -901,6 +901,201 @@ def test_compute_quotas_raises_on_insufficient_capacity() -> None:
         _ = story_data.compute_quotas(100, availability)
 
 
+_BUCKETS: Final = [(w, t) for w in story_data.WORLDS for t in story_data.TONES]
+
+
+def test_compute_quotas_sums_exactly_for_5000() -> None:
+    # Given: ample capacity in every cell.
+    availability = dict.fromkeys(_BUCKETS, 1000)
+
+    # When: a 5000-row quota is computed.
+    quota = story_data.compute_quotas(5000, availability)
+
+    # Then: the quota sums exactly to 5000 and equals the world marginals (1250 each).
+    assert sum(quota.values()) == 5000
+    for world in story_data.WORLDS:
+        assert sum(quota[(world, tone)] for tone in story_data.TONES) == 1250
+
+
+@pytest.mark.parametrize("desired", [1, 7, 37, 5000, 12345])
+def test_compute_quotas_sums_exactly_for_non_divisible(desired: int) -> None:
+    # Given: ample capacity in every cell.
+    availability = dict.fromkeys(_BUCKETS, 10000)
+
+    # When: a quota is computed for a non-divisible desired value.
+    quota = story_data.compute_quotas(desired, availability)
+
+    # Then: the quota sums exactly to the desired value with no over-allocation.
+    assert sum(quota.values()) == desired
+    assert all(0 <= quota[bucket] <= avail for bucket, avail in availability.items())
+
+
+def test_compute_quotas_equal_world_marginals_when_capacity_permits() -> None:
+    # Given: capacity that supports an equal per-world marginal but uneven per-tone.
+    availability = dict.fromkeys(_BUCKETS, 0)
+    for world_index, world in enumerate(story_data.WORLDS):
+        for tone in story_data.TONES:
+            # Give every world enough total, but skew the per-tone availability.
+            availability[(world, tone)] = 300 + 10 * world_index
+
+    # When: a quota is computed for a desired count that fits evenly.
+    desired = 1600
+    quota = story_data.compute_quotas(desired, availability)
+
+    # Then: each world receives exactly one quarter of the total.
+    assert sum(quota.values()) == desired
+    target = desired // len(story_data.WORLDS)
+    for world in story_data.WORLDS:
+        assert sum(quota[(world, tone)] for tone in story_data.TONES) == target
+
+
+def test_compute_quotas_sparse_cell_redistribution_without_overallocation() -> None:
+    # Given: one cell is sparse while the rest has spare capacity so redistribution
+    # must fill the deficit from other cells without exceeding the total.
+    availability = dict.fromkeys(_BUCKETS, 100)
+    availability[("space", "adventurous")] = 3
+
+    # When: a quota is computed that the sparse cell cannot fully satisfy.
+    desired = 800
+    quota = story_data.compute_quotas(desired, availability)
+
+    # Then: the quota still sums exactly and never exceeds any cell's availability.
+    assert sum(quota.values()) == desired
+    assert all(quota[bucket] <= avail for bucket, avail in availability.items())
+    assert quota[("space", "adventurous")] == 3
+
+
+def test_validate_mapping_tables_accepts_current_tables() -> None:
+    # Given: the shipped MAPPING_VERSION 2 alias tables.
+
+    # When/Then: the deterministic gate passes without raising.
+    story_data.validate_mapping_tables()
+
+
+def test_validate_mapping_tables_rejects_duplicate_alias() -> None:
+    # Given: a dimension table where one normalized phrase appears under two labels.
+    duplicate_tables = {
+        "world": {"a": ("space",), "b": ("space",)},
+        "tone": story_data.TONE_ALIASES,
+        "theme": story_data.THEME_ALIASES,
+    }
+
+    # When/Then: the gate raises a duplicate-alias error.
+    with pytest.raises(story_data.StoryDataError, match="maps to both"):
+        story_data._validate_alias_table("world", duplicate_tables["world"])  # pyright: ignore[reportPrivateUsage]
+
+
+def test_validate_mapping_tables_rejects_missing_pinned_phrase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a padded pinned phrase list containing one phrase no table covers.
+    monkeypatch.setattr(
+        "minigpt.story_data.PINNED_STYLE_PHRASES",
+        (*story_data.PINNED_STYLE_PHRASES, "definitely unmapped style"),
+    )
+
+    # When/Then: the coverage gate raises a missing-pinned-phrase error.
+    with pytest.raises(story_data.StoryDataError, match="missing pinned phrases"):
+        story_data.validate_mapping_tables()
+
+
+def test_prepare_simple_stories_invokes_mapping_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a mapping gate forced to fail, proving the production path calls it.
+    def fail_gate() -> None:
+        msg = "mapping gate enforced in production"
+        raise story_data.StoryDataError(msg)
+
+    monkeypatch.setattr(story_data, "validate_mapping_tables", fail_gate)
+
+    # When/Then: preparation invokes the gate before touching the source, so the
+    # injected failure surfaces even with a source that does not resolve.
+    with pytest.raises(story_data.StoryDataError, match="mapping gate enforced"):
+        _ = story_data.prepare_simple_stories(
+            output_dir=tmp_path / "out",
+            source_parquet=tmp_path / "does-not-exist.parquet",
+            train_stories=2,
+            val_stories=1,
+            vocab_size=600,
+            seed=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("style", "expected"),
+    [
+        ("tragic", "mysterious"),
+        ("melancholic", "mysterious"),
+        ("modern", "adventurous"),
+        ("humorous", "funny"),
+        ("heartwarming", "warm"),
+        ("mysterious", "mysterious"),
+        ("action-packed", "adventurous"),
+    ],
+)
+def test_tone_mapping_reassigns_tragic_melancholic_modern(style: str, expected: str) -> None:
+    # Given: an unambiguous style phrase whose tone must be defensible.
+    # When: the tone resolves from a minimal style-only source.
+    tone = story_data.resolve_tone("gid", theme="", style=style)
+
+    # Then: tragic/melancholic land under mysterious, modern under adventurous.
+    assert tone == expected
+
+
+def test_resolve_story_labels_maps_tragic_and_modern_styles() -> None:
+    # Given: rows whose style carries the reassigned tone phrases.
+    # When: labels resolve.
+    tragic = story_data.resolve_story_labels("gid-1", "space", "Curiosity", "tragic")
+    modern = story_data.resolve_story_labels("gid-2", "space", "Adventure", "modern")
+
+    # Then: tragic maps to mysterious and modern to adventurous.
+    assert tragic is not None
+    assert modern is not None
+    assert tragic.tone == "mysterious"
+    assert modern.tone == "adventurous"
+
+
+def test_world_ui_labels_cover_all_worlds() -> None:
+    # Given: the documented product-domain UI labels.
+    # When/Then: every canonical world has a distinct, non-empty presentation label.
+    assert set(story_data.WORLD_UI_LABELS) == set(story_data.WORLDS)
+    assert all(label for label in story_data.WORLD_UI_LABELS.values())
+    assert len(set(story_data.WORLD_UI_LABELS.values())) == len(story_data.WORLDS)
+    assert story_data.WORLD_UI_LABELS["space"] == "Space Expedition"
+    assert story_data.WORLD_UI_LABELS["forest"] == "Enchanted Wilds"
+    assert story_data.WORLD_UI_LABELS["robot"] == "Wonder Workshop"
+    assert story_data.WORLD_UI_LABELS["mystery"] == "Curious Mystery"
+
+
+def test_mapping_version_is_two_and_metadata_records_it(tmp_path: Path) -> None:
+    # Given: a prepared output.
+    _require_story_data()
+    rows = _story_rows()
+    source = tmp_path / "fixture.parquet"
+    _write_story_parquet(source, rows)
+    output = tmp_path / "out"
+
+    # When: preparation runs.
+    prepared = story_data.prepare_simple_stories(
+        output_dir=output,
+        source_parquet=source,
+        train_stories=2,
+        val_stories=1,
+        vocab_size=600,
+        seed=11,
+    )
+    document = cast(
+        "dict[str, object]",
+        json.loads(prepared.metadata_path.read_text(encoding="utf-8")),
+    )
+
+    # Then: the module and metadata both record mapping version 2.
+    assert story_data.MAPPING_VERSION == 2
+    assert document["mapping_version"] == 2
+
+
 def test_story_forge_prepare_writes_deterministic_artifacts(tmp_path: Path) -> None:
     # Given: a local Parquet fixture with enough rows for a tiny selection.
     _require_story_data()

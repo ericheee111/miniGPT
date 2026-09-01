@@ -8,9 +8,9 @@ data:
   batch_size: 8
 model:
   vocab_size: null
-  n_layer: 6
+  n_layer: 3
   n_head: 4
-  n_embd: 208
+  n_embd: 96
   dropout: 0.1
   bias: false
 optimizer:
@@ -32,6 +32,6 @@ training:
   sample_interval: 500
   sample_tokens: 96
   sample_prompt: "Once upon a time, "
-  output_dir: outputs/story_forge_5m
-  checkpoint_dir: checkpoints/story_forge_5m
-  tensorboard_dir: outputs/story_forge_5m/tensorboard
+  output_dir: outputs/story_forge_1m
+  checkpoint_dir: checkpoints/story_forge_1m
+  tensorboard_dir: outputs/story_forge_1m/tensorboard
