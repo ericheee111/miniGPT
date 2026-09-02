@@ -2007,3 +2007,142 @@ def _story_evidence_package(tmp_path: Path, *, production_claim: bool) -> dict[s
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
     )
     return {"package": package, "summary": summary_path}
+
+
+# -- Story Forge product rules (branch seeds + story history) -------------------
+
+
+def test_branch_seed_for_is_deterministic_and_distinct() -> None:
+    # Given: a base seed and three distinct branch indices.
+    from minigpt.story_forge_product import branch_seed_for  # noqa: PLC0415
+
+    base_seed = 20260901
+
+    # When: seeds are derived for all three branches, once and again.
+    first = [branch_seed_for(base_seed, index) for index in range(3)]
+    second = [branch_seed_for(base_seed, index) for index in range(3)]
+
+    # Then: derivation is deterministic and the three branches are distinct.
+    assert first == second
+    assert len(set(first)) == 3
+    assert all(0 <= seed < 2**63 for seed in first)
+
+
+def test_branch_seed_for_rejects_invalid_inputs() -> None:
+    # Given: an invalid base seed and branch index.
+    from minigpt.story_forge_product import StoryForgeProductError, branch_seed_for  # noqa: PLC0415
+
+    # When/Then: out-of-range inputs are rejected.
+    with pytest.raises(StoryForgeProductError):
+        _ = branch_seed_for(-1, 0)
+    with pytest.raises(StoryForgeProductError):
+        _ = branch_seed_for(2**63, 0)
+    with pytest.raises(StoryForgeProductError):
+        _ = branch_seed_for(0, -1)
+
+
+def test_build_story_history_keeps_prefix_and_truncates_left() -> None:
+    # Given: a control prefix and a story stream longer than the context budget.
+    from minigpt.story_forge_product import build_story_history  # noqa: PLC0415
+
+    prefix = (1, 2, 3, 4, 5)
+    story = (10, 11, 12, 13, 14, 15, 16)
+
+    # When: history is built with a budget that cannot hold the whole story.
+    history = build_story_history(
+        control_prefix_ids=prefix,
+        story_token_ids=story,
+        max_context_tokens=10,
+    )
+
+    # Then: the prefix is retained whole and the story is right-anchored.
+    assert history.token_ids[:5] == prefix
+    assert history.control_prefix_length == 5
+    assert history.truncated is True
+    assert history.token_ids[5:] == (12, 13, 14, 15, 16)
+
+
+def test_build_story_history_without_truncation() -> None:
+    # Given: a story that fits within the context budget.
+    from minigpt.story_forge_product import build_story_history  # noqa: PLC0415
+
+    prefix = (1, 2, 3)
+    story = (10, 11, 12)
+
+    # When: history is built with ample budget.
+    history = build_story_history(
+        control_prefix_ids=prefix,
+        story_token_ids=story,
+        max_context_tokens=12,
+    )
+
+    # Then: nothing is truncated and the full sequence is retained.
+    assert history.token_ids == (1, 2, 3, 10, 11, 12)
+    assert history.truncated is False
+
+
+def test_build_story_history_rejects_budget_not_exceeding_prefix() -> None:
+    # Given: a control prefix longer than the requested context.
+    from minigpt.story_forge_product import (  # noqa: PLC0415
+        StoryForgeProductError,
+        build_story_history,
+    )
+
+    # When/Then: a too-small budget is rejected.
+    with pytest.raises(StoryForgeProductError):
+        _ = build_story_history(
+            control_prefix_ids=(1, 2, 3),
+            story_token_ids=(10,),
+            max_context_tokens=3,
+        )
+
+
+# -- Systems Lab asset provenance -----------------------------------------------
+
+
+def test_systems_lab_assets_build_from_committed_evidence(tmp_path: Path) -> None:
+    # Given: the repository root with committed Stage 11/14/17/18 evidence.
+    from minigpt.story_forge_systems import (  # noqa: PLC0415
+        build_systems_lab_assets,
+        systems_lab_asset_names,
+        verify_systems_lab_assets,
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    output_dir = tmp_path / "data"
+
+    # When: the assets are built and verified.
+    output_paths = build_systems_lab_assets(repo_root, output_dir)
+    verified = verify_systems_lab_assets(output_dir)
+
+    # Then: all four assets exist and verify.
+    assert len(output_paths) == 4
+    assert set(verified) == set(systems_lab_asset_names())
+
+
+def test_systems_lab_assets_carry_schema_and_claims(tmp_path: Path) -> None:
+    # Given: a freshly built asset set.
+    from minigpt.story_forge_systems import build_systems_lab_assets  # noqa: PLC0415
+
+    repo_root = Path(__file__).resolve().parents[1]
+    output_dir = tmp_path / "data"
+    _ = build_systems_lab_assets(repo_root, output_dir)
+
+    # When: each asset is inspected.
+    for name in (
+        "continuous_batching",
+        "automatic_prefix_cache",
+        "kv_preemption",
+        "lazy_reservation",
+    ):
+        document = cast(
+            "dict[str, object]",
+            json.loads((output_dir / f"{name}.json").read_text(encoding="utf-8")),
+        )
+        # Then: schema, claim level, source commit, and evidence path are present.
+        assert document["schema_version"] == 1
+        assert document["claim_level"] in {"semantic", "structural", "descriptive_only"}
+        assert isinstance(document["source_commit"], str)
+        assert document["source_commit"] != ""
+        assert isinstance(document["source_evidence_path"], str)
+        assert isinstance(document["scenario_id"], str)

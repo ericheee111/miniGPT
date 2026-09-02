@@ -16,6 +16,7 @@ from minigpt.serving import (
     EngineEventType,
     ExecutionResult,
     GenerationRequest,
+    InvalidServingConfigError,
     PrefillBatchConfig,
     PrefillBatchEvent,
     PrefillBatchEventType,
@@ -818,3 +819,145 @@ def test_prefill_model_batch_exception_records_complete_failure_evidence(
         PrefillBatchEventType.STARTED,
         PrefillBatchEventType.FINISHED,
     ]
+
+
+# -- EOS-aware termination (Stage EOS) ----------------------------------------
+
+
+def test_eos_token_id_rejects_invalid_values() -> None:
+    # Given: invalid eos_token_id values (bool, negative, float).
+    # When/Then: each is rejected by GenerationRequest validation.
+    with pytest.raises(InvalidServingConfigError, match="eos_token_id"):
+        _ = GenerationRequest(
+            request_id="t", prompt_tokens=(1,), max_new_tokens=1, eos_token_id=True
+        )
+    with pytest.raises(InvalidServingConfigError, match="eos_token_id"):
+        _ = GenerationRequest(request_id="t", prompt_tokens=(1,), max_new_tokens=1, eos_token_id=-1)
+    with pytest.raises(InvalidServingConfigError, match="eos_token_id"):
+        _ = GenerationRequest(
+            request_id="t", prompt_tokens=(1,), max_new_tokens=1, eos_token_id=cast("int", 3.14)
+        )
+
+
+def test_eos_as_first_prefill_sampled_token() -> None:
+    # Given: a request where the FakeExecutor's first sampled token equals EOS.
+    # FakeExecutor returns (seed + generated_count) % 17, so seed=5 → first token = 5.
+    engine = make_engine(max_active_requests=1)
+    engine.submit(
+        GenerationRequest(
+            request_id="eos-first",
+            prompt_tokens=(1, 2),
+            max_new_tokens=10,
+            temperature=1.0,
+            seed=5,
+            eos_token_id=5,
+        )
+    )
+    # When: the engine ticks through admission and prefill.
+    engine.tick(now=0.0)
+    engine.tick(now=1.0)
+    # Then: the request finishes immediately with exactly one TOKEN and one FINISHED.
+    state = engine.request_state("eos-first")
+    assert state.status is RequestStatus.FINISHED
+    assert state.generated_tokens == [5]
+    token_events = [
+        e
+        for e in engine.events
+        if e.request_id == "eos-first" and e.event_type is EngineEventType.TOKEN
+    ]
+    finished_events = [
+        e
+        for e in engine.events
+        if e.request_id == "eos-first" and e.event_type is EngineEventType.FINISHED
+    ]
+    assert len(token_events) == 1
+    assert token_events[0].token_id == 5
+    assert len(finished_events) == 1
+
+
+def test_eos_during_decode_finishes_request() -> None:
+    # Given: a request that hits EOS on its second token (seed=4 → tokens [4, 5]).
+    engine = make_engine(max_active_requests=1)
+    engine.submit(
+        GenerationRequest(
+            request_id="eos-decode",
+            prompt_tokens=(1, 2),
+            max_new_tokens=20,
+            temperature=1.0,
+            seed=4,
+            eos_token_id=5,
+        )
+    )
+    # When: admission, prefill, and decode ticks run.
+    engine.tick(now=0.0)
+    engine.tick(now=1.0)
+    engine.tick(now=2.0)
+    # Then: the request finishes after exactly 2 tokens with EOS as the last.
+    state = engine.request_state("eos-decode")
+    assert state.status is RequestStatus.FINISHED
+    assert state.generated_tokens == [4, 5]
+
+
+def test_eos_event_order_token_then_finished() -> None:
+    # Given: a request hitting EOS on the second decode token.
+    engine = make_engine(max_active_requests=1)
+    engine.submit(
+        GenerationRequest(
+            request_id="eos-order",
+            prompt_tokens=(1, 2),
+            max_new_tokens=20,
+            temperature=1.0,
+            seed=4,
+            eos_token_id=5,
+        )
+    )
+    # When: three ticks run through admission, prefill, and decode.
+    engine.tick(now=0.0)
+    engine.tick(now=1.0)
+    engine.tick(now=2.0)
+    # Then: TOKEN events appear before FINISHED, with no post-EOS work.
+    relevant = [e for e in engine.events if e.request_id == "eos-order"]
+    event_types = [e.event_type for e in relevant]
+    token_indices = [i for i, t in enumerate(event_types) if t is EngineEventType.TOKEN]
+    finished_index = event_types.index(EngineEventType.FINISHED)
+    assert len(token_indices) == 2
+    assert all(ti < finished_index for ti in token_indices)
+    assert event_types[-1] is EngineEventType.FINISHED
+
+
+def test_eos_stops_model_and_rng_advancement() -> None:
+    # Given: a FakeExecutor tracking calls and a request hitting EOS on prefill.
+    executor = FakeExecutor()
+    engine = make_engine(max_active_requests=1, executor=executor)
+    engine.submit(
+        GenerationRequest(
+            request_id="eos-stop",
+            prompt_tokens=(1, 2),
+            max_new_tokens=20,
+            temperature=1.0,
+            seed=5,
+            eos_token_id=5,
+        )
+    )
+    # When: the engine processes prefill (EOS hit on first token).
+    engine.tick(now=0.0)
+    engine.tick(now=1.0)
+    # Then: no decode call is made after EOS, request is FINISHED.
+    state = engine.request_state("eos-stop")
+    assert state.status is RequestStatus.FINISHED
+    assert state.generated_tokens == [5]
+    assert executor.decode_calls == []
+
+
+def test_legacy_no_eos_regression() -> None:
+    # Given: a legacy request without eos_token_id (default None).
+    engine = make_engine(max_active_requests=1)
+    engine.submit(request("legacy", max_new_tokens=5, seed=100))
+    # When: it runs to completion.
+    for tick_time in range(8):
+        engine.tick(now=float(tick_time))
+    # Then: it finishes at max_new_tokens, and eos_token_id is None.
+    state = engine.request_state("legacy")
+    assert state.status is RequestStatus.FINISHED
+    assert len(state.generated_tokens) == 5
+    assert state.request.eos_token_id is None

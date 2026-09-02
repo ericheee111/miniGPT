@@ -1,0 +1,18 @@
+{
+  "claim_level": "structural",
+  "invariants": {
+    "per_request_rng_equivalence": true,
+    "recompute_resume": true
+  },
+  "kv": {
+    "preemptions": 10,
+    "recompute_tokens": 68
+  },
+  "request_lanes": [],
+  "scenario_id": "kv_preemption",
+  "schema_version": 1,
+  "source_commit": "5cb003a97086ea9257ca91a79758b6a40eb697f3",
+  "source_evidence_path": "docs/results/kv-pressure-preemption/evidence/correctness.json",
+  "ticks": [],
+  "title": "KV-pressure preemption and recompute"
+}

@@ -24,6 +24,8 @@ from minigpt.serving import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from minigpt.serving import EngineMetrics
 
 
@@ -143,6 +145,18 @@ class RunnerQueueFullError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class RunnerInspectionTimeoutError(TimeoutError):
+    """Report an owner-thread inspection that exceeded its caller bound."""
+
+    timeout_seconds: float
+
+    @override
+    def __str__(self) -> str:
+        """Render the inspection timeout."""
+        return f"engine runner inspection did not finish within {self.timeout_seconds} seconds"
+
+
+@dataclass(frozen=True, slots=True)
 class RunnerShutdownTimeoutError(TimeoutError):
     """Report a worker that did not stop within the caller's bound."""
 
@@ -188,7 +202,15 @@ class _ShutdownCommand:
     acknowledged: Future[None]
 
 
-_RunnerCommand: TypeAlias = _SubmitCommand | _CancelCommand | _MetricsCommand | _ShutdownCommand
+@dataclass(frozen=True, slots=True)
+class _InspectionCommand:
+    result: Future[object]
+    call: Callable[[], object]
+
+
+_RunnerCommand: TypeAlias = (
+    _SubmitCommand | _CancelCommand | _MetricsCommand | _ShutdownCommand | _InspectionCommand
+)
 
 
 @dataclass(slots=True)
@@ -311,6 +333,32 @@ class EngineRunner:
             command_name = "metrics acknowledgement"
             raise RunnerQueueFullError(command_name) from None
 
+    def inspect(self, call: Callable[[], object], *, timeout_seconds: float = 5.0) -> object:
+        """Run one read-only call on the owner thread and return its result.
+
+        The callable must be a pure model observation that neither mutates
+        scheduler/KV lifecycle nor advances request RNG. It runs between engine
+        ticks on the same single owner thread that drives the engine, so it
+        cannot race generation. If the callable raises, that exception is
+        re-raised on the caller thread.
+
+        The command future is cancelled when the caller times out. The owner
+        uses ``set_running_or_notify_cancel`` before invoking the callable, so a
+        queued stale observation is skipped without a race. A synchronous
+        inspection that already started cannot be interrupted; it completes on
+        the owner thread before normal engine work resumes.
+        """
+        _validate_timeout(timeout_seconds)
+        self._require_running()
+        result: Future[object] = Future()
+        command = _InspectionCommand(result=result, call=call)
+        self._put_nowait(command, command_name="inspect")
+        try:
+            return result.result(timeout=timeout_seconds)
+        except FutureTimeoutError:
+            _ = result.cancel()
+            raise RunnerInspectionTimeoutError(timeout_seconds) from None
+
     def shutdown(self, *, timeout_seconds: float = 10.0) -> None:
         """Cancel all live work, release reservations, and join the owner."""
         _validate_timeout(timeout_seconds)
@@ -388,6 +436,15 @@ class EngineRunner:
         if isinstance(command, _MetricsCommand):
             command.result.set_result(self._engine.metrics())
             return True
+        if isinstance(command, _InspectionCommand):
+            if not command.result.set_running_or_notify_cancel():
+                # The caller timed out while the command was still queued.
+                return True
+            try:
+                command.result.set_result(command.call())
+            except BaseException as error:  # noqa: BLE001 - propagate to caller.
+                command.result.set_exception(error)
+            return True
         self._process_shutdown(command)
         return False
 
@@ -449,6 +506,9 @@ class EngineRunner:
                 command.acknowledged.set_result(None)
             elif isinstance(command, _MetricsCommand):
                 command.result.set_exception(unavailable)
+            elif isinstance(command, _InspectionCommand):
+                if not command.result.done():
+                    command.result.set_exception(unavailable)
             else:
                 command.acknowledged.set_result(None)
 

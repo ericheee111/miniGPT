@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.1.0] - 2026-09-02
+
+### Added
+
+- Strict ByteLevel BPE tokenizer schema v2 with 17 stable Story Forge control tokens and character-tokenizer backward compatibility.
+- Deterministic, pinned-revision SimpleStories preparation with two-pass Parquet scanning, balanced selection, and atomic artifacts.
+- 4,928,144-parameter controlled-story checkpoint trained from scratch with hash-bound model evidence.
+- Story Forge three-branch generation, four-round browser story tree, BPE-safe snapshot SSE, cancellation, and per-branch failure isolation.
+- Prediction Lab next-token distributions, temperature visualization, and sequence surprisal through owner-thread model inspection.
+- Offline Systems Lab replay for continuous batching, Automatic Prefix Caching, KV preemption, and lazy reservation.
+- Hash-validated Windows/Tailscale Story Forge pre-cutover scripts and a v1.1 product evidence package.
+
+### Changed
+
+- Public GitHub Pages experience moves from free-form Shakespeare character continuation to original-IP controlled micro-adventures.
+- Project version advances to `1.1.0` while the v1.0 Stage 1–21 evidence remains unchanged.
+
 All notable project changes are documented here. miniGPT follows semantic versioning from the v1.0 release onward.
 
 > **Release status:** the v1.0.0 code, Evidence, packaging, independent review, and cross-platform CI baseline is complete on `main` as of 2026-08-27. The annotated `v1.0.0` Git tag has not yet been published.

@@ -169,8 +169,9 @@ class GenerationRequest:
     seed: int = 0
     arrival_time: float = 0.0
     cancellation_time: float | None = None
+    eos_token_id: int | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901
         """Reject malformed requests before they enter scheduler state."""
         if not self.request_id:
             _invalid("request_id must be non-empty")
@@ -191,6 +192,10 @@ class GenerationRequest:
             _finite_non_negative(self.cancellation_time, "cancellation_time")
             if self.cancellation_time < self.arrival_time:
                 _invalid("cancellation_time must not precede arrival_time")
+        if self.eos_token_id is not None and (
+            type(self.eos_token_id) is not int or self.eos_token_id < 0
+        ):
+            _invalid("eos_token_id must be null or a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3851,7 +3856,8 @@ class ServingEngine:
             token_id=result.token_id,
             used_fallback=result.used_fallback,
         )
-        if len(state.generated_tokens) >= state.request.max_new_tokens:
+        eos_hit = state.request.eos_token_id is not None and token_id == state.request.eos_token_id
+        if len(state.generated_tokens) >= state.request.max_new_tokens or eos_hit:
             self._finish_state(state, token_time)
         else:
             state.status = RequestStatus.DECODING

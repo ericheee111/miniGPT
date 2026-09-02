@@ -91,6 +91,27 @@ git tag -a v1.0.0 -m "miniGPT v1.0.0"
 git push origin v1.0.0
 ```
 
+## Post-v1 Story Forge 1.1 delivery checklist
+
+This extension preserves the Stage 21 / v1.0.0 evidence package and uses a separate two-commit product-evidence flow.
+
+- [x] `src/minigpt/_version.py` is the single authored current-version source and reports `1.1.0`.
+- [x] Story Forge tokenizer/data/model evidence is hash-bound without committing the external checkpoint or prepared arrays.
+- [x] Story, Prediction, and Systems Lab source paths have focused tests and explicit claim boundaries.
+- [x] The Story Forge launcher validates checkpoint/tokenizer hashes, fixed control IDs, model configuration, and cached/uncached output before startup.
+- [x] Port 8001 is validated before public cutover; port 8000 remains the rollback target.
+- [ ] Commit the reviewed Story Forge source and record its exact source SHA.
+- [ ] Generate and independently verify `docs/results/story-forge-product/` against that source SHA.
+- [ ] Repeat Ruff, basedpyright, full pytest, Project Doctor, package validation, static builds, and model/API smoke in a detached fresh worktree.
+- [ ] Push the feature branch and require green Windows/Python 3.14 and Linux/Python 3.11 CI.
+- [ ] Fast-forward `main`, require green `main` CI, then repoint the Funnel and verify the public GitHub Pages experience.
+
+The public switch is complete only after health, exact CORS, three-branch non-stream/SSE, Prediction Lab, cancellation cleanup, and desktop/mobile browser checks pass. A failed public validation must restore the recorded port-8000 Funnel target.
+
+```text
+Story source commit -> product evidence commit -> feature CI -> main CI -> public cutover
+```
+
 - [ ] Tag points to the exact CI-green main commit.
 - [ ] Tag is annotated, not lightweight.
 - [ ] No source or evidence changes occur between main CI success and tag creation.

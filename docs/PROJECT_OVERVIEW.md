@@ -49,11 +49,11 @@ CPU-first 并不表示项目假定 CPU 比 GPU 更适合大模型，而是表示
 
 ### 2.3 明确的范围边界
 
-当前范围包括：字符级 tokenization、单机 CPU 训练、AdamW、cosine schedule、checkpoint v2、文本生成、KV cached inference、多请求 serving、OpenAI-compatible completions subset、SSE、paged KV、APC、chunked prefill、whole-request preemption 和 lazy reservation。
+当前范围包括：字符级 tokenizer 基线、Story Forge ByteLevel BPE schema v2、单机 CPU 训练、AdamW、cosine schedule、checkpoint v2、文本生成、KV cached inference、多请求 serving、OpenAI-compatible completions subset、SSE、paged KV、APC、chunked prefill、whole-request preemption、lazy reservation，以及 post-v1 Story Forge / Prediction / Recorded Systems Lab 产品层。
 
 当前范围不包括：
 
-- BPE/SentencePiece 等子词 tokenizer；
+- SentencePiece 等其他子词 tokenizer，以及面向通用大模型的超大词表；
 - CUDA、mixed precision、fused attention 或真正的高性能 PagedAttention kernel；
 - 多机、多卡或分布式 checkpoint；
 - CPU/GPU swap、partial-block copy-on-write；
@@ -64,11 +64,11 @@ CPU-first 并不表示项目假定 CPU 比 GPU 更适合大模型，而是表示
 
 截至 Stage 21 / v1.0.0，既定 CPU reference scope 已完成：功能分支和 `main` 均通过 Windows/Python 3.14 与 Linux/Python 3.11 质量门禁，完整 pytest、Stage 7A–21 Evidence、source ancestry、fresh checkout、wheel/sdist 和 release doctor 均已验证。项目因此进入维护模式；未创建 annotated `v1.0.0` tag 只表示尚未发布 Git tag，不构成功能或证据闭环的缺口。
 
-### 2.5 Post-v1 Public Playground 部署扩展
+### 2.5 Post-v1 Story Forge 1.1 产品与部署扩展
 
-Post-v1 Public Playground 把系统作为个人作品集展示，但不扩大 v1 模型或 serving 语义：`web/` 由 GitHub Pages 永久在线，checkpoint/tokenizer 和 CPU 计算仍位于个人 Windows 电脑；Tailscale Funnel 的 `*.ts.net` HTTPS endpoint 只把请求转发到 `127.0.0.1:8000` 的受限 `minigpt demo-serve`。本地 backend offline 时，页面保留项目定位、架构、Stage 1–21、Evidence 和静态示例，并禁用 Generate。
+Story Forge 1.1 把系统作为可交互个人作品集展示，同时保持 v1 serving reference 兼容：`web/` 由 GitHub Pages 永久在线，BPE checkpoint/tokenizer 和 CPU 计算仍位于个人 Windows 电脑；Tailscale Funnel 的 `*.ts.net` HTTPS endpoint 只把请求转发到 `127.0.0.1:8001` 的受限 `minigpt demo-serve`。本地 backend offline 时，页面保留项目定位、架构、Evidence 和四个 Recorded Systems Lab 场景，并禁用 Story/Prediction live controls。
 
-公网 adapter 复用既有 `ServingRuntimeConfig`、`EngineRunner`、`ServingEngine` 和 completion contract，只增加 fail-closed body/Prompt/generation limits、bounded HTTP queue、timeout/disconnect cancellation、IP/XFF-independent global request/token quotas、exact CORS、safe aggregate info/metrics 和 `DEMO_ENABLED` kill switch。代码层 `streaming_enabled` 默认关闭；2026-08-31 真实 Funnel SSE 分块与取消验收通过后，正式部署配置才显式打开。普通 `minigpt serve` 不改变。该部署没有认证或生产级 DDoS 防护，因此只定位为非商业字符级续写 Demo，不声明 24/7 SLA、生产安全或普遍 wall-clock speedup。
+公网 adapter 复用 `ServingRuntimeConfig`、`EngineRunner` 与 `ServingEngine`，增加 Story Forge 三分支调度、owner-thread Prediction inspection、fail-closed body/context/generation limits、bounded queue、timeout/disconnect cancellation、IP/XFF-independent global request/token quotas、exact CORS、safe aggregate info/metrics 和 `DEMO_ENABLED` kill switch。普通 `minigpt serve` 不改变。该部署没有认证或生产级 DDoS 防护，因此只定位为非商业受控故事续写 Demo，不声明 24/7 SLA、生产安全或普遍 wall-clock speedup。
 
 ---
 
@@ -460,3 +460,29 @@ miniGPT 展示了一个小型 GPT 项目如何沿着“模型实现—可恢复�
 - 性能结论不超过 evidence 能支持的范围。
 
 截至 Stage 21，项目已经形成完整的 CPU reference lab 闭环：Stage 18 完成 serving 资源策略，Stage 19 将策略接入真实 HTTP runtime，Stage 20 提供可安装 CLI 与显式 evidence/provenance 自检，Stage 21 再以隔离 wheel 安装、release doctor 和非自引用 capstone evidence 收口。legacy 路径仍保留为默认 reference，所有优化能力均通过 opt-in 配置、等价测试和 hash-bound evidence 接入。此后 bug fix、依赖兼容和 evidence hardening 进入 patch maintenance；更高性能 kernel、COW、swap、BPE、GPU 或分布式能力必须作为 post-v1 独立研究设计。
+
+## Post-v1 Story Forge v1.1
+
+Story Forge is a post-v1 product and research extension. It does not rename or reopen the completed Stage 1–21 sequence. The extension adds a strict BPE tokenizer-v2 artifact, deterministic SimpleStories preparation, a 4,928,144-parameter controlled-story checkpoint, and three interactive surfaces.
+
+### Story Forge data and model
+
+- Source dataset: `SimpleStories/SimpleStories` at a pinned full revision, with source size and SHA-256 bound in preparation metadata.
+- Selection: two-pass streaming Parquet scan, order-independent hash split, bounded heaps, and balanced world×tone quotas.
+- Sequence framing: `<bos> <world_*> <tone_*> <theme_*> <story> ... <eos>`. The 17 special-token IDs are fixed by the tokenizer artifact contract.
+- Candidate: 6 layers, 4 heads, 256 embedding dimensions, 512-token context, 4,928,144 trainable parameters.
+- Training: 3,000 CPU steps with checkpoint-v2 exact-resume contracts. The committed model evidence records validation loss 3.3334 and perplexity about 28.03; these are descriptive results, bot a general quality guarantee.
+
+### Product surfaces
+
+1. **Story Forge** submits exactly three independent requests per round. Seeds are deterministically derived, story history is kept only in the browser, and the public product caps a story at four rounds.
+2. **Prediction Lab** uses a single-owner `EngineRunner.inspect()` command to return next-token logits or sequence surprisal. It does not sample, advance request RNG, or mutate paged KV.
+3. **Systems Lab** replays deterministic JSON normalized from committed evidence. It is available when the Windows model host is offline and is labeled as recorded rather than live.
+
+### Public runtime
+
+The GitHub Pages frontend contains no model weights. It calls a Tailscale Funnel HTTPS endpoint that forwards to a loopback-only Windows backend. The local backend validates exact checkpoint and tokenizer hashes before startup. Policy limits, global quotas, CORS, cancellation, and a kill switch remain in front of the existing scheduler.
+
+### Claim boundary
+
+Story Forge demonstrates from-scratch training, tokenizer/checkpoint schema evolution, deterministic sampling, multi-request serving, model-owner observations, and auditable deployment. It does not claim production-scale security, factual question answering, GPU-class throughput, or a universal wall-clock speedup.

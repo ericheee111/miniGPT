@@ -1,0 +1,36 @@
+schema_version: 1
+server:
+  host: 127.0.0.1
+  port: 8000
+  log_level: warning
+runtime:
+  executor: continuous
+  max_active_requests: 2
+  max_cached_tokens: null
+  kv_cache_backend: dense
+  kv_block_tokens: 16
+  kv_num_blocks: null
+  prefix_cache: false
+  apc_prefill_strategy: sequential
+  max_scheduled_tokens: null
+  prefill_chunk_tokens: null
+  kv_preemption: false
+  lazy_kv_reservation: false
+  kv_overcommit_ratio: 1.0
+  command_queue_size: 16
+  stream_buffer_size: 16
+policy:
+  max_request_body_bytes: 8192
+  max_prompt_characters: 10000
+  max_prompt_tokens: 512
+  max_new_tokens: 64
+  min_temperature: 0.1
+  max_temperature: 1.2
+  request_timeout_seconds: 45
+  max_concurrent_requests: 2
+  max_queue_size: 8
+  global_requests_per_hour: 60
+  global_generated_tokens_per_day: 10000
+  streaming_enabled: true
+  enabled: false
+allowed_origins: []

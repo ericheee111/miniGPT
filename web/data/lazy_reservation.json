@@ -1,0 +1,18 @@
+{
+  "claim_level": "structural",
+  "invariants": {
+    "controlled_overcommit": true,
+    "growth_work_free": false
+  },
+  "kv": {
+    "growth_pressure_preemptions": 1,
+    "peak_overcommitted_cache_tokens": 8
+  },
+  "request_lanes": [],
+  "scenario_id": "lazy_reservation",
+  "schema_version": 1,
+  "source_commit": "58c919f8cacff48c6d94d24e18b76290c3de7a2e",
+  "source_evidence_path": "docs/results/lazy-kv-reservation/evidence/correctness.json",
+  "ticks": [],
+  "title": "Lazy KV growth reservation"
+}

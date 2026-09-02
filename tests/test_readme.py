@@ -147,7 +147,7 @@ def test_readme_documents_live_public_playground_with_offline_limits() -> None:
     # When/Then: deployment, character-level scope, and runtime availability remain explicit.
     assert "## Public Playground / Deployment" in readme
     assert "minigpt demo-serve" in readme
-    assert "字符级文本续写" in readme
+    assert "Story Forge" in readme
     assert "不是通用问答助手" in readme
     assert "https://ericheee111.github.io/miniGPT/" in readme
     assert "GitHub Pages 已部署到" in readme

@@ -9,12 +9,13 @@ import json
 import logging
 import math
 import os
+import queue
 import time
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Never, TypeAlias, cast, final
+from typing import TYPE_CHECKING, Never, Protocol, TypeAlias, cast, final
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -28,18 +29,26 @@ from typing_extensions import override
 
 from minigpt import __version__
 from minigpt.checkpoint import load_checkpoint_config, load_model_state
-from minigpt.data import CharTokenizer, JsonValue, UnknownCharacterError
+from minigpt.data import JsonValue, UnknownCharacterError
 from minigpt.engine_runner import (
     EngineRunner,
     RequestHandle,
     RunnerQueueFullError,
     RunnerResult,
     RunnerUnavailableError,
+    StreamEvent,
     StreamEventType,
 )
 from minigpt.http_server import MODEL_ID
 from minigpt.model import GPT
 from minigpt.paged_kv_cache import KVCacheBackend
+from minigpt.prediction import (
+    MAX_TOP_K,
+    NextTokenDistribution,
+    SequenceSurprisal,
+    compute_next_token_distribution,
+    compute_sequence_surprisal,
+)
 from minigpt.serving import APCPrefillStrategy, GenerationRequest, RequestStatus
 from minigpt.serving_runtime import (
     ServingExecutorName,
@@ -47,9 +56,31 @@ from minigpt.serving_runtime import (
     build_serving_runtime,
     file_sha256,
 )
+from minigpt.story import (
+    StoryControlError,
+    StoryControls,
+    StoryFramingError,
+    frame_story_prompt,
+    story_control_prefix_ids,
+)
+from minigpt.story_data import THEMES, TONES, WORLDS
+from minigpt.story_forge_product import (
+    DEFAULT_BRANCH_COUNT,
+    MAX_BRANCH_TOKENS,
+    MAX_STORY_SEED,
+    branch_seed_for,
+    build_story_history,
+)
+from minigpt.tokenizer import (
+    BPE_MODEL_FAMILY,
+    BPE_SPECIAL_TOKEN_IDS,
+    TokenizerProtocol,
+    load_tokenizer,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+    from queue import Queue
 
     from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -106,6 +137,23 @@ _TOP_LEVEL_KEYS = frozenset({"schema_version", "server", "runtime", "policy", "a
 _LOG_LEVELS = frozenset({"critical", "error", "warning", "info"})
 _CORS_METHODS = "GET, POST, OPTIONS"
 _CORS_HEADERS = frozenset({"content-type"})
+
+_STORY_MODEL_ID = "minigpt-story-forge"
+_STORY_FIELDS = frozenset(
+    {"world", "tone", "theme", "opening", "seed", "branch_count", "max_tokens", "stream"}
+)
+_PREDICT_FIELDS = frozenset({"world", "tone", "theme", "text", "top_k"})
+_MAX_PREDICT_TEXT_CHARS = 10_000
+_STORY_EOS_ID = BPE_SPECIAL_TOKEN_IDS["<eos>"]
+
+# Control tokens that must never surface in branch/prediction text output. The
+# whole registered special-token vocabulary is excluded from rendered text via
+# ``decode(skip_special_tokens=True)``; this set additionally guards pieces that
+# a partial decode might otherwise render empty.
+_STORY_CONTROL_TOKEN_IDS = frozenset(BPE_SPECIAL_TOKEN_IDS.values())
+_STORY_SPECIAL_TOKEN_LABELS: dict[int, str] = {
+    token_id: token for token, token_id in BPE_SPECIAL_TOKEN_IDS.items()
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +390,8 @@ class PublicDemoInfo:
     executor_name: str
     kv_cache_backend: str
     prefix_cache_enabled: bool
+    story_forge_enabled: bool = False
+    prediction_lab_enabled: bool = False
 
 
 def load_public_demo_settings(path: Path | None) -> PublicDemoSettings:
@@ -634,6 +684,25 @@ class _CompletionInput:
 
 
 @dataclass(frozen=True, slots=True)
+class _StoryBranchInput:
+    world: str
+    tone: str
+    theme: str
+    opening: str
+    seed: int
+    branch_count: int
+    max_tokens: int
+    stream: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PredictInput:
+    controls: StoryControls
+    text: str
+    top_k: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class _RequestError(ValueError):
     message: str
     param: str | None
@@ -909,6 +978,14 @@ class _PublicMetrics:
         }
 
 
+class _StreamLifecycleProtocol(Protocol):
+    """Shared terminal/cleanup surface accepted by the SSE response wrapper."""
+
+    def fail(self, *, latency_seconds: float, timed_out: bool = False) -> None: ...
+
+    async def cleanup(self, *, cancel: bool) -> None: ...
+
+
 @dataclass(slots=True)
 class _StreamLifecycle:
     runner: EngineRunner
@@ -966,7 +1043,7 @@ class _PublicStreamingResponse(StreamingResponse):
         self,
         content: AsyncGenerator[str, None],
         *,
-        lifecycle: _StreamLifecycle,
+        lifecycle: _StreamLifecycleProtocol,
         clock: Callable[[], float],
         started_at: float,
         headers: Mapping[str, str],
@@ -1097,10 +1174,11 @@ def _append_security_headers(headers: list[tuple[bytes, bytes]]) -> None:
 def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
     *,
     runner: EngineRunner,
-    tokenizer: CharTokenizer,
+    tokenizer: TokenizerProtocol,
     block_size: int,
     policy: PublicDemoPolicy,
     info: PublicDemoInfo,
+    model: GPT | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     """Create the restricted ASGI app without changing the ordinary serve app."""
@@ -1179,6 +1257,11 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
                 "kv_cache_backend": info.kv_cache_backend,
                 "prefix_cache_enabled": info.prefix_cache_enabled,
                 "streaming_enabled": policy.streaming_enabled,
+                "features": {
+                    "story_forge": info.story_forge_enabled,
+                    "prediction_lab": info.prediction_lab_enabled,
+                    "systems_lab": True,
+                },
             }
         )
 
@@ -1217,7 +1300,7 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         try:
             async with asyncio.timeout_at(deadline):
                 document = await _read_json_document(request, policy.max_request_body_bytes)
-                completion = _parse_completion(document, policy)
+                completion = _parse_completion(document, policy, model_id=info.model_id)
                 prompt_tokens = _encode_prompt(
                     tokenizer=tokenizer,
                     prompt=completion.prompt,
@@ -1405,6 +1488,102 @@ def create_public_demo_app(  # noqa: C901, PLR0913, PLR0915
         )
 
     _ = completions
+
+    @app.post("/demo/story/branches", response_model=None)
+    async def story_branches(request: Request) -> JSONResponse | StreamingResponse:
+        started_at = clock()
+        if not policy.enabled or not info.story_forge_enabled:
+            metrics.reject()
+            return _public_error(
+                status_code=503,
+                message="Story Forge is unavailable",
+                code="story_forge_unavailable",
+            )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + policy.request_timeout_seconds
+        try:
+            async with asyncio.timeout_at(deadline):
+                document = await _read_json_document(request, policy.max_request_body_bytes)
+                branch_input = _parse_story_branch(document, policy)
+        except _RequestError as error:
+            metrics.reject()
+            return _public_error(
+                status_code=error.status_code,
+                message=error.message,
+                code=error.code,
+                param=error.param,
+            )
+        except TimeoutError:
+            metrics.fail(latency_seconds=_elapsed(clock, started_at), timed_out=True)
+            return _public_error(
+                status_code=504, message="request timed out", code="request_timeout"
+            )
+        except ClientDisconnect:
+            metrics.fail(latency_seconds=_elapsed(clock, started_at))
+            return _public_error(
+                status_code=499, message="client disconnected", code="client_disconnected"
+            )
+        except asyncio.CancelledError:
+            metrics.fail(latency_seconds=_elapsed(clock, started_at))
+            raise
+        except Exception:  # noqa: BLE001
+            metrics.fail(latency_seconds=_elapsed(clock, started_at))
+            return _public_error(
+                status_code=500, message="generation failed", code="internal_error"
+            )
+        return await _submit_story_branches(
+            runner=runner,
+            tokenizer=tokenizer,
+            block_size=block_size,
+            gate=gate,
+            quota=quota,
+            metrics=metrics,
+            policy=policy,
+            info=info,
+            clock=clock,
+            started_at=started_at,
+            deadline=deadline,
+            branch_input=branch_input,
+            request=request,
+        )
+
+    _ = story_branches
+
+    @app.post("/demo/predict/next", response_model=None)
+    async def predict_next(request: Request) -> JSONResponse:
+        return await _handle_predict(
+            request=request,
+            runner=runner,
+            tokenizer=tokenizer,
+            model=model,
+            policy=policy,
+            info=info,
+            metrics=metrics,
+            gate=gate,
+            quota=quota,
+            clock=clock,
+            kind="next",
+        )
+
+    _ = predict_next
+
+    @app.post("/demo/predict/score", response_model=None)
+    async def predict_score(request: Request) -> JSONResponse:
+        return await _handle_predict(
+            request=request,
+            runner=runner,
+            tokenizer=tokenizer,
+            model=model,
+            policy=policy,
+            info=info,
+            metrics=metrics,
+            gate=gate,
+            quota=quota,
+            clock=clock,
+            kind="score",
+        )
+
+    _ = predict_score
     return app
 
 
@@ -1415,7 +1594,7 @@ async def _non_stream_completion(  # noqa: PLR0913
     handle: RequestHandle,
     lease: _CapacityLease,
     quota_lease: _GlobalQuotaLease,
-    tokenizer: CharTokenizer,
+    tokenizer: TokenizerProtocol,
     request_id: str,
     created: int,
     model_id: str,
@@ -1531,7 +1710,7 @@ async def _stream_completion(  # noqa: PLR0913
     *,
     handle: RequestHandle,
     lifecycle: _StreamLifecycle,
-    tokenizer: CharTokenizer,
+    tokenizer: TokenizerProtocol,
     request_id: str,
     created: int,
     model_id: str,
@@ -1677,6 +1856,8 @@ def _reject_json_constant(value: str) -> Never:
 def _parse_completion(  # noqa: C901, PLR0912
     document: object,
     policy: PublicDemoPolicy,
+    *,
+    model_id: str = MODEL_ID,
 ) -> _CompletionInput:
     if not isinstance(document, dict):
         _request_error("request body must be a JSON object", None)
@@ -1692,7 +1873,7 @@ def _parse_completion(  # noqa: C901, PLR0912
     model = values.get("model")
     if not isinstance(model, str) or not model:
         _request_error("model must be a non-empty string", "model")
-    if model != MODEL_ID:
+    if model != model_id:
         _request_error(
             "requested model is not served",
             "model",
@@ -1750,7 +1931,7 @@ def _parse_completion(  # noqa: C901, PLR0912
 
 def _encode_prompt(
     *,
-    tokenizer: CharTokenizer,
+    tokenizer: TokenizerProtocol,
     prompt: str,
     block_size: int,
     policy: PublicDemoPolicy,
@@ -1771,6 +1952,207 @@ def _encode_prompt(
             code="prompt_too_long",
         )
     return tokens
+
+
+def _parse_story_branch(  # noqa: C901, PLR0912
+    document: object,
+    policy: PublicDemoPolicy,
+) -> _StoryBranchInput:
+    """Validate the Story Forge branch request fields under public policy bounds."""
+    if not isinstance(document, dict):
+        _request_error("request body must be a JSON object", None)
+    raw = cast("dict[object, object]", document)
+    if any(not isinstance(key, str) for key in raw):
+        _request_error("request body keys must be strings", None)
+    values = cast("dict[str, object]", raw)
+    unsupported = sorted(set(values) - _STORY_FIELDS)
+    if unsupported:
+        _request_error(f"unsupported story field {unsupported[0]!r}", unsupported[0])
+
+    world = values.get("world")
+    if not isinstance(world, str) or world not in WORLDS:
+        _request_error(f"world must be one of: {', '.join(WORLDS)}", "world")
+    tone = values.get("tone")
+    if not isinstance(tone, str) or tone not in TONES:
+        _request_error(f"tone must be one of: {', '.join(TONES)}", "tone")
+    theme = values.get("theme")
+    if not isinstance(theme, str) or theme not in THEMES:
+        _request_error(f"theme must be one of: {', '.join(THEMES)}", "theme")
+
+    opening = values.get("opening", "")
+    if not isinstance(opening, str):
+        _request_error("opening must be a string", "opening")
+    if len(opening) > policy.max_prompt_characters:
+        _request_error(
+            f"opening exceeds {policy.max_prompt_characters} characters",
+            "opening",
+            code="opening_too_long",
+        )
+    seed = values.get("seed", 0)
+    if type(seed) is not int or not 0 <= seed < MAX_STORY_SEED:
+        _request_error(f"seed must be an integer in [0, {MAX_STORY_SEED})", "seed")
+    branch_count = values.get("branch_count", DEFAULT_BRANCH_COUNT)
+    if type(branch_count) is not int or branch_count != DEFAULT_BRANCH_COUNT:
+        _request_error("branch_count must be exactly 3 for the public demo", "branch_count")
+    max_tokens = values.get("max_tokens", MAX_BRANCH_TOKENS)
+    if type(max_tokens) is not int or not 1 <= max_tokens <= MAX_BRANCH_TOKENS:
+        _request_error(
+            f"max_tokens must be an integer in [1, {MAX_BRANCH_TOKENS}]",
+            "max_tokens",
+        )
+    stream = values.get("stream", False)
+    if type(stream) is not bool:
+        _request_error("stream must be a boolean", "stream")
+    if stream and not policy.streaming_enabled:
+        _request_error(
+            "streaming is disabled for this public deployment",
+            "stream",
+            code="streaming_disabled",
+        )
+    return _StoryBranchInput(
+        world=world,
+        tone=tone,
+        theme=theme,
+        opening=opening,
+        seed=seed,
+        branch_count=branch_count,
+        max_tokens=max_tokens,
+        stream=stream,
+    )
+
+
+def _parse_predict(document: object) -> _PredictInput:  # noqa: C901
+    """Validate the Prediction Lab request fields and reject extras."""
+    if not isinstance(document, dict):
+        _request_error("request body must be a JSON object", None)
+    raw = cast("dict[object, object]", document)
+    if any(not isinstance(key, str) for key in raw):
+        _request_error("request body keys must be strings", None)
+    values = cast("dict[str, object]", raw)
+    unsupported = sorted(set(values) - _PREDICT_FIELDS)
+    if unsupported:
+        _request_error(f"unsupported prediction field {unsupported[0]!r}", unsupported[0])
+
+    world = values.get("world")
+    if not isinstance(world, str) or world not in WORLDS:
+        _request_error(f"world must be one of: {', '.join(WORLDS)}", "world")
+    tone = values.get("tone")
+    if not isinstance(tone, str) or tone not in TONES:
+        _request_error(f"tone must be one of: {', '.join(TONES)}", "tone")
+    theme = values.get("theme")
+    if not isinstance(theme, str) or theme not in THEMES:
+        _request_error(f"theme must be one of: {', '.join(THEMES)}", "theme")
+
+    text = values.get("text", "")
+    if not isinstance(text, str):
+        _request_error("text must be a string", "text")
+    if len(text) > _MAX_PREDICT_TEXT_CHARS:
+        _request_error(f"text exceeds {_MAX_PREDICT_TEXT_CHARS} characters", "text")
+    top_k = values.get("top_k", None)
+    if top_k is not None and (type(top_k) is not int or not 1 <= top_k <= MAX_TOP_K):
+        _request_error(f"top_k must be an integer in [1, {MAX_TOP_K}]", "top_k")
+    try:
+        controls = StoryControls(world=world, tone=tone, theme=theme)
+    except StoryControlError as error:
+        _request_error(str(error), None)
+    return _PredictInput(controls=controls, text=text, top_k=top_k)
+
+
+@dataclass(frozen=True, slots=True)
+class _FramedStoryTokens:
+    """A framed Story Forge request plus its truncation/retention accounting."""
+
+    token_ids: tuple[int, ...]
+    control_prefix_length: int
+    history_truncated: bool
+    retained_history_tokens: int
+
+
+def _frame_story_tokens(  # noqa: PLR0913
+    *,
+    tokenizer: TokenizerProtocol,
+    controls: StoryControls,
+    opening: str,
+    block_size: int,
+    reserved_generation_tokens: int = 0,
+    history_tokens: Sequence[int] | None = None,
+) -> _FramedStoryTokens:
+    """Frame a Story Forge prompt or later-round history into control-prefixed tokens."""
+    if tokenizer.model_family != BPE_MODEL_FAMILY:
+        _request_error(
+            "Story Forge requires the story_forge model family",
+            None,
+            status_code=503,
+            code="story_forge_unavailable",
+        )
+    prefix = _story_control_prefix(tokenizer, controls)
+    if len(prefix) + reserved_generation_tokens > block_size:
+        _request_error(
+            "story request leaves no room for branch generation",
+            None,
+            code="story_context_exhausted",
+        )
+    if history_tokens:
+        history = build_story_history(
+            control_prefix_ids=prefix,
+            story_token_ids=tuple(history_tokens),
+            max_context_tokens=block_size - reserved_generation_tokens,
+        )
+        return _FramedStoryTokens(
+            token_ids=history.token_ids,
+            control_prefix_length=len(prefix),
+            history_truncated=history.truncated,
+            retained_history_tokens=len(history.token_ids) - len(prefix),
+        )
+    if not opening:
+        # An empty opening is a valid request: generate directly from the
+        # canonical control prefix without invoking the empty-rejecting framer.
+        return _FramedStoryTokens(
+            token_ids=prefix,
+            control_prefix_length=len(prefix),
+            history_truncated=False,
+            retained_history_tokens=0,
+        )
+    try:
+        framed = frame_story_prompt(
+            tokenizer,
+            controls,
+            opening,
+            max_context_tokens=block_size,
+            reserved_generation_tokens=reserved_generation_tokens,
+        )
+    except (StoryControlError, StoryFramingError) as error:
+        _request_error(str(error), None, code="story_framing_rejected")
+    return _FramedStoryTokens(
+        token_ids=framed.token_ids,
+        control_prefix_length=framed.control_prefix_length,
+        history_truncated=framed.truncated,
+        retained_history_tokens=framed.retained_history_tokens,
+    )
+
+
+def _story_control_prefix(tokenizer: TokenizerProtocol, controls: StoryControls) -> tuple[int, ...]:
+    """Resolve the canonical control prefix without sampling or mutation."""
+    prefix = _story_prefix_via_story(tokenizer, controls)
+    if prefix is None:
+        _request_error(
+            "tokenizer is missing Story Forge control tokens",
+            None,
+            status_code=503,
+            code="story_forge_unavailable",
+        )
+    return prefix
+
+
+def _story_prefix_via_story(
+    tokenizer: TokenizerProtocol,
+    controls: StoryControls,
+) -> tuple[int, ...] | None:
+    """Build the five-token control prefix from registered special tokens."""
+    try:
+        return story_control_prefix_ids(tokenizer, controls)
+    except (StoryControlError, StoryFramingError):
+        return None
 
 
 async def _cancel_safely(runner: EngineRunner, request_id: str) -> None:
@@ -1865,6 +2247,946 @@ def _log_request_failure(request_id: str) -> None:
     _LOGGER.error("public demo request failed request_id=%s", request_id)
 
 
+# -- Prediction Lab -------------------------------------------------------------
+
+
+def _frame_prediction_prompt(
+    *,
+    tokenizer: TokenizerProtocol,
+    controls: StoryControls,
+    text: str,
+    block_size: int,
+) -> tuple[int, ...]:
+    """Frame prediction text with the canonical Story Forge control prefix."""
+    if tokenizer.model_family != BPE_MODEL_FAMILY:
+        _request_error(
+            "Prediction Lab requires the story_forge model family",
+            None,
+            status_code=503,
+            code="prediction_unavailable",
+        )
+    prefix = _story_control_prefix(tokenizer, controls)
+    if not text:
+        return prefix
+    text_tokens = tokenizer.encode(text)
+    budget = block_size - 1 - len(prefix)
+    retained = text_tokens[-budget:] if len(text_tokens) > budget else text_tokens
+    return (*prefix, *retained)
+
+
+def _prediction_piece(tokenizer: TokenizerProtocol, token_id: int) -> tuple[str, bool]:
+    """Return a display-safe piece plus whether it is a registered special token."""
+    label = _STORY_SPECIAL_TOKEN_LABELS.get(token_id)
+    if label is not None:
+        return label, True
+    try:
+        piece = tokenizer.decode((token_id,), skip_special_tokens=True)
+    except Exception:  # noqa: BLE001 - a single bad token must not fail the row.
+        piece = ""
+    if not piece or "�" in piece:
+        return f"<token:{token_id}>", False
+    return piece, False
+
+
+def _prediction_next_document(
+    *,
+    tokenizer: TokenizerProtocol,
+    distribution: NextTokenDistribution,
+) -> dict[str, JsonValue]:
+    """Render a top-k next-token distribution with display-safe pieces."""
+    candidates: list[JsonValue] = []
+    for candidate in distribution.candidates:
+        piece, is_special = _prediction_piece(tokenizer, candidate.token_id)
+        candidates.append(
+            {
+                "token_id": candidate.token_id,
+                "piece": piece,
+                "is_special": is_special,
+                "logit": candidate.logit,
+                "probability": candidate.probability,
+            }
+        )
+    return {
+        "object": "prediction_next",
+        "top_k": distribution.top_k,
+        "candidates": candidates,
+    }
+
+
+def _prediction_score_document(
+    *,
+    tokenizer: TokenizerProtocol,
+    surprisal: SequenceSurprisal,
+) -> dict[str, JsonValue]:
+    """Render per-token surprisal chips plus aggregate NLL/perplexity.
+
+    Control-prefix positions and user-text positions are reported separately;
+    the full-framed ``mean_nll``/``perplexity`` are labeled as framed scores,
+    never as user-text or authorship scores.
+    """
+    rows: list[JsonValue] = []
+    for entry in surprisal.per_token:
+        piece, is_special = _prediction_piece(tokenizer, entry.token_id)
+        rows.append(
+            {
+                "token_id": entry.token_id,
+                "piece": piece,
+                "is_special": is_special,
+                "is_control": entry.is_control,
+                "surprisal": entry.surprisal,
+            }
+        )
+    return {
+        "object": "prediction_score",
+        "per_token": rows,
+        "control_prefix_length": surprisal.control_prefix_length,
+        "mean_nll": surprisal.mean_nll,
+        "perplexity": surprisal.perplexity,
+        "user_mean_nll": surprisal.user_mean_nll,
+        "user_perplexity": surprisal.user_perplexity,
+        "disclaimer": ("model likelihood only; not authorship detection or semantic understanding"),
+    }
+
+
+async def _handle_predict(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
+    *,
+    request: Request,
+    runner: EngineRunner,
+    tokenizer: TokenizerProtocol,
+    model: GPT | None,
+    policy: PublicDemoPolicy,
+    info: PublicDemoInfo,
+    metrics: _PublicMetrics,
+    gate: _CapacityGate,
+    quota: _GlobalQuota,
+    clock: Callable[[], float],
+    kind: str,
+) -> JSONResponse:
+    """Serve one read-only Prediction Lab inspection on the owner thread."""
+    started_at = clock()
+    if not policy.enabled or not info.prediction_lab_enabled or model is None:
+        metrics.reject()
+        return _public_error(
+            status_code=503,
+            message="Prediction Lab is unavailable",
+            code="prediction_unavailable",
+        )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + policy.request_timeout_seconds
+    lease: _CapacityLease | None = None
+    quota_lease: _GlobalQuotaLease | None = None
+    try:
+        async with asyncio.timeout_at(deadline):
+            document = await _read_json_document(request, policy.max_request_body_bytes)
+            parsed = _parse_predict(document)
+            lease = await gate.acquire()
+            quota_lease = await quota.acquire(f"pred-{uuid4().hex}", 0)
+            prefix = _story_control_prefix(tokenizer, parsed.controls)
+            prompt_tokens = _frame_prediction_prompt(
+                tokenizer=tokenizer,
+                controls=parsed.controls,
+                text=parsed.text,
+                block_size=model.config.block_size,
+            )
+            if kind == "next":
+                top_k = parsed.top_k if parsed.top_k is not None else MAX_TOP_K
+                inspection_timeout = max(0.001, deadline - loop.time())
+                distribution = await asyncio.to_thread(
+                    runner.inspect,
+                    lambda: compute_next_token_distribution(model, prompt_tokens, top_k=top_k),
+                    timeout_seconds=inspection_timeout,
+                )
+                result = _prediction_next_document(
+                    tokenizer=tokenizer,
+                    distribution=cast("NextTokenDistribution", distribution),
+                )
+            else:
+                inspection_timeout = max(0.001, deadline - loop.time())
+                surprisal = await asyncio.to_thread(
+                    runner.inspect,
+                    lambda: compute_sequence_surprisal(
+                        model,
+                        prompt_tokens,
+                        control_prefix_length=len(prefix),
+                    ),
+                    timeout_seconds=inspection_timeout,
+                )
+                result = _prediction_score_document(
+                    tokenizer=tokenizer,
+                    surprisal=cast("SequenceSurprisal", surprisal),
+                )
+    except _RequestError as error:
+        metrics.reject()
+        if quota_lease is not None:
+            await quota_lease.cancel()
+        if lease is not None:
+            await lease.release()
+        return _public_error(
+            status_code=error.status_code,
+            message=error.message,
+            code=error.code,
+            param=error.param,
+        )
+    except _GlobalQuotaFullError as error:
+        metrics.reject(rate_limited=True)
+        if lease is not None:
+            await lease.release()
+        return _public_error(
+            status_code=429,
+            message="global public demo quota exceeded",
+            code="rate_limit_exceeded",
+            headers={"Retry-After": str(error.retry_after)},
+        )
+    except _CapacityFullError:
+        metrics.reject()
+        return _public_error(
+            status_code=429, message="public demo queue is full", code="queue_full"
+        )
+    except (RunnerQueueFullError, RunnerUnavailableError):
+        metrics.reject()
+        if quota_lease is not None:
+            await quota_lease.cancel()
+        if lease is not None:
+            await lease.release()
+        return _public_error(
+            status_code=503, message="public demo is offline", code="service_unavailable"
+        )
+    except TimeoutError:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at), timed_out=True)
+        if quota_lease is not None:
+            await quota_lease.settle(0)
+        if lease is not None:
+            await lease.release()
+        return _public_error(status_code=504, message="request timed out", code="request_timeout")
+    except ClientDisconnect:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        if quota_lease is not None:
+            await quota_lease.settle(0)
+        if lease is not None:
+            await lease.release()
+        return _public_error(
+            status_code=499, message="client disconnected", code="client_disconnected"
+        )
+    except asyncio.CancelledError:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        if quota_lease is not None:
+            await quota_lease.settle(0)
+        if lease is not None:
+            await lease.release()
+        raise
+    except Exception:  # noqa: BLE001
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        if quota_lease is not None:
+            await quota_lease.settle(0)
+        if lease is not None:
+            await lease.release()
+        return _public_error(status_code=500, message="inspection failed", code="internal_error")
+
+    await quota_lease.settle(0)
+    await lease.release()
+    metrics.complete(generated_tokens=0, latency_seconds=_elapsed(clock, started_at))
+    return JSONResponse(result)
+
+
+# -- Story Forge branches -------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _BranchHandles:
+    """Bundle three submitted branch handles plus their shared leases."""
+
+    request_ids: tuple[str, ...]
+    handles: tuple[RequestHandle, ...]
+    seeds: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SubmittedBranches:
+    """Three submitted branch handles plus shared framing/truncation metadata."""
+
+    handles: _BranchHandles
+    control_prefix_length: int
+    history_truncated: bool
+    retained_history_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class _BranchOutcome:
+    """One finished branch's terminal description."""
+
+    text: str
+    token_count: int
+    finish_reason: str
+    request_id: str
+    history_truncated: bool
+    retained_history_tokens: int
+
+
+def _branch_finish_reason(
+    *,
+    status: RequestStatus,
+    generated_tokens: Sequence[int],
+    eos_token_id: int | None,
+) -> str:
+    """Derive the finish reason from actual terminal state and EOS identity.
+
+    ``stop`` means the model emitted EOS; ``length`` means max-token exhaustion;
+    ``cancelled`` and ``error`` map terminal scheduler states verbatim.
+    """
+    if status is RequestStatus.FINISHED:
+        if generated_tokens and eos_token_id is not None and generated_tokens[-1] == eos_token_id:
+            return "stop"
+        return "length"
+    if status is RequestStatus.CANCELLED:
+        return "cancelled"
+    return "error"
+
+
+def _display_snapshot(tokenizer: TokenizerProtocol, token_ids: Sequence[int]) -> str:
+    """Decode one complete generated-token prefix without exposing control tokens.
+
+    ByteLevel BPE token IDs can represent only part of a UTF-8 code point, so
+    decoding each token independently can emit replacement characters and is
+    not a valid streaming boundary. Story SSE therefore publishes the complete
+    decoded branch snapshot after each model token; the browser replaces the
+    branch text with this snapshot instead of concatenating token pieces.
+    """
+    return tokenizer.decode(token_ids, skip_special_tokens=True)
+
+
+def submit_three_branches(
+    *,
+    runner: EngineRunner,
+    tokenizer: TokenizerProtocol,
+    block_size: int,
+    branch_input: _StoryBranchInput,
+    temperature: float,
+) -> _SubmittedBranches:
+    """Frame once and submit three branches before awaiting any result.
+
+    Each branch derives a stable seed from ``(base_seed, branch_index)``. The
+    shared control-prefix framing (with ``reserved_generation_tokens``) is
+    computed once and reused. All three submission calls are made before any
+    handle is awaited so the owner thread receives them together. On any
+    partial failure after at least one successful submission, every accepted
+    request is cancelled exactly once before the error is re-raised.
+    """
+    controls = StoryControls(
+        world=branch_input.world,
+        tone=branch_input.tone,
+        theme=branch_input.theme,
+    )
+    framed = _frame_story_tokens(
+        tokenizer=tokenizer,
+        controls=controls,
+        opening=branch_input.opening,
+        block_size=block_size,
+        reserved_generation_tokens=branch_input.max_tokens,
+    )
+    request_ids: list[str] = []
+    handles: list[RequestHandle] = []
+    try:
+        for branch_index in range(branch_input.branch_count):
+            seed = branch_seed_for(branch_input.seed, branch_index)
+            request_id = f"stry-{uuid4().hex}"
+            handle = runner.submit(
+                GenerationRequest(
+                    request_id=request_id,
+                    prompt_tokens=framed.token_ids,
+                    max_new_tokens=branch_input.max_tokens,
+                    temperature=temperature,
+                    seed=seed,
+                    arrival_time=time.perf_counter(),
+                    eos_token_id=tokenizer.eos_token_id,
+                ),
+                stream=branch_input.stream,
+            )
+            request_ids.append(request_id)
+            handles.append(handle)
+    except BaseException:
+        # Transactional rollback: cancel every accepted request exactly once so
+        # partial submissions never leak engine/KV resources.
+        for request_id in request_ids:
+            with suppress(RunnerQueueFullError, RunnerUnavailableError):
+                runner.cancel(request_id)
+        raise
+
+    branch_handles = _BranchHandles(
+        request_ids=tuple(request_ids),
+        handles=tuple(handles),
+        seeds=tuple(branch_seed_for(branch_input.seed, index) for index in range(len(handles))),
+    )
+    return _SubmittedBranches(
+        handles=branch_handles,
+        control_prefix_length=framed.control_prefix_length,
+        history_truncated=framed.history_truncated,
+        retained_history_tokens=framed.retained_history_tokens,
+    )
+
+
+def _branch_document(  # noqa: PLR0913
+    *,
+    branch_id: int,
+    seed: int,
+    text: str,
+    token_count: int,
+    finish_reason: str,
+    request_id: str,
+    history_truncated: bool,
+    retained_history_tokens: int,
+) -> dict[str, JsonValue]:
+    return {
+        "branch_id": branch_id,
+        "seed": seed,
+        "text": text,
+        "token_count": token_count,
+        "finish_reason": finish_reason,
+        "request_id": request_id,
+        "history_truncated": history_truncated,
+        "retained_history_tokens": retained_history_tokens,
+    }
+
+
+async def _submit_story_branches(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
+    *,
+    runner: EngineRunner,
+    tokenizer: TokenizerProtocol,
+    block_size: int,
+    gate: _CapacityGate,
+    quota: _GlobalQuota,
+    metrics: _PublicMetrics,
+    policy: PublicDemoPolicy,
+    info: PublicDemoInfo,
+    clock: Callable[[], float],
+    started_at: float,
+    deadline: float,
+    branch_input: _StoryBranchInput,
+    request: Request,
+) -> JSONResponse | StreamingResponse:
+    """Acquire one aggregate lease, submit three branches, return ordered output."""
+    temperature = min(0.8, policy.max_temperature)
+    aggregate_token_budget = branch_input.max_tokens * branch_input.branch_count
+    lease: _CapacityLease | None = None
+    quota_lease: _GlobalQuotaLease | None = None
+    submitted: _SubmittedBranches | None = None
+    try:
+        async with asyncio.timeout_at(deadline):
+            lease = await gate.acquire()
+            quota_lease = await quota.acquire(f"stry-{uuid4().hex}", aggregate_token_budget)
+            submitted = submit_three_branches(
+                runner=runner,
+                tokenizer=tokenizer,
+                block_size=block_size,
+                branch_input=branch_input,
+                temperature=temperature,
+            )
+    except _RequestError as error:
+        metrics.reject()
+        await _release_aggregate_lease(quota_lease, lease, generated=0)
+        return _public_error(
+            status_code=error.status_code,
+            message=error.message,
+            code=error.code,
+            param=error.param,
+        )
+    except _GlobalQuotaFullError as error:
+        metrics.reject(rate_limited=True)
+        await _release_aggregate_lease(quota_lease, lease, generated=0)
+        return _public_error(
+            status_code=429,
+            message="global public demo quota exceeded",
+            code="rate_limit_exceeded",
+            headers={"Retry-After": str(error.retry_after)},
+        )
+    except _CapacityFullError:
+        metrics.reject()
+        await _release_aggregate_lease(quota_lease, lease, generated=0)
+        return _public_error(
+            status_code=429, message="public demo queue is full", code="queue_full"
+        )
+    except (RunnerQueueFullError, RunnerUnavailableError):
+        metrics.reject()
+        await _release_aggregate_lease(quota_lease, lease, generated=0)
+        return _public_error(
+            status_code=503, message="public demo is offline", code="service_unavailable"
+        )
+    except TimeoutError:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at), timed_out=True)
+        if submitted is not None:
+            await _cancel_handles(runner, submitted.handles)
+        await _release_aggregate_lease(quota_lease, lease, generated=0)
+        return _public_error(
+            status_code=504, message="generation timed out", code="request_timeout"
+        )
+    except asyncio.CancelledError:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        if submitted is not None:
+            await _cancel_handles(runner, submitted.handles)
+        await _release_aggregate_lease(quota_lease, lease, generated=0)
+        raise
+    except Exception:  # noqa: BLE001
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        if submitted is not None:
+            await _cancel_handles(runner, submitted.handles)
+        await _release_aggregate_lease(quota_lease, lease, generated=0)
+        return _public_error(status_code=500, message="generation failed", code="internal_error")
+
+    created = int(time.time())
+    asserted = submitted
+    asserted_handles = asserted.handles
+    if branch_input.stream:
+        lifecycle = _BranchStreamLifecycle(
+            runner=runner,
+            request_ids=asserted_handles.request_ids,
+            lease=lease,
+            quota_lease=quota_lease,
+            metrics=metrics,
+            reserved_tokens=aggregate_token_budget,
+        )
+        stream = _stream_branches(
+            handles=asserted_handles,
+            lifecycle=lifecycle,
+            tokenizer=tokenizer,
+            deadline=deadline,
+            clock=clock,
+            started_at=started_at,
+            eos_token_id=tokenizer.eos_token_id,
+            history_truncated=asserted.history_truncated,
+            retained_history_tokens=asserted.retained_history_tokens,
+        )
+        return _PublicStreamingResponse(
+            stream,
+            lifecycle=lifecycle,
+            clock=clock,
+            started_at=started_at,
+            headers={
+                "Cache-Control": "no-cache, no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    try:
+        results = await _await_all_branches(
+            runner=runner,
+            handles=asserted_handles,
+            tokenizer=tokenizer,
+            deadline=deadline,
+            eos_token_id=tokenizer.eos_token_id,
+            history_truncated=asserted.history_truncated,
+            retained_history_tokens=asserted.retained_history_tokens,
+            request=request,
+        )
+    except TimeoutError:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at), timed_out=True)
+        await _release_aggregate_lease(quota_lease, lease, generated=aggregate_token_budget)
+        return _public_error(
+            status_code=504, message="generation timed out", code="request_timeout"
+        )
+    except ClientDisconnect:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        await _release_aggregate_lease(quota_lease, lease, generated=aggregate_token_budget)
+        return _public_error(
+            status_code=499, message="client disconnected", code="client_disconnected"
+        )
+    except asyncio.CancelledError:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        await _release_aggregate_lease(quota_lease, lease, generated=aggregate_token_budget)
+        raise
+    except Exception:  # noqa: BLE001
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+        _log_request_failure(asserted_handles.request_ids[0])
+        await _release_aggregate_lease(quota_lease, lease, generated=aggregate_token_budget)
+        return _public_error(status_code=500, message="generation failed", code="internal_error")
+    generated = sum(result.token_count for result in results)
+    all_branches_succeeded = all(result.finish_reason in {"stop", "length"} for result in results)
+    settled_tokens = generated if all_branches_succeeded else aggregate_token_budget
+    await _release_aggregate_lease(quota_lease, lease, generated=settled_tokens)
+    if all_branches_succeeded:
+        metrics.complete(generated_tokens=generated, latency_seconds=_elapsed(clock, started_at))
+    else:
+        metrics.fail(latency_seconds=_elapsed(clock, started_at))
+    latency_ms = round(_elapsed(clock, started_at) * 1000, 3)
+    branches = [
+        _branch_document(
+            branch_id=index,
+            seed=asserted_handles.seeds[index],
+            text=result.text,
+            token_count=result.token_count,
+            finish_reason=result.finish_reason,
+            request_id=result.request_id,
+            history_truncated=result.history_truncated,
+            retained_history_tokens=result.retained_history_tokens,
+        )
+        for index, result in enumerate(results)
+    ]
+    return JSONResponse(
+        {
+            "object": "story_branches",
+            "created": created,
+            "model": info.model_id,
+            "request_id": asserted_handles.request_ids[0],
+            "history_truncated": asserted.history_truncated,
+            "retained_history_tokens": asserted.retained_history_tokens,
+            "branches": branches,
+            "timing": {"aggregate_ms": latency_ms},
+        }
+    )
+
+
+async def _release_aggregate_lease(
+    quota_lease: _GlobalQuotaLease | None,
+    lease: _CapacityLease | None,
+    *,
+    generated: int,
+) -> None:
+    """Release the aggregate capacity lease and settle quota exactly once."""
+    if quota_lease is not None:
+        await quota_lease.settle(generated)
+    if lease is not None:
+        await lease.release()
+
+
+async def _await_all_branches(  # noqa: PLR0913
+    *,
+    runner: EngineRunner,
+    handles: _BranchHandles,
+    tokenizer: TokenizerProtocol,
+    deadline: float,
+    eos_token_id: int | None,
+    history_truncated: bool,
+    retained_history_tokens: int,
+    request: Request,
+) -> list[_BranchOutcome]:
+    """Await all three branch futures unless the client disconnects, times out, or cancels.
+
+    Timeout, disconnect, cancellation, and unexpected failure all cancel the
+    three outstanding handles exactly once and raise a bounded error; the
+    caller's outer block is responsible for releasing the aggregate lease/quota.
+    """
+    futures = [asyncio.wrap_future(handle.future) for handle in handles.handles]
+    outcomes: list[_BranchOutcome] = []
+
+    async def _await_outcomes() -> list[object]:
+        return await asyncio.gather(*futures, return_exceptions=True)
+
+    stop = asyncio.Event()
+    disconnect_task = asyncio.create_task(_wait_for_disconnect(request, stop))
+    await_task = asyncio.create_task(_await_outcomes())
+    awaited: list[object]
+    try:
+        loop = asyncio.get_running_loop()
+        done, _pending = await asyncio.wait(
+            (await_task, disconnect_task),
+            timeout=max(0.0, deadline - loop.time()),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if disconnect_task in done:
+            await _cancel_handles(runner, handles)
+            raise ClientDisconnect
+        if await_task not in done:
+            await _cancel_handles(runner, handles)
+            raise TimeoutError
+        awaited = await_task.result()
+    except asyncio.CancelledError:
+        await _cancel_handles(runner, handles)
+        raise
+    finally:
+        _ = stop.set()
+        if not await_task.done():
+            _ = await_task.cancel()
+        _ = await asyncio.gather(await_task, disconnect_task, return_exceptions=True)
+
+    for index, outcome in enumerate(awaited):
+        request_id = handles.request_ids[index]
+        if isinstance(outcome, BaseException):
+            outcomes.append(
+                _BranchOutcome(
+                    text="",
+                    token_count=0,
+                    finish_reason="error",
+                    request_id=request_id,
+                    history_truncated=history_truncated,
+                    retained_history_tokens=retained_history_tokens,
+                )
+            )
+            continue
+        terminal = cast("RunnerResult", outcome)
+        text = tokenizer.decode(terminal.generated_tokens, skip_special_tokens=True)
+        finish = _branch_finish_reason(
+            status=terminal.status,
+            generated_tokens=terminal.generated_tokens,
+            eos_token_id=eos_token_id,
+        )
+        outcomes.append(
+            _BranchOutcome(
+                text=text,
+                token_count=len(terminal.generated_tokens),
+                finish_reason=finish,
+                request_id=request_id,
+                history_truncated=history_truncated,
+                retained_history_tokens=retained_history_tokens,
+            )
+        )
+    return outcomes
+
+
+async def _cancel_handles(runner: EngineRunner, handles: _BranchHandles) -> None:
+    for request_id in handles.request_ids:
+        await _cancel_safely(runner, request_id)
+
+
+@dataclass(slots=True)
+class _BranchStreamLifecycle:
+    """Track three-branch SSE cleanup and release the aggregate lease once."""
+
+    runner: EngineRunner
+    request_ids: tuple[str, ...]
+    lease: _CapacityLease
+    quota_lease: _GlobalQuotaLease
+    metrics: _PublicMetrics
+    reserved_tokens: int = 0
+    generated_tokens: int = 0
+    terminal_recorded: bool = False
+    completed_normally: bool = False
+    cleanup_task: asyncio.Task[None] | None = field(default=None, init=False)
+
+    def record_token(self) -> None:
+        self.generated_tokens += 1
+
+    def complete(self, *, generated_tokens: int, latency_seconds: float) -> None:
+        self.generated_tokens = generated_tokens
+        self.completed_normally = True
+        if self.terminal_recorded:
+            return
+        self.terminal_recorded = True
+        self.metrics.complete(generated_tokens=generated_tokens, latency_seconds=latency_seconds)
+
+    def fail(self, *, latency_seconds: float, timed_out: bool = False) -> None:
+        if self.terminal_recorded:
+            return
+        self.terminal_recorded = True
+        self.metrics.fail(latency_seconds=latency_seconds, timed_out=timed_out)
+
+    async def cleanup(self, *, cancel: bool) -> None:
+        if self.cleanup_task is None:
+            self.cleanup_task = asyncio.create_task(self._cleanup_once(cancel=cancel))
+        cleanup_task = self.cleanup_task
+        interrupted = False
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                interrupted = True
+        cleanup_task.result()
+        if interrupted:
+            raise asyncio.CancelledError
+
+    def settle_tokens(self) -> int:
+        """Return the token count to settle, charging the reserve when truncated.
+
+        A complete three-branch terminal describes every generated token, so it
+        settles the exact consumed count. Any abnormal termination (timeout,
+        disconnect, cancellation, or unknown error) may leave branches that
+        never reported a terminal event; settle the conservative reserved
+        aggregate budget rather than under-charging the daily output quota.
+        """
+        if self.completed_normally:
+            return self.generated_tokens
+        return self.reserved_tokens
+
+    async def _cleanup_once(self, *, cancel: bool) -> None:
+        if cancel:
+            for request_id in self.request_ids:
+                await _cancel_safely(self.runner, request_id)
+        await self.quota_lease.settle(self.settle_tokens())
+        await self.lease.release()
+
+
+async def _stream_branches(  # noqa: C901, PLR0912, PLR0913, PLR0915
+    *,
+    handles: _BranchHandles,
+    lifecycle: _BranchStreamLifecycle,
+    tokenizer: TokenizerProtocol,
+    deadline: float,
+    clock: Callable[[], float],
+    started_at: float,
+    eos_token_id: int | None,
+    history_truncated: bool,
+    retained_history_tokens: int,
+) -> AsyncGenerator[str, None]:
+    """Emit typed, multiplexed SSE events across three branches.
+
+    Each blocking per-request ``queue.Queue`` is drained by its own thread task
+    and merged into one async queue, so a slow branch never hides tokens or
+    terminal events from faster branches and the event loop is never blocked.
+    One branch failure emits that branch's terminal and keeps draining the
+    others; ``done`` is emitted exactly once after all branches are terminal.
+    """
+    branch_count = len(handles.handles)
+    stream_queues = [handle.stream_queue for handle in handles.handles]
+    if any(stream_queue is None for stream_queue in stream_queues):
+        lifecycle.fail(latency_seconds=_elapsed(clock, started_at))
+        yield _sse_error("generation failed", "internal_error")
+        return
+
+    for branch_id in range(branch_count):
+        yield _sse_branch_event(
+            "branch_started",
+            branch_id=branch_id,
+            seed=handles.seeds[branch_id],
+            request_id=handles.request_ids[branch_id],
+            history_truncated=history_truncated,
+            retained_history_tokens=retained_history_tokens,
+        )
+
+    merged: asyncio.Queue[tuple[int, StreamEvent]] = asyncio.Queue()
+
+    terminal_reasons: list[str | None] = [None] * branch_count
+    terminal_counts: list[int] = [0] * branch_count
+    generated_token_ids: list[list[int]] = [[] for _ in range(branch_count)]
+    token_indices = [0] * branch_count
+    terminal_reached = 0
+    completed_normally = False
+
+    async def _drain_branch(branch_id: int, stream_queue: Queue[StreamEvent]) -> None:
+        while True:
+            try:
+                event = await asyncio.to_thread(stream_queue.get, block=True, timeout=0.1)
+            except queue.Empty:
+                continue
+            await merged.put((branch_id, event))
+            if event.event_type is not StreamEventType.TOKEN:
+                return
+
+    drainers = [
+        asyncio.create_task(_drain_branch(branch_id, cast("Queue[StreamEvent]", stream_queue)))
+        for branch_id, stream_queue in enumerate(stream_queues)
+    ]
+
+    try:
+        async with asyncio.timeout_at(deadline):
+            while terminal_reached < branch_count:
+                branch_id, event = await merged.get()
+                if event.event_type is StreamEventType.TOKEN:
+                    if event.token_id is None:
+                        continue
+                    lifecycle.record_token()  # count every token event exactly once
+                    generated_token_ids[branch_id].append(event.token_id)
+                    snapshot = _display_snapshot(tokenizer, generated_token_ids[branch_id])
+                    yield _sse_branch_event(
+                        "token",
+                        branch_id=branch_id,
+                        text=snapshot,
+                        token_index=token_indices[branch_id],
+                    )
+                    token_indices[branch_id] += 1
+                    continue
+                if event.event_type is StreamEventType.FINISHED and event.result is not None:
+                    reason = _branch_finish_reason(
+                        status=event.result.status,
+                        generated_tokens=event.result.generated_tokens,
+                        eos_token_id=eos_token_id,
+                    )
+                    terminal_counts[branch_id] = len(event.result.generated_tokens)
+                elif event.event_type is StreamEventType.CANCELLED:
+                    reason = "cancelled"
+                else:
+                    reason = "error"
+                terminal_reasons[branch_id] = reason
+                terminal_reached += 1
+                yield _sse_branch_finished(
+                    branch_id=branch_id,
+                    finish_reason=reason,
+                    token_count=terminal_counts[branch_id],
+                    seed=handles.seeds[branch_id],
+                    request_id=handles.request_ids[branch_id],
+                    history_truncated=history_truncated,
+                    retained_history_tokens=retained_history_tokens,
+                )
+            lifecycle.complete(
+                generated_tokens=lifecycle.generated_tokens,
+                latency_seconds=_elapsed(clock, started_at),
+            )
+            yield _sse_branch_done()
+            yield "data: [DONE]\n\n"
+            completed_normally = True
+    except TimeoutError:
+        lifecycle.fail(latency_seconds=_elapsed(clock, started_at), timed_out=True)
+        yield _sse_error("generation request timed out", "request_timeout")
+    except (asyncio.CancelledError, GeneratorExit):
+        lifecycle.fail(latency_seconds=_elapsed(clock, started_at))
+        raise
+    except Exception:  # noqa: BLE001
+        lifecycle.fail(latency_seconds=_elapsed(clock, started_at))
+        yield _sse_error("generation failed", "internal_error")
+    finally:
+        for task in drainers:
+            _ = task.cancel()
+        _ = await asyncio.gather(*drainers, return_exceptions=True)
+        await lifecycle.cleanup(cancel=not completed_normally)
+
+
+def _sse_branch_event(  # noqa: PLR0913
+    event_type: str,
+    *,
+    branch_id: int,
+    text: str = "",
+    seed: int | None = None,
+    request_id: str | None = None,
+    token_index: int | None = None,
+    history_truncated: bool | None = None,
+    retained_history_tokens: int | None = None,
+) -> str:
+    payload: dict[str, JsonValue] = {
+        "type": event_type,
+        "branch_id": branch_id,
+        "text": text,
+    }
+    if seed is not None:
+        payload["seed"] = seed
+    if request_id is not None:
+        payload["request_id"] = request_id
+    if token_index is not None:
+        payload["token_index"] = token_index
+    if history_truncated is not None:
+        payload["history_truncated"] = history_truncated
+    if retained_history_tokens is not None:
+        payload["retained_history_tokens"] = retained_history_tokens
+    return _sse_data(payload)
+
+
+def _sse_branch_finished(  # noqa: PLR0913
+    *,
+    branch_id: int,
+    finish_reason: str,
+    token_count: int | None = None,
+    seed: int | None = None,
+    request_id: str | None = None,
+    history_truncated: bool | None = None,
+    retained_history_tokens: int | None = None,
+) -> str:
+    payload: dict[str, JsonValue] = {
+        "type": "branch_finished",
+        "branch_id": branch_id,
+        "finish_reason": finish_reason,
+    }
+    if token_count is not None:
+        payload["token_count"] = token_count
+    if seed is not None:
+        payload["seed"] = seed
+    if request_id is not None:
+        payload["request_id"] = request_id
+    if history_truncated is not None:
+        payload["history_truncated"] = history_truncated
+    if retained_history_tokens is not None:
+        payload["retained_history_tokens"] = retained_history_tokens
+    return _sse_data(payload)
+
+
+def _sse_branch_done() -> str:
+    return _sse_data({"type": "done"})
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the explicit public-demo command parser."""
     parser = argparse.ArgumentParser(
@@ -1922,7 +3244,11 @@ def build_runtime(
     if tokenizer_path is None or not tokenizer_path.is_file():
         _invalid("tokenizer must name an existing local file")
 
-    tokenizer = CharTokenizer.load(tokenizer_path)
+    tokenizer = load_tokenizer(tokenizer_path)
+    bpe_tokenizer = tokenizer.model_family == BPE_MODEL_FAMILY
+    if bpe_tokenizer:
+        _ = tokenizer.vocab_size  # force lazy BPE backend unless char
+        _ = tokenizer.special_token_id("<bos>")
     experiment = load_checkpoint_config(checkpoint_path).resolve_vocab_size(tokenizer.vocab_size)
     if experiment.runtime.device != "cpu":
         _invalid("public demo supports CPU checkpoints only")
@@ -1941,13 +3267,17 @@ def build_runtime(
         checkpoint_sha256=file_sha256(checkpoint_path),
         tokenizer_sha256=file_sha256(tokenizer_path),
         config=runtime_config,
+        tokenizer_type=tokenizer.tokenizer_type,
+        model_family=tokenizer.model_family,
     )
     info = PublicDemoInfo(
         project_version=__version__,
-        model_id=MODEL_ID,
+        model_id=_STORY_MODEL_ID if bpe_tokenizer else MODEL_ID,
         executor_name=runtime_config.executor.value,
         kv_cache_backend=runtime_config.kv_cache_backend.value,
         prefix_cache_enabled=runtime_config.prefix_cache,
+        story_forge_enabled=bpe_tokenizer,
+        prediction_lab_enabled=bpe_tokenizer,
     )
     app = create_public_demo_app(
         runner=runtime.runner,
@@ -1955,6 +3285,7 @@ def build_runtime(
         block_size=experiment.data.block_size,
         policy=settings.policy,
         info=info,
+        model=model,
     )
     return app, runtime.runner, server
 

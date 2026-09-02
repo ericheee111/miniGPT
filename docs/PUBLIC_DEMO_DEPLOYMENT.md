@@ -11,7 +11,7 @@ GitHub Pages static site
 Tailscale Funnel (*.ts.net)
         │
         ▼
-127.0.0.1:8000
+127.0.0.1:8001
         │
         ▼
 minigpt demo-serve → EngineRunner → ServingRuntime → local CPU model
@@ -20,7 +20,7 @@ minigpt demo-serve → EngineRunner → ServingRuntime → local CPU model
 - Pages artifact 只包含 `web/` 的固定静态资源和 JSON 编码的 `DEMO_API_BASE`；
 - checkpoint、tokenizer、Tailscale 配置、Prompt、本机路径和日志不进入 Pages 或 Git；
 - backend/Funnel 离线时，Generate 禁用，静态项目介绍、架构、Evidence 和示例仍完整可用；
-- 页面只做字符级文本续写，不是通用问答助手或 ChatGPT 替代品；
+- 页面提供受控 Story Forge 微型冒险、Prediction Lab 与 Recorded Systems Lab，不是通用问答助手或 ChatGPT 替代品；
 - 不要向 Demo 输入个人信息、凭据、商业秘密或其他敏感内容；
 - 其他本地插件和 tunnel 服务完全在本方案范围之外，launcher 不查询、不停止也不修改它们。
 
@@ -38,8 +38,8 @@ py -3.14 -m venv .venv
 准备相互匹配的 checkpoint v2 和 tokenizer，例如：
 
 ```text
-checkpoints/reference/latest.pt
-data/processed/tokenizer.json
+checkpoints/story_forge_5m/latest.pt
+data/story_forge/tokenizer.json
 ```
 
 这些目录已 gitignore。不要把权重、tokenizer 或它们的绝对路径复制到 `web/`、`_site/`、GitHub Release 或 Git history。
@@ -64,8 +64,8 @@ tailscale status --json
 ```powershell
 $env:PUBLIC_ORIGIN = "https://ericheee111.github.io"
 $env:DEMO_ENABLED = "1"
-$env:MINIGPT_CHECKPOINT = "checkpoints/reference/latest.pt"
-$env:MINIGPT_TOKENIZER = "data/processed/tokenizer.json"
+$env:MINIGPT_CHECKPOINT = "checkpoints/story_forge_5m/latest.pt"
+$env:MINIGPT_TOKENIZER = "data/story_forge/tokenizer.json"
 ```
 
 `PUBLIC_ORIGIN` 是确切的 GitHub Pages HTTPS origin，不包含 `/miniGPT/` path，也不能是 `*`。`DEMO_ENABLED=1` 是显式 kill switch 授权。
@@ -73,21 +73,21 @@ $env:MINIGPT_TOKENIZER = "data/processed/tokenizer.json"
 ## 5. 启动 backend 和 Tailscale Funnel
 
 ```powershell
-.\scripts\start_public_demo_tailscale.ps1
+.\scripts\start_story_forge_demo.ps1 -Port 8001
 ```
 
 脚本会：
 
 1. 检查 Tailscale CLI、登录/online 状态、`.venv`、config、checkpoint、tokenizer、origin 与 kill switch；
-2. 仅用 `127.0.0.1:8000` 启动 `minigpt demo-serve`；
+2. 仅用 `127.0.0.1:8001` 启动 `minigpt demo-serve`；
 3. 等待 `/healthz` 和安全的 `/demo/info`；
 4. 检查 `tailscale funnel status --json`，拒绝覆盖 443 上的其他 Serve/Funnel target；
-5. 执行 `tailscale funnel --bg --yes 8000`，再从 JSON 状态精确解析 `*.ts.net` URL；
+5. 执行 `tailscale funnel --bg --yes 8001`，再从 JSON 状态精确解析 `*.ts.net` URL；
 6. 打印 `DEMO_API_BASE=https://minigpt-demo.<tailnet>.ts.net`；
 7. 把 backend stdout/stderr 和精确 PID/start-time 状态写到 gitignored 的 `outputs/public-demo/`；
 8. 重复执行时复用健康的同一 backend/Funnel，不创建重复进程或 endpoint。
 
-脚本不打开 public bind，不修改 Windows firewall/router，不运行 node-wide Tailscale shutdown，也不按进程名批量停止服务。若 8000 已被非本脚本管理的 HTTP 服务占用，它会报错而不会接管或终止该进程。
+脚本不打开 public bind，不修改 Windows firewall/router，不运行 node-wide Tailscale shutdown，也不按进程名批量停止服务。 旧版回滚工具 `start_public_demo_tailscale.ps1` 与 `stop_public_demo_tailscale.ps1` 仍保留，但 Story Forge 正式部署使用专用脚本。若 8000 已被非本脚本管理的 HTTP 服务占用，它会报错而不会接管或终止该进程。
 
 ## 6. 配置 GitHub Pages
 
@@ -125,55 +125,55 @@ $env:DEMO_API_BASE = ""
 
 ## 8. 默认配额和 kill switch
 
-`configs/public_demo.yaml` 的默认公网限制为：
+`configs/story_forge_public_demo.yaml` 的默认公网限制为：
 
 - 2 个 active requests、8 个 queued requests；
-- Prompt 最多 256 characters/encoded tokens；
-- 每次最多 96 generated tokens；
+- Story history 最多 10000 characters，并受 512-token context 约束；
+- 每个 action 固定 3 个分支，每分支最多 64 generated tokens；
 - 45 秒总 timeout；
 - `global_requests_per_hour: 60`；
 - `global_generated_tokens_per_day: 10000`；
-- `streaming_enabled: true`，在 2026-08-31 真实 Funnel 验收通过后显式启用；
+- `streaming_enabled: true`，部署时仍必须重新验证真实 Funnel 分块、Abort 与资源清理；
 - `enabled: false`，只能由 `DEMO_ENABLED=1` 显式打开。
 
 两个 global quotas 都是单进程、线程安全且与 client IP/XFF 无关。请求 quota 只在 runner 接受提交时计数；token quota 在活跃请求期间先做 hard reservation，终态再结算实际生成 token。流式和非流式使用同一配额与 cleanup 路径。
 
 ## 9. localhost 验收
 
-先验证默认非流式模式：
+先检查身份与空闲资源：
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8000/healthz
-Invoke-RestMethod http://127.0.0.1:8000/demo/info
-Invoke-RestMethod http://127.0.0.1:8000/demo/metrics
+Invoke-RestMethod http://127.0.0.1:8001/healthz
+Invoke-RestMethod http://127.0.0.1:8001/demo/info
+Invoke-RestMethod http://127.0.0.1:8001/demo/metrics
+```
 
+`/demo/info` 必须报告 `project_version=1.1.0`、`model_id=minigpt-story-forge`，且 Story Forge、Prediction Lab、Systems Lab 均为 true。
+
+非流式三分支请求：
+
+```powershell
 $body = @{
-    model = "minigpt-char"
-    prompt = "ROMEO:"
-    max_tokens = 32
-    temperature = 0.8
+    world = "space"
+    tone = "mysterious"
+    theme = "discovery"
+    opening = "A small repair robot heard a signal beneath the station."
+    seed = 1337
+    branch_count = 3
+    max_tokens = 24
     stream = $false
-    seed = 42
 } | ConvertTo-Json
 
 Invoke-RestMethod `
-    -Uri http://127.0.0.1:8000/v1/completions `
+    -Uri http://127.0.0.1:8001/demo/story/branches `
     -Method Post `
     -ContentType application/json `
     -Body $body
 ```
 
-正式 config 已启用 SSE；重启 backend 后执行：
+流式请求使用相同 body，把 `stream` 改为 true，并用浏览器 `fetch` + `ReadableStream` 或 `curl.exe -N --no-buffer`。必须观察到三个 `branch_started`、每个分支的 decoded-prefix token snapshots、三个 `branch_finished`、唯一 `done` 和唯一 `[DONE]`。
 
-```powershell
-$streamBody = $body -replace '"stream":\s*false', '"stream": true'
-curl.exe -N --no-buffer `
-    -H "Content-Type: application/json" `
-    --data $streamBody `
-    http://127.0.0.1:8000/v1/completions
-```
-
-验证 `[DONE]`、Stop/cancel、`active_requests=0`、`queued_requests=0`，以及 engine/KV 资源归零。需要验证保守 fallback 时，使用临时 config 把 `streaming_enabled` 设为 `false`；不要修改代码层的 fail-closed 默认值。
+Prediction Lab 使用 `/demo/predict/next` 和 `/demo/predict/score`。两者必须在 EngineRunner owner thread 上完成，不 sampling、不推进 request RNG、不写 request KV。断流或 Stop 后，`active_requests=0`、`queued_requests=0`，随后请求仍应成功。
 
 ## 10. 真实 Funnel 验收与 streaming 决策
 
@@ -195,7 +195,7 @@ curl.exe -N --no-buffer `
 
 若 Funnel SSE 失败或无法证明未缓冲，部署仍可继续，但必须保持 `streaming_enabled: false`。前端会禁用 stream 选项并直接发送一次 non-stream 请求，不会在 stream 失败后自动重试同一 Prompt。
 
-### 2026-08-31 验收记录
+### Legacy v1.0 公网验收记录（历史）
 
 - 基础公网请求经 Funnel 返回 HTTPS 200、精确 Pages origin CORS 和 3 个 completion tokens；关闭 streaming 时，直接 SSE 请求按策略返回 `streaming_disabled`。
 - 正式 config 的公网请求收到 32 个 token events、1 个 terminal event 和 `[DONE]`；首个 event 在 10.939 ms 到达，token events 跨越 69.555 ms，`[DONE]` 在 80.678 ms 到达，共记录 34 个不同到达时间，证明不是终态一次性缓冲。
@@ -204,20 +204,20 @@ curl.exe -N --no-buffer `
 
 本次正式验收绑定 source commit `bed5a4abeb1fe091024dca8d6c7e8116763bb9c4`。命令记录依次为：带显式四个环境变量执行 `scripts/start_public_demo_tailscale.ps1`；使用 `.venv\Scripts\python.exe -` 运行 Python 3.14/httpx `Client.stream()` 采集器；最后执行 `python -m json.tool` 严格解析。三条命令均为 exit 0。逐事件 trace、CORS、断流前后 metrics、后续请求和所有断言保存在 [`funnel-acceptance-20260831.json`](results/public-playground/funnel-acceptance-20260831.json)，该文件 SHA-256 为 `003569b5d6431d4a7dbe8593781c8d02d92f193b999ddb2eeafa04acc62cc0ab`。为遵守 no-Prompt/no-token logging，trace 只保留序号、到达时间、事件类型、字节数和收到的完整 SSE 行 SHA-256，不保存文本内容。
 
-### 2026-08-31 正式上线记录
+### Legacy v1.0 正式上线记录（历史）
 
 - GitHub Pages 已部署到 `https://ericheee111.github.io/miniGPT/`，Funnel API origin 为 `https://desktop-kdc7371.tail683fcc.ts.net`；repository variable `DEMO_API_BASE` 已保存同一公开 origin。
 - GitHub Actions run `33384943175` 的 attempt 2 在 source commit `e3b2b0d9075122c34631f54dcea8c399be9dc9ce` 上完成 build 与 deploy。为允许已审查 feature branch 首次发布而临时加入的 Pages environment branch rule 已在部署后移除，环境恢复为仅允许 `main`。
 - extension-free 浏览器从公开 Pages 完成 32-token SSE 请求：状态为 `Complete`，TTFT 32 ms，总耗时 113 ms，页面无 console error；公网断流清理继续由上述 hash-bound Funnel trace 证明。
-- 本次只推送 `codex/post-v1-public-playground`，没有把扩展合入 `main`。静态页面可持续访问；实时生成仍依赖本机 backend 与 Funnel 在线。
+- 上述记录只描述旧版 Public Playground。Story Forge 1.1 的合入、Pages 部署和 port-8001 Funnel cutover 必须以新的 PR、CI 和部署验收记录为准。
 
 ## 11. 停止与紧急关闭
 
 ```powershell
-.\scripts\stop_public_demo_tailscale.ps1
+.\scripts\stop_story_forge_demo.ps1 -DisableFunnel
 ```
 
-stopper 从 Funnel JSON 中确认 target 是 `http://127.0.0.1:8000` 后，只执行该 HTTPS 443 Funnel 的 `off`，并仅在 PID、可执行路径和 process start time 全部匹配 runtime state 时停止 backend。它不会执行 `tailscale down`，不会终止其他进程，也不会删除 Tailscale 登录状态。
+stopper 从 runtime state 与 Funnel JSON 确认 Story Forge target 后，按记录恢复旧 port-8000 target 或关闭该 Story Forge Funnel，并仅在 PID、可执行路径和 process start time 全部匹配时停止 backend。它不会执行 `tailscale down`，不会终止其他进程，也不会删除 Tailscale 登录状态。
 
 进一步 fail closed：
 
@@ -226,7 +226,7 @@ $env:DEMO_ENABLED = "0"
 $env:DEMO_API_BASE = ""
 ```
 
-随后重新构建 Pages 即成为 offline-only。若 stopper 报错，不要批量 kill；先只读检查 `tailscale funnel status --json`、`outputs/public-demo/runtime-state.json` 和 `Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8000`。
+随后重新构建 Pages 即成为 offline-only。若 stopper 报错，不要批量 kill；先只读检查 `tailscale funnel status --json`、`outputs/story-forge-demo/runtime-state.json` 和 `Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8001`。
 
 ## 12. Windows 防休眠与 Task Scheduler
 
@@ -235,7 +235,7 @@ $env:DEMO_API_BASE = ""
 可选 Task Scheduler 使用当前普通用户，在登录时执行：
 
 ```text
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "<REPO_ROOT>\scripts\start_public_demo_tailscale.ps1"
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "<REPO_ROOT>\scripts\start_story_forge_demo.ps1"
 ```
 
 不要选择 `Run with highest privileges`。先交互式验证 start/stop、配额和错误日志，再考虑调度。
@@ -266,3 +266,27 @@ Cloudflare Quick Tunnel **不推荐**：它使用不稳定的随机 URL、没有
 6. checkpoint/tokenizer 只在明确不再需要时单独删除。
 
 卸载 Funnel 不影响 GitHub Pages 上的静态作品集。
+
+## Story Forge v1.1 cutover
+
+Story Forge uses a separate loopback backend on port `6001` so the current `8000` demo can remain available during validation. The start script is a pre-cutover launcher, not a transactional Funnel migrator.
+
+1. Validate the local artifacts and start only the loopback backend:
+
+   ```powershell
+   ./scripts/start_story_forge_demo.ps1 -SkipFunnel -Port 8001
+   ```
+
+2. Verify `GET /healthz`, `GET /demo/info`, non-streaming and streaming `POST /demo/story/branches`, and both Prediction Lab endpoints. Confirm `active_requests=0` and `queued_requests=0` after completion and cancellation.
+3. Build the Pages site with the existing HTTPS Funnel base. The build must contain all four `web/data/*.json` recorded Systems Lab assets.
+4. Only after code, evidence, fresh-worktree tests, and feature-branch CI are green, intentionally repoint the Funnel:
+
+   ```powershell
+   ./scripts/start_story_forge_demo.ps1 -Port 8001
+   ``
+
+   This does not preserve or restore the previous Funnel mapping automatically. Keep the old backend running until the new public health, CORS, branch, SSE, prediction, and disconnect cleanup checks all pass.
+5. Run real desktop and mobile browser acceptance against the GitHub Pages URL. Confirm no console errors and that offline Systems Lab replay still works with the backend stopped.
+6. After acceptance, stop the legacy 8000 process separately. The Story Forge stop script only terminates the PID it recorded for the 8001 backend; it does not execute `tailscale down` and does not touch CodexPro/ngrok.
+
+The live demo has a global request quota, generated-token quota, bounded concurrency and queue, request timeouts, CORS allowlists, and a kill switch. It does not log prompts and does not offer a 24/7 SLA.

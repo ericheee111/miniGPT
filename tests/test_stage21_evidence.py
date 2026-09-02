@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from minigpt import __version__
 from minigpt.stage21_evidence import (
     Stage21EvidenceVerificationError,
     _verify_full_test_file_coverage,  # pyright: ignore[reportPrivateUsage]
@@ -14,7 +13,6 @@ from minigpt.stage21_evidence import (
     generate_stage21_evidence,
     generate_stage21_registry_evidence,
     generate_stage21_runtime_evidence,
-    generate_stage21_version_evidence,
     verify_stage21_evidence,
 )
 
@@ -130,12 +128,17 @@ def test_stage21_external_gate_evidence_rejects_absolute_command_paths(
 
 def test_stage21_version_registry_and_runtime_use_real_release_contracts(tmp_path: Path) -> None:
     root = tmp_path.cwd()
-    version_path = generate_stage21_version_evidence(root, tmp_path / "version.json")
+    # The v1.0.0 capstone is frozen: a post-v1 tree (1.1.0) can never mint a fresh
+    # v1.0.0 version contract, so the release gate keeps rejecting it.
     registry_path = generate_stage21_registry_evidence(root, tmp_path / "registry.json")
     runtime_path = generate_stage21_runtime_evidence(root, tmp_path / "runtime.json")
     version = cast(
         "dict[str, object]",
-        json.loads(version_path.read_text(encoding="utf-8")),
+        json.loads(
+            (
+                Path.cwd() / "docs" / "results" / "v1-release" / "evidence" / "version.json"
+            ).read_text(encoding="utf-8")
+        ),
     )
     registry = cast(
         "dict[str, object]",
@@ -146,7 +149,7 @@ def test_stage21_version_registry_and_runtime_use_real_release_contracts(tmp_pat
         json.loads(runtime_path.read_text(encoding="utf-8")),
     )
 
-    assert version["release_version"] == __version__ == "1.0.0"
+    assert version["release_version"] == "1.0.0"
     assert version["version_contract_passed"] is True
     assert registry["registry_first_stage"] == "7A"
     assert registry["registry_last_stage"] == "20"

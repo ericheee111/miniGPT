@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="miniGPT is a CPU-first, character-level GPT systems demo with auditable evidence."
+      content="miniGPT Story Forge is a CPU-first micro-adventure generator, prediction laboratory, and interactive inference-systems demonstration."
     >
     <meta name="color-scheme" content="dark light">
     <meta name="referrer" content="no-referrer">
@@ -13,176 +13,240 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; connect-src https:; font-src 'self'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'self'"
     >
-    <title>miniGPT Playground · CPU-first GPT Systems Demo</title>
+    <title>miniGPT Story Forge · From-scratch GPT Systems Lab</title>
     <link rel="stylesheet" href="./styles.css">
     <script src="./config.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
-    <a class="skip-link" href="#playground">Skip to Playground</a>
+    <a class="skip-link" href="#story-forge">Skip to Story Forge</a>
     <header class="site-header">
-      <a class="brand" href="#top" aria-label="miniGPT Playground home">miniGPT<span>_</span></a>
+      <a class="brand" href="#top" aria-label="miniGPT Story Forge home">
+        miniGPT<span aria-hidden="true">_</span>
+      </a>
       <nav aria-label="Primary navigation">
-        <a href="#playground">Playground</a>
-        <a href="#architecture">Architecture</a>
+        <a href="#story-forge">Story Forge</a>
+        <a href="#prediction-lab">Prediction Lab</a>
+        <a href="#systems-lab">Systems Lab</a>
         <a href="#evidence">Evidence</a>
-        <a href="#privacy">Limits</a>
       </nav>
-      <a
-        class="header-link"
-        href="https://github.com/ericheee111/miniGPT"
-        target="_blank"
-        rel="noreferrer"
-      >GitHub ↗</a>
+      <div class="header-actions">
+        <div class="backend-chip checking" id="backend-chip" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <strong id="backend-state">Checking model…</strong>
+        </div>
+        <a
+          class="header-link"
+          href="https://github.com/ericheee111/miniGPT"
+          target="_blank"
+          rel="noreferrer"
+        >GitHub ↗</a>
+      </div>
     </header>
 
     <main id="top">
       <section class="hero shell" aria-labelledby="hero-title">
-        <p class="eyebrow">Post-v1 Public Playground</p>
-        <h1 id="hero-title">miniGPT Playground</h1>
-        <p class="hero-subtitle">CPU-first GPT Systems Demo</p>
-        <p class="hero-copy">
-          A small, inspectable character-level Transformer carried from training and exact resume
-          through KV caching, multi-request scheduling, HTTP/SSE serving, and hash-bound release
-          evidence.
-        </p>
-        <div class="scope-note" role="note">
-          <strong>Text continuation, not general chat.</strong>
-          This model continues characters in a Shakespeare-like corpus. It is not a general-purpose
-          question-answering assistant or a ChatGPT replacement.
+        <div class="hero-copy-block">
+          <p class="eyebrow">A post-v1 miniGPT experience</p>
+          <h1 id="hero-title">Build a tiny world.<br>Watch the model branch.</h1>
+          <p class="hero-subtitle">
+            Story Forge turns a from-scratch 4.9M-parameter GPT into three playable
+            micro-adventure paths—then opens the model and serving system so you can inspect how
+            every token moves.
+          </p>
+          <div class="scope-note" role="note">
+            <strong>Controlled story continuation, not general chat.</strong>
+            The model was trained from scratch on pinned SimpleStories data. It can make playful
+            short continuations; it is not a factual assistant and does not understand the world.
+          </div>
+          <div class="hero-actions">
+            <a class="button primary" href="#story-forge">Forge three paths</a>
+            <a class="button secondary" href="#systems-lab">Replay the serving system</a>
+          </div>
         </div>
-        <div class="hero-actions">
-          <a class="button primary" href="#playground">Try the local model</a>
-          <a
-            class="button secondary"
-            href="https://github.com/ericheee111/miniGPT/blob/main/docs/PROJECT_OVERVIEW.md"
-            target="_blank"
-            rel="noreferrer"
-          >Read the whitepaper</a>
+        <div class="hero-orbit" aria-hidden="true">
+          <div class="orbit-ring orbit-one"></div>
+          <div class="orbit-ring orbit-two"></div>
+          <div class="orbit-core">GPT</div>
+          <div class="orbit-node node-a">A</div>
+          <div class="orbit-node node-b">B</div>
+          <div class="orbit-node node-c">C</div>
         </div>
         <dl class="hero-facts" aria-label="Project facts">
-          <div><dt>Runtime</dt><dd>PyTorch · CPU</dd></div>
-          <div><dt>Tokenizer</dt><dd>Character level</dd></div>
-          <div><dt>Release</dt><dd>v1.0.0 scope complete</dd></div>
+          <div><dt>Model</dt><dd>4,928,144 parameters</dd></div>
+          <div><dt>Context</dt><dd>512 BPE tokens</dd></div>
+          <div><dt>Runtime</dt><dd>PyTorch · local CPU</dd></div>
+          <div><dt>Branches</dt><dd>3 request-local RNG streams</dd></div>
+          <div><dt>Release</dt><dd>miniGPT 1.1</dd></div>
           <div><dt>Verification</dt><dd>Windows + Linux CI</dd></div>
         </dl>
       </section>
 
-      <section id="playground" class="section shell" aria-labelledby="playground-title">
+      <section id="story-forge" class="section shell" aria-labelledby="story-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Live inference boundary</p>
-            <h2 id="playground-title">Character continuation Playground</h2>
+            <p class="eyebrow">Live model · three concurrent requests</p>
+            <h2 id="story-title">Story Forge</h2>
           </div>
-          <div class="backend-chip offline" id="backend-chip" role="status" aria-live="polite">
-            <span aria-hidden="true"></span>
-            <strong id="backend-state">Checking backend…</strong>
-          </div>
+          <p class="section-summary">
+            Choose a world, tone, and theme. The same context is submitted with three derived seeds,
+            producing reproducible alternatives without sharing request RNG state.
+          </p>
         </div>
 
-        <div class="playground-grid">
-          <form id="completion-form" class="card controls" novalidate>
-            <div class="field-group">
-              <label for="prompt">Prompt</label>
-              <textarea
-                id="prompt"
-                name="prompt"
-                rows="7"
-                maxlength="256"
-                required
-                spellcheck="false"
-                placeholder="ROMEO:"
-                aria-describedby="prompt-help"
-              ></textarea>
-              <p id="prompt-help" class="field-help">
-                Use characters from the training vocabulary. This page does not intentionally
-                persist prompts.
-              </p>
-            </div>
+        <div class="offline-banner" id="offline-banner" hidden role="status">
+          <strong>The local inference backend is offline.</strong>
+          The project, Prediction explanation, and recorded Systems Lab remain available. Live Story
+          Forge controls will return when the owner’s Windows machine reconnects.
+        </div>
 
-            <fieldset class="preset-group">
-              <legend>Shakespeare presets</legend>
-              <div class="preset-list">
-                <button type="button" class="preset" data-prompt="ROMEO:">ROMEO:</button>
-                <button type="button" class="preset" data-prompt="JULIET:">JULIET:</button>
-                <button type="button" class="preset" data-prompt="To be, or not to be">To be…</button>
-                <button type="button" class="preset" data-prompt="KING HENRY:">KING HENRY:</button>
+        <form id="story-form" class="forge-layout" novalidate>
+          <section class="card forge-controls" aria-labelledby="world-heading">
+            <div class="step-heading">
+              <span>01</span>
+              <div><p class="eyebrow">Set the stage</p><h3 id="world-heading">Choose a world</h3></div>
+            </div>
+            <fieldset class="world-fieldset">
+              <legend class="visually-hidden">Story world</legend>
+              <div class="world-grid">
+                <label class="world-card world-space">
+                  <input type="radio" name="world" value="space" checked>
+                  <span class="world-illustration"><i></i><b></b></span>
+                  <strong>Space Expedition</strong>
+                  <small>Signals, stations, strange skies</small>
+                </label>
+                <label class="world-card world-forest">
+                  <input type="radio" name="world" value="forest">
+                  <span class="world-illustration"><i></i><b></b></span>
+                  <strong>Enchanted Forest</strong>
+                  <small>Hidden paths, gentle magic</small>
+                </label>
+                <label class="world-card world-robot">
+                  <input type="radio" name="world" value="robot">
+                  <span class="world-illustration"><i></i><b></b></span>
+                  <strong>Robot Workshop</strong>
+                  <small>Odd machines, inventive friends</small>
+                </label>
+                <label class="world-card world-mystery">
+                  <input type="radio" name="world" value="mystery">
+                  <span class="world-illustration"><i></i><b></b></span>
+                  <strong>Cozy Mystery</strong>
+                  <small>Small clues, cozy secrets</small>
+                </label>
               </div>
             </fieldset>
 
-            <div class="parameter-grid">
-              <div class="field-group">
-                <label for="max-tokens">Max tokens</label>
-                <input
-                  id="max-tokens"
-                  name="max_tokens"
-                  type="number"
-                  min="1"
-                  max="96"
-                  value="48"
-                  required
-                >
-              </div>
-              <div class="field-group">
-                <label for="temperature">Temperature</label>
-                <input
-                  id="temperature"
-                  name="temperature"
-                  type="number"
-                  min="0.1"
-                  max="1.2"
-                  step="0.1"
-                  value="0.8"
-                  required
-                >
-              </div>
-              <div class="field-group">
-                <label for="seed">Seed</label>
-                <input
-                  id="seed"
-                  name="seed"
-                  type="number"
-                  min="0"
-                  max="2147483647"
-                  value="42"
-                  required
-                >
-              </div>
-              <div class="toggle-field">
-                <input id="stream" name="stream" type="checkbox" disabled>
-                <label for="stream">Stream tokens (after tunnel verification)</label>
-              </div>
+            <div class="control-pair">
+              <fieldset class="chip-fieldset">
+                <legend>Tone</legend>
+                <div class="chip-row">
+                  <label><input type="radio" name="tone" value="adventurous" checked><span>Adventurous</span></label>
+                  <label><input type="radio" name="tone" value="mysterious"><span>Mysterious</span></label>
+                  <label><input type="radio" name="tone" value="warm"><span>Warm</span></label>
+                  <label><input type="radio" name="tone" value="funny"><span>Funny</span></label>
+                </div>
+              </fieldset>
+              <fieldset class="chip-fieldset">
+                <legend>Theme</legend>
+                <div class="chip-row">
+                  <label><input type="radio" name="theme" value="discovery" checked><span>Discovery</span></label>
+                  <label><input type="radio" name="theme" value="friendship"><span>Friendship</span></label>
+                  <label><input type="radio" name="theme" value="logic"><span>Solve a clue</span></label>
+                  <label><input type="radio" name="theme" value="courage"><span>Courage</span></label>
+                </div>
+              </fieldset>
             </div>
+
+            <div class="field-group">
+              <label for="story-opening">Opening line <span>optional</span></label>
+              <textarea
+                id="story-opening"
+                name="opening"
+                rows="4"
+                maxlength="480"
+                spellcheck="true"
+                placeholder="A repair robot woke to a signal no one else could hear."
+                aria-describedby="opening-help"
+              ></textarea>
+              <p id="opening-help" class="field-help">
+                Leave blank for a world-specific starter. Chosen branches are kept only in this tab.
+              </p>
+            </div>
+
+            <details class="advanced-controls">
+              <summary>Sampling controls</summary>
+              <div class="parameter-grid">
+                <div class="field-group">
+                  <label for="story-seed">Base seed</label>
+                  <input id="story-seed" name="seed" type="number" min="0" max="2147483647" value="20260902" required>
+                </div>
+                <div class="field-group">
+                  <label for="story-max-tokens">Tokens per path</label>
+                  <input id="story-max-tokens" name="max_tokens" type="number" min="8" max="64" value="48" required>
+                </div>
+                <div class="toggle-field">
+                  <input id="story-stream" name="stream" type="checkbox" checked disabled>
+                  <label for="story-stream">Stream branch snapshots</label>
+                </div>
+              </div>
+            </details>
 
             <div class="control-actions">
-              <button id="generate" class="button primary" type="submit" disabled>Generate</button>
-              <button id="stop" class="button danger" type="button" disabled>Stop</button>
-              <button id="clear" class="button secondary" type="button">Clear</button>
+              <button id="forge-button" class="button primary" type="submit" disabled>Generate 3 paths</button>
+              <button id="story-stop" class="button danger" type="button" disabled>Stop</button>
+              <button id="story-reset" class="button secondary" type="button">New story</button>
             </div>
-            <p id="request-status" class="request-status" aria-live="polite">Waiting for backend status.</p>
-          </form>
-
-          <section class="card output-card" aria-labelledby="output-title">
-            <div class="output-heading">
-              <div>
-                <p class="eyebrow">Model output</p>
-                <h3 id="output-title">Continuation</h3>
-              </div>
-              <span id="output-mode" class="mode-badge">Static example</span>
-            </div>
-            <pre id="output" tabindex="0">ROMEO:
-But soft, what light through yonder window breaks?</pre>
-            <p id="output-note" class="output-note">
-              Static example shown while the local Windows backend is offline.
-            </p>
+            <p id="story-status" class="request-status" aria-live="polite">Checking the live model.</p>
           </section>
-        </div>
 
-        <section class="live-panel" aria-labelledby="live-title">
-          <div class="live-heading">
-            <p class="eyebrow">Observable boundary</p>
-            <h3 id="live-title">Live request panel</h3>
+          <section class="card story-canvas" aria-labelledby="story-canvas-title">
+            <div class="story-canvas-heading">
+              <div>
+                <p class="eyebrow">Current story · local memory only</p>
+                <h3 id="story-canvas-title">Your adventure</h3>
+              </div>
+              <span id="round-badge" class="mode-badge">Round 0 / 4</span>
+            </div>
+            <ol id="story-history" class="story-history" aria-live="polite">
+              <li class="empty-history">Choose a world and forge the first three paths.</li>
+            </ol>
+            <p id="history-warning" class="history-warning" hidden></p>
+            <div class="story-actions">
+              <button id="copy-story" class="button quiet" type="button" disabled>Copy story</button>
+              <button id="download-story" class="button quiet" type="button" disabled>Download .txt</button>
+            </div>
+          </section>
+        </form>
+
+        <section class="branch-section" aria-labelledby="branch-heading">
+          <div class="branch-heading-row">
+            <div><p class="eyebrow">Choose what happens next</p><h3 id="branch-heading">Three generated paths</h3></div>
+            <p>Each card is an independent scheduler request with a deterministic derived seed.</p>
           </div>
+          <div class="branch-grid" id="branch-grid">
+            <article class="branch-card" data-branch="0">
+              <div class="branch-card-heading"><span>Path A</span><em data-role="status">Idle</em></div>
+              <p class="branch-text" data-role="text">The first generated path will appear here.</p>
+              <dl class="branch-metrics"><div><dt>Seed</dt><dd data-role="seed">—</dd></div><div><dt>Tokens</dt><dd data-role="tokens">0</dd></div><div><dt>Finish</dt><dd data-role="finish">—</dd></div></dl>
+              <button class="button branch-choose" data-role="choose" type="button" disabled>Choose path A</button>
+            </article>
+            <article class="branch-card" data-branch="1">
+              <div class="branch-card-heading"><span>Path B</span><em data-role="status">Idle</em></div>
+              <p class="branch-text" data-role="text">The second generated path will appear here.</p>
+              <dl class="branch-metrics"><div><dt>Seed</dt><dd data-role="seed">—</dd></div><div><dt>Tokens</dt><dd data-role="tokens">0</dd></div><div><dt>Finish</dt><dd data-role="finish">—</dd></div></dl>
+              <button class="button branch-choose" data-role="choose" type="button" disabled>Choose path B</button>
+            </article>
+            <article class="branch-card" data-branch="2">
+              <div class="branch-card-heading"><span>Path C</span><em data-role="status">Idle</em></div>
+              <p class="branch-text" data-role="text">The third generated path will appear here.</p>
+              <dl class="branch-metrics"><div><dt>Seed</dt><dd data-role="seed">—</dd></div><div><dt>Tokens</dt><dd data-role="tokens">0</dd></div><div><dt>Finish</dt><dd data-role="finish">—</dd></div></dl>
+              <button class="button branch-choose" data-role="choose" type="button" disabled>Choose path C</button>
+            </article>
+          </div>
+        </section>
+
+        <section class="live-strip" aria-labelledby="live-heading">
+          <div><p class="eyebrow">Observable boundary</p><h3 id="live-heading">Live request panel</h3></div>
           <dl class="metric-grid">
             <div><dt>Status</dt><dd id="metric-status">Idle</dd></div>
             <div><dt>TTFT</dt><dd id="metric-ttft">—</dd></div>
@@ -196,96 +260,147 @@ But soft, what light through yonder window breaks?</pre>
         </section>
       </section>
 
-      <section id="architecture" class="section shell" aria-labelledby="architecture-title">
+      <section id="prediction-lab" class="section shell" aria-labelledby="prediction-title">
         <div class="section-heading">
-          <div>
-            <p class="eyebrow">System boundary</p>
-            <h2 id="architecture-title">Static portfolio, local compute</h2>
-          </div>
+          <div><p class="eyebrow">No sampling · no request KV mutation</p><h2 id="prediction-title">Prediction Lab</h2></div>
           <p class="section-summary">
-            GitHub Pages never receives model weights. The browser calls a Tailscale Funnel HTTPS
-            endpoint, which forwards to the loopback-only runtime on the owner’s PC.
+            Language models predict distributions, not truth. Inspect the next-token candidates,
+            reshape them with temperature, then score how surprising a sequence is to this model.
           </p>
         </div>
-        <div class="architecture-flow" aria-label="Public Playground request architecture">
-          <article><span>01</span><h3>GitHub Pages</h3><p>Always-on static HTML, CSS, JavaScript, evidence, and examples.</p></article>
-          <div class="flow-arrow" aria-hidden="true">HTTPS →</div>
-          <article><span>02</span><h3>Tailscale Funnel</h3><p>Public <code>*.ts.net</code> HTTPS endpoint; no model asset in Git.</p></article>
-          <div class="flow-arrow" aria-hidden="true">→</div>
-          <article><span>03</span><h3>127.0.0.1:8000</h3><p>Restricted FastAPI policy, CORS, queue, timeout, and rate limits.</p></article>
-          <div class="flow-arrow" aria-hidden="true">→</div>
-          <article><span>04</span><h3>miniGPT runtime</h3><p>Existing EngineRunner, scheduler, executor, tokenizer, and CPU model.</p></article>
+        <div class="lab-grid">
+          <form id="prediction-form" class="card prediction-controls" novalidate>
+            <div class="compact-control-grid">
+              <div class="field-group"><label for="predict-world">World</label><select id="predict-world"><option value="space">Space Expedition</option><option value="forest">Enchanted Forest</option><option value="robot">Robot Workshop</option><option value="mystery">Cozy Mystery</option></select></div>
+              <div class="field-group"><label for="predict-tone">Tone</label><select id="predict-tone"><option value="adventurous">Adventurous</option><option value="mysterious">Mysterious</option><option value="warm">Warm</option><option value="funny">Funny</option></select></div>
+              <div class="field-group"><label for="predict-theme">Theme</label><select id="predict-theme"><option value="discovery">Discovery</option><option value="friendship">Friendship</option><option value="logic">Solve a clue</option><option value="courage">Courage</option></select></div>
+            </div>
+            <div class="field-group">
+              <label for="prediction-text">Story text</label>
+              <textarea id="prediction-text" rows="5" maxlength="1000" required>A small robot opened the silent door and found</textarea>
+            </div>
+            <div class="guess-row">
+              <div class="field-group"><label for="prediction-guess">Your next-token guess <span>optional</span></label><input id="prediction-guess" maxlength="24" placeholder="light"></div>
+              <div class="field-group"><label for="prediction-top-k">Top candidates</label><input id="prediction-top-k" type="number" min="2" max="10" value="8" required></div>
+            </div>
+            <div class="control-actions">
+              <button id="predict-next" class="button primary" type="submit" disabled>Reveal distribution</button>
+              <button id="predict-score" class="button secondary" type="button" disabled>Score sequence</button>
+            </div>
+            <p id="prediction-status" class="request-status" aria-live="polite">Prediction Lab requires the live Story Forge model.</p>
+          </form>
+
+          <section class="card distribution-card" aria-labelledby="distribution-heading">
+            <div class="output-heading"><div><p class="eyebrow">Target distribution</p><h3 id="distribution-heading">Next token</h3></div><span id="guess-result" class="mode-badge">Not revealed</span></div>
+            <div id="candidate-list" class="candidate-list"><p class="empty-result">Run a prediction to inspect the top candidates.</p></div>
+          </section>
         </div>
+
+        <section class="temperature-section" aria-labelledby="temperature-heading">
+          <div class="branch-heading-row"><div><p class="eyebrow">Same logits, three sampling shapes</p><h3 id="temperature-heading">Temperature microscope</h3></div><p>Probabilities are recomputed in your browser with max-subtracted softmax.</p></div>
+          <div class="temperature-grid" id="temperature-grid">
+            <article class="card"><h4>Focused · 0.3</h4><div data-temperature="0.3" class="mini-distribution"><p>Reveal a distribution first.</p></div></article>
+            <article class="card"><h4>Balanced · 0.8</h4><div data-temperature="0.8" class="mini-distribution"><p>Reveal a distribution first.</p></div></article>
+            <article class="card"><h4>Exploratory · 1.2</h4><div data-temperature="1.2" class="mini-distribution"><p>Reveal a distribution first.</p></div></article>
+          </div>
+        </section>
+
+        <section class="card surprisal-card" aria-labelledby="surprisal-heading">
+          <div class="output-heading"><div><p class="eyebrow">Model-distribution measurement</p><h3 id="surprisal-heading">Sequence surprisal</h3></div><span id="perplexity-badge" class="mode-badge">Not scored</span></div>
+          <p class="lab-disclaimer">
+            Lower surprisal means this checkpoint assigned higher probability to the sequence. It is
+            not evidence of factual truth, authorship, quality, or semantic understanding.
+          </p>
+          <div id="surprisal-chips" class="surprisal-chips"><p class="empty-result">Score the sequence to see token-level surprise.</p></div>
+          <div class="table-scroll">
+            <table id="surprisal-table">
+              <caption>Accessible token-level surprisal values</caption>
+              <thead><tr><th scope="col">#</th><th scope="col">Token</th><th scope="col">NLL</th><th scope="col">Probability</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
-      <section class="section shell" aria-labelledby="stages-title">
+      <section id="systems-lab" class="section shell" aria-labelledby="systems-title">
         <div class="section-heading">
-          <div>
-            <p class="eyebrow">Engineering progression</p>
-            <h2 id="stages-title">Stage 1–21, compressed</h2>
-          </div>
+          <div><p class="eyebrow">Recorded verified scenarios · works offline</p><h2 id="systems-title">Systems Lab</h2></div>
           <p class="section-summary">
-            The post-v1 Playground is a deployment extension. It does not rename or extend the
-            completed Stage sequence.
+            Replay normalized events sourced from committed evidence. These are deterministic
+            records—not fabricated live telemetry and not arbitrary simulator input.
           </p>
         </div>
-        <ol class="stage-grid">
-          <li><span>01–06</span><h3>Model + training</h3><p>Character tokenizer, Transformer, optimizer, checkpoints, exact resume.</p></li>
-          <li><span>07–09</span><h3>Evidence + inference</h3><p>Reference training, mmap batching, explicit KV-cache generation.</p></li>
-          <li><span>10–12</span><h3>Serving control plane</h3><p>FIFO ownership, continuous batching, OpenAI-style HTTP and SSE.</p></li>
-          <li><span>13–15</span><h3>Paged KV + APC</h3><p>Block lifecycle, direct paged decode, prefix caching and suffix prefill.</p></li>
-          <li><span>16–18</span><h3>Pressure handling</h3><p>Chunk budgets, whole-request preemption, lazy KV reservation.</p></li>
-          <li><span>19</span><h3>Runtime policy</h3><p>Strict production-facing configuration and deterministic manifests.</p></li>
-          <li><span>20</span><h3>Unified CLI</h3><p>Installable commands and an explicit Project Doctor registry.</p></li>
-          <li><span>21</span><h3>v1 closure</h3><p>Fresh-install package gates, capstone Evidence, Windows/Linux CI.</p></li>
-        </ol>
+        <div class="systems-layout">
+          <aside class="card scenario-panel" aria-label="Systems Lab scenarios">
+            <button class="scenario-button active" data-scenario="continuous_batching" type="button"><span>01</span><strong>Continuous batching</strong><small>Request lanes and shared decode ticks</small></button>
+            <button class="scenario-button" data-scenario="automatic_prefix_cache" type="button"><span>02</span><strong>Prefix reuse</strong><small>Shared blocks and avoided prefill work</small></button>
+            <button class="scenario-button" data-scenario="kv_preemption" type="button"><span>03</span><strong>KV pressure</strong><small>Preempt, recompute, and resume</small></button>
+            <button class="scenario-button" data-scenario="lazy_reservation" type="button"><span>04</span><strong>Lazy reservation</strong><small>Growth and controlled overcommit</small></button>
+          </aside>
+
+          <section class="card replay-card" aria-labelledby="replay-title">
+            <div class="replay-heading">
+              <div><span class="verified-badge">Recorded verified scenario</span><h3 id="replay-title">Loading scenario…</h3><p id="replay-summary"></p></div>
+              <a id="replay-evidence" class="button quiet" href="https://github.com/ericheee111/miniGPT/tree/main/docs/results" target="_blank" rel="noreferrer">Evidence ↗</a>
+            </div>
+            <div class="replay-controls">
+              <button id="replay-reset" class="icon-button" type="button" aria-label="Reset scenario">↺</button>
+              <button id="replay-back" class="icon-button" type="button" aria-label="Previous event">←</button>
+              <button id="replay-play" class="button primary" type="button">Play</button>
+              <button id="replay-forward" class="icon-button" type="button" aria-label="Next event">→</button>
+              <span id="replay-progress">0 / 0</span>
+            </div>
+            <div class="systems-stage">
+              <div class="lane-panel"><h4>Request lanes</h4><div id="request-lanes" class="request-lanes"></div></div>
+              <div class="resource-panel"><h4>Normalized resource view</h4><div id="resource-grid" class="resource-grid"></div></div>
+            </div>
+            <article class="event-inspector">
+              <p class="eyebrow">Current event</p>
+              <h4 id="event-title">Ready</h4>
+              <p id="event-explanation">Select Play or step forward to inspect the event sequence.</p>
+              <pre id="event-detail" tabindex="0">{}</pre>
+            </article>
+            <div class="invariant-panel"><h4>Checked invariants</h4><ul id="invariant-list"></ul></div>
+          </section>
+        </div>
       </section>
 
       <section id="evidence" class="section shell" aria-labelledby="evidence-title">
         <div class="section-heading">
-          <div>
-            <p class="eyebrow">Evidence before claims</p>
-            <h2 id="evidence-title">Auditable by construction</h2>
-          </div>
+          <div><p class="eyebrow">Evidence before claims</p><h2 id="evidence-title">From corpus hash to public request</h2></div>
           <p class="section-summary">
-            Correctness, lifecycle, packaging, and performance claims are separated. Descriptive
-            results remain descriptive when strict comparison does not pass.
+            Dataset revision, tokenizer identity, exact-resume training, model evaluation, API
+            lifecycle, packaging, and deployment are reviewed as separate contracts.
           </p>
         </div>
         <div class="evidence-grid">
-          <article class="card"><strong>Hash-bound Evidence</strong><p>Package-local artifacts, SHA-256 membership, reviewed source provenance.</p><a href="https://github.com/ericheee111/miniGPT/tree/main/docs/results" target="_blank" rel="noreferrer">Browse Evidence ↗</a></article>
-          <article class="card"><strong>Quality gates</strong><p>Ruff format/lint, BasedPyright strict typing, full pytest, Project Doctor.</p><a href="https://github.com/ericheee111/miniGPT/actions" target="_blank" rel="noreferrer">View CI ↗</a></article>
-          <article class="card"><strong>Technical whitepaper</strong><p>Architecture, module contracts, Stage 1–21 evolution, and claim boundaries.</p><a href="https://github.com/ericheee111/miniGPT/blob/main/docs/PROJECT_OVERVIEW.md" target="_blank" rel="noreferrer">Read overview ↗</a></article>
-          <article class="card"><strong>Completion contract</strong><p>What v1 proves, what it does not claim, and how post-v1 work stays separate.</p><a href="https://github.com/ericheee111/miniGPT/blob/main/docs/PROJECT_COMPLETION.md" target="_blank" rel="noreferrer">Read completion ↗</a></article>
+          <article class="card"><span class="evidence-number">4.9M</span><h3>From-scratch model</h3><p>Six layers, 208-wide embeddings, four heads, 512-token context, and no imported model weights.</p></article>
+          <article class="card"><span class="evidence-number">3</span><h3>Independent branches</h3><p>Three derived seeds, one bounded public action, request-local generators, and deterministic replay.</p></article>
+          <article class="card"><span class="evidence-number">21</span><h3>Completed core stages</h3><p>Training, exact resume, benchmarking, HTTP/SSE, paged KV, APC, preemption, release, and verification.</p></article>
+          <article class="card"><span class="evidence-number">SHA</span><h3>Bound artifacts</h3><p>Exact membership, SHA-256, source ancestry, fresh installation, and claim-level verification.</p></article>
+        </div>
+        <div class="evidence-links">
+          <a href="https://github.com/ericheee111/miniGPT/blob/main/docs/PROJECT_OVERVIEW.md" target="_blank" rel="noreferrer">Technical whitepaper ↗</a>
+          <a href="https://github.com/ericheee111/miniGPT/tree/main/docs/results" target="_blank" rel="noreferrer">Evidence packages ↗</a>
+          <a href="https://github.com/ericheee111/miniGPT/actions" target="_blank" rel="noreferrer">Windows + Linux CI ↗</a>
+          <a href="https://github.com/ericheee111/miniGPT/blob/main/docs/PUBLIC_DEMO_THREAT_MODEL.md" target="_blank" rel="noreferrer">Threat model ↗</a>
         </div>
       </section>
 
-      <section id="privacy" class="section shell limits" aria-labelledby="limits-title">
-        <div>
-          <p class="eyebrow">Privacy and limitations</p>
-          <h2 id="limits-title">A personal systems demo, not a hosted service</h2>
-        </div>
-        <div class="limit-copy">
-          <p>
-            Prompts travel from your browser through Tailscale Funnel to the owner’s local machine. miniGPT
-            does not intentionally log prompts, this page uses no analytics or cookies, and prompts
-            are not saved in localStorage. Do not submit sensitive information.
-          </p>
-          <p>
-            The backend is available only while the Windows PC and tunnel are running. There is no
-            24/7 SLA, production-security claim, general-chat capability, or universal performance
-            claim. When compute is offline, this portfolio and its static example remain available.
-          </p>
+      <section id="limits" class="section shell limits-section" aria-labelledby="limits-title">
+        <div><p class="eyebrow">Scope and privacy</p><h2 id="limits-title">Small model, explicit boundaries</h2></div>
+        <div class="limits-grid">
+          <p><strong>No 24/7 SLA.</strong> Live inference depends on the owner’s local Windows machine and Tailscale Funnel.</p>
+          <p><strong>No prompt storage.</strong> The public boundary avoids logging full prompts; the browser keeps story history only in memory.</p>
+          <p><strong>No general-assistant claim.</strong> Generated stories can be repetitive, inconsistent, or nonsensical.</p>
+          <p><strong>No universal speedup claim.</strong> Systems work is verified for correctness and structure; benchmark verdicts remain separately scoped.</p>
         </div>
       </section>
     </main>
 
     <footer class="site-footer shell">
-      <p>miniGPT · CPU-first, correctness-first, evidence-first.</p>
-      <div>
-        <a href="https://github.com/ericheee111/miniGPT" target="_blank" rel="noreferrer">Repository</a>
-        <a href="https://github.com/ericheee111/miniGPT/blob/main/docs/RELEASE_CHECKLIST.md" target="_blank" rel="noreferrer">Release checklist</a>
-      </div>
+      <p>miniGPT Story Forge · trained and served from first principles on CPU.</p>
+      <p>Do not enter personal, confidential, or sensitive information.</p>
     </footer>
   </body>
 </html>

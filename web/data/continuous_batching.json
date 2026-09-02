@@ -1,0 +1,62 @@
+{
+  "claim_level": "semantic",
+  "invariants": {
+    "cancelled_requests": 1,
+    "completed_requests": 3,
+    "fifo_admission_order": [
+      "short",
+      "medium",
+      "cancelled",
+      "long"
+    ]
+  },
+  "kv": {
+    "peak_cached_tokens": 24,
+    "total_slots": 48
+  },
+  "request_lanes": [
+    {
+      "generated_token_count": 5,
+      "request_id": "short",
+      "status": "finished"
+    },
+    {
+      "generated_token_count": 5,
+      "request_id": "medium",
+      "status": "finished"
+    },
+    {
+      "generated_token_count": 2,
+      "request_id": "cancelled",
+      "status": "cancelled"
+    },
+    {
+      "generated_token_count": 4,
+      "request_id": "long",
+      "status": "finished"
+    }
+  ],
+  "scenario_id": "continuous_batching",
+  "schema_version": 1,
+  "source_commit": "c86962eeb8d71446e356fae30acc7d9bbe17eb39",
+  "source_evidence_path": "docs/results/decode-continuous-batching/evidence/simulator/stage11a-mixed/continuous_decode",
+  "ticks": [
+    {
+      "decode_batch_size": 3,
+      "tick": 0
+    },
+    {
+      "decode_batch_size": 3,
+      "tick": 1
+    },
+    {
+      "decode_batch_size": 3,
+      "tick": 2
+    },
+    {
+      "decode_batch_size": 3,
+      "tick": 3
+    }
+  ],
+  "title": "Continuous decode batching"
+}

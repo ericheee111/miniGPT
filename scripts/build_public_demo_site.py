@@ -63,7 +63,8 @@ def build_site(*, source: Path, output: Path, api_base: str) -> None:  # noqa: C
     try:
         for name in _SITE_FILES:
             _copy_regular_file(source / name, temporary / name)
-        _copy_assets(source / "assets", temporary / "assets")
+        _copy_directory(source / "assets", temporary / "assets", label="web/assets")
+        _copy_directory(source / "data", temporary / "data", label="web/data")
         template_path = source / "config.template.js"
         template = template_path.read_text(encoding="utf-8")
         if template.count(_CONFIG_SLOT) != 1:
@@ -99,18 +100,19 @@ def _copy_regular_file(source: Path, destination: Path) -> None:
     _ = shutil.copyfile(source, destination)
 
 
-def _copy_assets(source: Path, destination: Path) -> None:
+def _copy_directory(source: Path, destination: Path, *, label: str) -> None:
+    """Copy one optional audited asset tree without following symlinks."""
     if not source.exists():
         return
     if not source.is_dir() or source.is_symlink():
-        _invalid("web/assets must be an ordinary directory")
+        _invalid(f"{label} must be an ordinary directory")
     for item in sorted(source.rglob("*")):
         if item.is_symlink():
-            _invalid(f"web assets must not contain symlinks: {item}")
+            _invalid(f"{label} must not contain symlinks: {item}")
         if item.is_dir():
             continue
         if not item.is_file():
-            _invalid(f"web assets must contain only regular files: {item}")
+            _invalid(f"{label} must contain only regular files: {item}")
         relative = item.relative_to(source)
         _copy_regular_file(item, destination / relative)
 

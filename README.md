@@ -1,12 +1,41 @@
 # miniGPT
 
+
+## miniGPT Story Forge v1.1
+
+> **Current release:** `1.1.0`, a post-v1 research extension. The completed v1.0 Stage 1-21 evidence remains immutable.
+
+Story Forge replaces the old Shakespeare-continuation home screen with a controlled, original-IP micro-adventure product:
+
+- **Story Forge** generates exactly three independent branches per round across space, forest, robot workshop, and cozy mystery worlds.
+- **Prediction Lab** exposes target-model next-token probabilities, temperature reshaping, and per-token surprisal without sampling or advancing request RNG.
+- **Systems Lab** replays hash-bound continuous batching, Automatic Prefix Caching, KV preemption, and lazy reservation evidence even when the local backend is offline.
+- The deployment profile runs the reviewed BPE Story Forge checkpoint on CPU behind a Tailscale Funnel. Model assets are hash-validated locally and are not committed to Git; live availability still depends on the local host.
+- The product is a bounded story-continuation demo, **not a general-purpose chat assistant** and not a production-scale load test.
+
+Public playground: [https://ericheee111.github.io/miniGPT/](https://ericheee111.github.io/miniGPT/)
+
+Local pre-cutover verification:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\validate_story_forge_model.py \
+  --checkpoint checkpoints/story_forge_5m/latest.pt \
+  --tokenizer data/story_forge/tokenizer.json \
+  --checkpoint-sha256 9abcf022471df6766d4676fc93a3ecc6a8eaa9ec95c79a391227c2906b85e710 \
+  --tokenizer-sha256 7c897e0d51d135f6bb24bdbd18b0e40db88c0e62defcff9d23f3a204e092585c
+
+.\scripts\start_story_forge_demo.ps1 -SkipFunnel -Port 8001
+```
+
+See [design](docs/superpowers/specs/2026-09-02-post-v1-story-forge-product-design.md), [model evidence](docs/results/story-forge-model/README.md), and the [public deployment runbook](docs/PUBLIC_DEMO_DEPLOYMENT.md).
+
 > CPU-first GPT Training, Inference, Serving, and Evidence Lab
 >
 > 从零实现 GPT，并把训练、精确恢复、KV-cache 推理、多请求服务和可审计发布串成完整工程闭环。
 
-**Python 3.11–3.14 · PyTorch CPU · Windows + Linux CI · Strict typing · Exact resume · v1.0.0**
+**Python 3.11–3.14 · PyTorch CPU · Windows + Linux CI · Strict typing · Exact resume · v1.1.0**
 
-> **项目状态：已结项。** Stage 21 / v1.0.0 的代码、测试、Evidence、wheel/sdist 与跨平台 CI 已形成闭环；仓库现进入维护和 post-v1 独立研究扩展模式。`v1.0.0` annotated tag 尚未创建，不影响既定功能范围的结项判断。
+> **项目状态：v1 核心已结项，当前版本为 1.1.0。** Stage 21 / v1.0.0 的代码、测试、Evidence、wheel/sdist 与跨平台 CI 闭环保持不变；1.1.0 在其上增加独立的 post-v1 Story Forge 产品与研究扩展。
 
 ## 项目概览
 
@@ -16,7 +45,7 @@ miniGPT 是一个 **CPU-first、correctness-first、evidence-first** 的 GPT 系
 
 | 方向 | 已完成能力 |
 |---|---|
-| 模型与数据 | 字符级 tokenizer、手写 GPT、learned absolute positions、loss 与 temperature/top-k sampling |
+| 模型与数据 | 字符级 tokenizer、Story Forge ByteLevel BPE v2、手写 GPT、learned absolute positions、loss 与 temperature/top-k sampling |
 | 训练系统 | YAML 配置、AdamW、warmup/cosine、验证与采样、JSONL/TensorBoard、checkpoint v2 exact resume |
 | 性能方法 | fresh-process Benchmark v2、Profiler、环境身份、raw replicate、strict comparison policy |
 | 推理系统 | KV prefill/decode、continuous batching、paged KV、APC、chunked prefill、preemption、lazy reservation |
@@ -38,7 +67,7 @@ miniGPT 是一个 **CPU-first、correctness-first、evidence-first** 的 GPT 系
 - **服务资源可解释**：请求状态、FIFO、公平性、取消、失败、KV block ownership、APC refcount 和抢占恢复都有显式合同；
 - **结论可以复核**：benchmark、Evidence、manifest 和 source commit 分离保存；未达到 strict 条件时明确报告 `not_comparable`、`fail` 或 `descriptive_only`。
 
-当前范围是单机 CPU、字符级 tokenizer 和教学/研究规模 GPT。它提供真实 HTTP serving reference，但不是面向公网、多租户或大规模 GPU 部署的生产 LLM 平台。
+当前范围是单机 CPU、字符级基线与 Story Forge ByteLevel BPE、教学/研究规模 GPT。它提供真实 HTTP serving reference 和受限公网作品集，但不是面向多租户或大规模 GPU 部署的生产 LLM 平台。
 
 ## English Summary
 
@@ -51,22 +80,22 @@ The project is intentionally small enough to study end to end, but its contracts
 Post-v1 Public Playground 把 miniGPT 作为零月费个人作品集展示：GitHub Pages 托管无构建链的静态页面，模型、checkpoint、tokenizer 和 CPU 计算继续留在个人 Windows 电脑，Tailscale Funnel 用 `*.ts.net` HTTPS endpoint 把请求转发到 loopback-only backend。
 
 ```text
-GitHub Pages → Tailscale Funnel HTTPS → 127.0.0.1:8000
+GitHub Pages → Tailscale Funnel HTTPS → 127.0.0.1:8001
                          → minigpt demo-serve → existing EngineRunner / ServingRuntime / GPT
 ```
 
-页面明确定位为**字符级文本续写 systems demo**，不是通用问答助手或 ChatGPT 替代品。电脑或 tunnel 离线时，Generate 会禁用，但项目介绍、架构、Stage 1–21、Evidence 和静态示例仍可访问。
+页面把原来的字符级续写替换为 **Story Forge 受控微型冒险、Prediction Lab 与 Recorded Systems Lab**，不是通用问答助手或 ChatGPT 替代品。电脑或 tunnel 离线时，Story/Prediction 控件会禁用，但项目介绍、Evidence 和离线 Systems Lab 仍可访问。
 
-截至 2026-08-31，GitHub Pages 已部署到 `https://ericheee111.github.io/miniGPT/`，repository variable `DEMO_API_BASE` 已指向正式 Funnel endpoint。静态作品集始终可访问；实时生成仍依赖个人 Windows 电脑、backend 和 Funnel 保持在线，没有 24/7 SLA。
+GitHub Pages 已部署到 Story Forge 静态作品集；实时生成仍依赖个人 Windows 电脑上的 Story Forge backend 和 Funnel 在线，没有 24/7 SLA。
 
 本地启动前先安装、登录 Tailscale，并准备匹配的本地模型资产：
 
 ```powershell
 $env:PUBLIC_ORIGIN = "https://ericheee111.github.io"
 $env:DEMO_ENABLED = "1"
-$env:MINIGPT_CHECKPOINT = "checkpoints/reference/latest.pt"
-$env:MINIGPT_TOKENIZER = "data/processed/tokenizer.json"
-.\scripts\start_public_demo_tailscale.ps1
+$env:MINIGPT_CHECKPOINT = "checkpoints/story_forge_5m/latest.pt"
+$env:MINIGPT_TOKENIZER = "data/story_forge/tokenizer.json"
+.\scripts\start_story_forge_demo.ps1 -Port 8001
 ```
 
 只构建静态 offline-only 页面：
@@ -77,7 +106,7 @@ python scripts/build_public_demo_site.py --output _site
 python -m http.server 4173 --directory _site --bind 127.0.0.1
 ```
 
-公网入口使用独立 `minigpt demo-serve`；普通 `minigpt serve` 的默认行为没有改变。public mode 默认最多 8192-byte body、256 Prompt characters/tokens、96 generated tokens、2 active + 8 queued requests、45 秒 timeout、60 accepted requests/hour 和 10000 actual generated tokens/day。global quotas 与 client IP/XFF 无关。代码层 SSE 默认关闭；2026-08-31 真实 Funnel 分块与取消验收通过后，正式部署配置已显式启用。CORS 是 exact browser allowlist，不是认证。Swagger/OpenAPI、Prompt logging、analytics、cookie、Prompt storage、checkpoint publication 和 query-string API override 都被禁用。
+公网入口使用独立 `minigpt demo-serve`；普通 `minigpt serve` 保持兼容。Story Forge profile 限制 8192-byte body、10000 story characters、512 context tokens、每分支 64 tokens、固定 3 分支、2 active + 8 queued actions、45 秒 timeout、60 accepted requests/hour 和 10000 generated tokens/day。异常分支按保守 token reserve 结算；Prediction Lab 只计 request quota。CORS 是 exact allowlist，不是认证。
 
 - [完整零成本部署步骤](docs/PUBLIC_DEMO_DEPLOYMENT.md)
 - [Public Demo threat model](docs/PUBLIC_DEMO_THREAT_MODEL.md)
@@ -103,7 +132,7 @@ python -m http.server 4173 --directory _site --bind 127.0.0.1
 明确不包含：
 
 - GPU/CUDA、mixed precision、fused kernels、DDP/FSDP 或多机训练/服务；
-- BPE/SentencePiece、预训练权重下载、聊天微调、LoRA 或量化；
+- SentencePiece、第三方预训练权重下载、聊天微调、LoRA 或量化；
 - partial-block COW、KV swap/offload、speculative decoding 或多模型 routing；
 - 公网生产服务所需的认证、限流、租户隔离、SLO 运维与安全体系。
 

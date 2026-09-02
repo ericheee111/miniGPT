@@ -22,11 +22,11 @@ miniGPT 在 **Stage 21 / v1.0.0** 达到本轮项目目标，可以按计划结�
 | 合入与推送 | reviewed HEAD 已进入远端 `main` |
 | Annotated `v1.0.0` tag | 尚未创建；不影响项目结项，仅影响正式 Git tag 发布 |
 
-### Post-v1 Public Playground 部署扩展
+### Post-v1 Story Forge 1.1 扩展
 
-`codex/post-v1-public-playground` 在 v1 结项之后增加独立的公网作品集部署边界：GitHub Pages 提供始终可访问的静态项目展示，Tailscale Funnel 把访问转发到个人 Windows 电脑上的 loopback-only `minigpt demo-serve`。本地计算离线时，静态页面仍展示架构、Stage 1–21、Evidence 和示例输出。代码层 SSE 默认关闭；2026-08-31 真实 Funnel 分块与取消验收通过后，正式部署配置已显式启用。
+Story Forge 1.1 在已结项的 v1 CPU reference system 上增加独立的 BPE 数据/模型与作品集产品层：受控微型冒险每轮提交三个 request-local RNG 分支，Prediction Lab 通过 EngineRunner owner thread 做只读 next-token 与 surprisal inspection，Recorded Systems Lab 从 Stage 11/14/17/18 committed Evidence 派生静态场景。GitHub Pages 始终提供静态页面；实时模型仍由个人 Windows 电脑上的 loopback-only `minigpt demo-serve` 通过 Tailscale Funnel 提供。
 
-该扩展不命名为 Stage 22，不增加模型、scheduler 或 Evidence tier，也不修改上述历史 v1.0 验收表、capstone file coverage、source ancestry 或性能 verdict。它新增的是 post-v1 deployment policy、abuse bounds、offline UX、部署文档和独立测试。2026-08-31，repository owner 已配置 `DEMO_API_BASE`，Pages workflow attempt 2 部署成功，公开页面为 `https://ericheee111.github.io/miniGPT/`；部署来自已审查的 feature branch，未合入或改动 `main`。实时生成仍依赖本机 backend 与 Funnel 在线，没有 24/7 SLA。
+该扩展不命名为 Stage 22，也不改写历史 Stage 1–21 / v1.0 Evidence、capstone coverage、source ancestry 或性能 verdict。它新增 BPE tokenizer schema v2、Story Forge 模型族、受限 API、三分支/四轮玩法、Prediction Lab、静态 Systems Lab、部署/abuse policy 和独立 product evidence。实时功能没有 24/7 SLA，且不声明通用聊天、语义理解、作者识别、生产安全或普遍 wall-clock speedup。
 
 ## 2. 结项目标与完成证据
 
@@ -141,3 +141,15 @@ minigpt verify --mode release --require-clean
 ```
 
 当前 reviewed `main` 已通过 GitHub Actions 的 Windows/Python 3.14 和 Linux/Python 3.11 job，项目结项门禁已经满足。创建 annotated `v1.0.0` tag 仍应指向一个同样 CI-green、且在 tag 前没有额外源码或 Evidence 变化的精确 `main` commit。
+
+## Post-v1 v1.1 extension status
+
+The v1.0 completion definition and Stage 1–21 evidence remain unchanged. Version 1.1.0 adds Story Forge as a separate post-v1 product layer:
+
+- deterministic SimpleStories data preparation and BPE artifact schema v2;
+- a 4.93M-parameter controlled story model trained from scratch;
+- exactly three independent branch requests, four story rounds, and BPE-safe SSE snapshots;
+- non-sampling next-token and sequence-surprisal observations through the single model-owner thread;
+- offline, source-bound Systems Lab replay and a hash-guarded local/Funnel deployment path.
+
+This extension does not change the completion verdict for the CPU-first reference lab. It also does not upgrade the project's claims to production-level SLOs, security, model quality, or general-knowledge chat. Story Forge remains a bounded portfolio demo whose live inference depends on the owner's Windows host.

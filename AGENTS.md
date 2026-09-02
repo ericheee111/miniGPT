@@ -212,3 +212,13 @@ Chinese commit-message style unless the user requests otherwise.
 - Public abuse control uses only IP/XFF-independent process-wide request/hour and actual generated-token/day quotas. Do not add a trusted client-IP boundary.
 - Keep post-v1 tests in existing `tests/test_*.py` files unless a separately reviewed Evidence decision changes the Stage 21 historical test-file contract. Never weaken the Stage 21 verifier to accommodate new tests.
 - Public documentation must keep the character-level continuation, no-SLA, non-commercial, no-sensitive-input, free-quota, non-production-security, and no-universal-speedup limitations visible.
+
+## Story Forge v1.1 contracts
+
+- Treat Story Forge as a post-v1 extension, not as new Stages. Do not rewrite Stage 1–21 evidence or change its 1.0.0 provenance.
+- Preserve tokenizer schema v1 and legacy checkpoint read behavior. BPE schema v2 must keep fixed control-token IDs, ByteLevel round-trip, and hash-bound model-family identity.
+- All model forward work, including Prediction Lab observations, must run on the single `EngineRunner` owner thread. Observations must not sample, advance request RNG, change lifecycle, or mutate KV.
+- Story Forge public requests always generate exactly three branches. Seeds are deterministically derived, branch failure is isolated, and SSE must send full decoded prefix snapshots so multi-byte BPE tokens cannot leak replacement characters.
+- Keep the public backend on `127.0.0.1:8001` during pre-cutover validation. The start script must reject the legacy 8000 port, and no Story Forge script may touch CodexPro/ngrok or execute `tailscale down`.
+- Web output must use `textContent` or DOM element construction, enter no prompts into browser storage, and keep recorded Systems Lab assets source-bound, deterministic, and clearly labeled as non-live.
+- Do not commit checkpoints, prepared token arrays, or tokenizer binaries. Deployment may reference only explicit expected SHA-256 values for local artifacts.

@@ -1,0 +1,20 @@
+{
+  "claim_level": "structural",
+  "invariants": {
+    "equivalent": true,
+    "shared_blocks_immutable": true
+  },
+  "kv": {
+    "avoided_prefill_tokens": 12,
+    "prefill_tokens_computed": 8,
+    "prefix_hit_requests": 2,
+    "prefix_hit_tokens": 12
+  },
+  "request_lanes": [],
+  "scenario_id": "automatic_prefix_cache",
+  "schema_version": 1,
+  "source_commit": "b248bff1166c4d57a3268140215d8d76c6b7575e",
+  "source_evidence_path": "docs/results/automatic-prefix-caching/evidence/correctness.json",
+  "ticks": [],
+  "title": "Automatic Prefix Caching reuse"
+}

@@ -1,7 +1,7 @@
 # Post-v1 Public Playground Threat Model
 
 状态：个人作品集 Demo 的受限公网边界；不声明生产安全就绪。
-默认拓扑：GitHub Pages → Tailscale Funnel `*.ts.net` → `127.0.0.1:8000` → `minigpt demo-serve`。
+默认拓扑：GitHub Pages → Tailscale Funnel `*.ts.net` → `127.0.0.1:8001` → `minigpt demo-serve`。
 适用范围：本仓库实现的静态客户端、public-demo HTTP boundary、launcher 和部署 workflow。
 
 ## 1. 安全目标
@@ -120,7 +120,7 @@ Client IP、ASGI peer 和 `X-Forwarded-For` 都不是可信身份边界，backen
 
 1. 页面层：清空 `DEMO_API_BASE` 并重建，形成 offline-only Pages；
 2. runtime 层：`DEMO_ENABLED=0`，health/completion 返回 offline 且 runner不启动；
-3. Funnel/process 层：stopper 仅关闭指向 `127.0.0.1:8000` 的 HTTPS 443 Funnel，并核对精确 backend PID/path/start time。
+3. Funnel/process 层：stopper 仅关闭指向 `127.0.0.1:8001` 的 HTTPS 443 Funnel，并核对精确 backend PID/path/start time。
 
 backend offline 不影响 GitHub Pages。stopper 不执行 `tailscale down`，launcher 不创建 firewall rule 或 router mapping。
 
@@ -163,9 +163,21 @@ Swagger、Redoc 和 public OpenAPI 均禁用。`/demo/info` 只返回 version、
 因此对外描述必须同时保留：
 
 - 非商业个人作品集 Demo；
-- 字符级文本续写，不是通用聊天；
+- 受控 Story Forge BPE 故事续写，不是通用聊天；
 - 不输入敏感信息；
 - 无 24/7 SLA；
 - 免费额度有限；
 - 不声明生产安全；
 - 不声明 paged/APC 或整体系统普遍更快。
+
+## Story Forge v1.1 surfaces
+
+Story Forge adds three bounded public surfaces to the existing demo threat model:
+
+- `POST /demo/story/branches` accepts a fixed control vocabulary, bounded opening, exactly three branches, bounded tokens, and a deterministic seed. It does not accept server configuration, file paths, executor choice, or arbitrary model IDs;
+- `POST /demo/predict/next` and `POST /demo/predict/score` run on the single `EngineRunner` owner thread. They do not sample, do not advance request RNG, do not mutate the KV pool, and are bounded by queue timeout and input length;
+- `web/data/*.json` are static, recorded, source-bound evidence assets. They contain no user prompts, secrets, host identity, or absolute paths and do not call the model.
+
+Browser story history remains in memory only. Model output and user text are inserted with `textContent` and never as HTML. Story branch cancellation, disconnect, timeout, partial failure, and normal completion must all release HTTP concurrency slots and request-local serving resources.
+
+The backend stays bound to `127.0.0.1`. The 8081 launcher refuses the legacy 8080 port and does not interact with the CodexPro ngrok endpoint. CORS reduces browser abuse but is not authentication; global request/generated-token quotas and bounded concurrency remain the hard public resource boundary.

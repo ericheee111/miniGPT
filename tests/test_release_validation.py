@@ -22,9 +22,8 @@ def test_v1_version_has_one_authored_source_and_dynamic_metadata() -> None:
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
     version_source = Path("src/minigpt/_version.py").read_text(encoding="utf-8")
 
-    assert __version__ == "1.0.0"
     assert importlib.metadata.version("minitrain-gpt") == __version__
-    assert '__version__ = "1.0.0"' in version_source
+    assert f'__version__ = "{__version__}"' in version_source
     assert 'dynamic = ["version"]' in pyproject
     assert 'version = {attr = "minigpt._version.__version__"}' in pyproject
     assert 'version = "1.0.0"' not in pyproject
@@ -48,7 +47,7 @@ def test_generated_egg_info_is_ignored_and_untracked() -> None:
 def test_release_artifacts_build_and_fresh_install() -> None:
     result = validate_release_artifacts(Path.cwd())
 
-    assert result.project_version == "1.0.0"
+    assert result.project_version == __version__
     assert result.wheel_built
     assert result.sdist_built
     assert result.required_modules_present
@@ -69,7 +68,7 @@ def test_release_doctor_mode_invokes_artifact_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = ReleaseArtifactValidation(
-        project_version="1.0.0",
+        project_version=__version__,
         wheel_sha256="a" * 64,
         sdist_sha256="b" * 64,
         wheel_built=True,
@@ -94,13 +93,13 @@ def test_release_doctor_mode_invokes_artifact_validation(
     result = _check_release_artifacts(Path.cwd())
 
     assert result.status is CheckStatus.PASS
-    assert "1.0.0" in result.detail
+    assert __version__ in result.detail
     assert "aaaaaaaaaaaa" in result.detail
 
 
 def test_release_report_extends_ci_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = ReleaseArtifactValidation(
-        project_version="1.0.0",
+        project_version=__version__,
         wheel_sha256="c" * 64,
         sdist_sha256="d" * 64,
         wheel_built=True,

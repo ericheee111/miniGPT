@@ -1040,3 +1040,132 @@ def test_batched_decode_rejects_invalid_real_cache_lengths(
     # When/Then: validation rejects the metadata before attention executes.
     with pytest.raises(model.InvalidKVCacheError, match=message):
         _ = gpt.decode_batch(torch.tensor([[3]], dtype=torch.long), cache, cache_lengths)
+
+
+# -- Prediction Lab inspection math -------------------------------------------------
+
+
+def _prediction_model() -> tuple[model.GPT, torch.Tensor]:
+    """Return a tiny model and a fixed prompt for distribution/surprisal tests."""
+    from minigpt.prediction import compute_sequence_surprisal  # noqa: PLC0415
+
+    _ = compute_sequence_surprisal
+    gpt = model.GPT(tiny_config())
+    _ = gpt.eval()
+    prompt = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    return gpt, prompt
+
+
+def test_stable_softmax_float32_matches_reference_torch_softmax() -> None:
+    # Given: a finite logit vector in float64.
+    from minigpt.prediction import stable_softmax_float32  # noqa: PLC0415
+
+    logits = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
+
+    # When: our stable float32 softmax and PyTorch's reference softmax are computed.
+    probabilities = stable_softmax_float32(logits)
+    reference = torch.nn.functional.softmax(logits, dim=-1).float()
+
+    # Then: the two agree to float32 tolerance.
+    assert torch.allclose(probabilities, reference, atol=1e-7, rtol=1e-6)
+
+
+def test_stable_softmax_float32_produces_unit_sum() -> None:
+    # Given: logits spanning a wide range.
+    from minigpt.prediction import stable_softmax_float32  # noqa: PLC0415
+
+    logits = torch.tensor([100.0, 0.0, -100.0])
+
+    # When: probabilities are computed.
+    probabilities = stable_softmax_float32(logits)
+
+    # Then: they sum to one and are all finite.
+    assert float(probabilities.sum().item()) == pytest.approx(1.0, abs=1e-6)
+    assert bool(torch.isfinite(probabilities).all().item())
+
+
+def test_per_token_nll_matches_reference_cross_entropy() -> None:
+    # Given: a small [seq, vocab] logit tensor and observed targets.
+    from minigpt.prediction import per_token_negative_log_likelihood  # noqa: PLC0415
+
+    logits = torch.tensor(
+        [[0.1, 0.2, 0.7], [0.5, 0.3, 0.2]],
+        dtype=torch.float32,
+    )
+    targets = torch.tensor([2, 0], dtype=torch.long)
+
+    # When: per-token NLL is computed.
+    nll = per_token_negative_log_likelihood(logits, targets)
+
+    # Then: each entry matches -log_softmax at the target position.
+    log_probs = torch.log_softmax(logits, dim=-1)
+    expected = torch.tensor([-float(log_probs[0, 2].item()), -float(log_probs[1, 0].item())])
+    assert torch.allclose(nll, expected, atol=1e-6)
+
+
+def test_per_token_nll_rejects_non_finite_logits() -> None:
+    # Given: logits containing infinity.
+    from minigpt.prediction import (  # noqa: PLC0415
+        NonFiniteLogitsError,
+        per_token_negative_log_likelihood,
+    )
+
+    logits = torch.tensor([[0.0, float("inf")]], dtype=torch.float32)
+    targets = torch.tensor([0], dtype=torch.long)
+
+    # When/Then: the non-finite pre-condition fails before softmax.
+    with pytest.raises(NonFiniteLogitsError):
+        _ = per_token_negative_log_likelihood(logits, targets)
+
+
+def test_compute_next_token_distribution_orders_by_probability_and_bounds_top_k() -> None:
+    # Given: a tiny model and a prompt shorter than its block size.
+    from minigpt.prediction import MAX_TOP_K, compute_next_token_distribution  # noqa: PLC0415
+
+    gpt, prompt = _prediction_model()
+
+    # When: the top-k distribution is computed for the maximum allowed top_k.
+    prompt_ids = cast("list[int]", prompt.squeeze(0).tolist())  # pyright: ignore[reportUnknownMemberType]
+    distribution = compute_next_token_distribution(gpt, prompt_ids, top_k=10)
+
+    # Then: probabilities are descending, bounded by top_k (and by vocab), and sum <= 1.
+    probabilities = [candidate.probability for candidate in distribution.candidates]
+    assert max(distribution.top_k, 0) <= MAX_TOP_K
+    assert len(distribution.candidates) <= tiny_config().vocab_size
+    assert probabilities == sorted(probabilities, reverse=True)
+    assert sum(probabilities) <= 1.0 + 1e-6
+
+
+def test_compute_next_token_distribution_rejects_invalid_top_k() -> None:
+    # Given: a tiny model and prompt.
+    from minigpt.prediction import (  # noqa: PLC0415
+        PredictionInspectionError,
+        compute_next_token_distribution,
+    )
+
+    gpt, prompt = _prediction_model()
+    prompt_ids = cast("list[int]", prompt.squeeze(0).tolist())  # pyright: ignore[reportUnknownMemberType]
+
+    # When/Then: top_k outside [1, 10] is rejected.
+    for bad in (0, 11, -1):
+        with pytest.raises(PredictionInspectionError):
+            _ = compute_next_token_distribution(gpt, prompt_ids, top_k=bad)
+
+
+def test_compute_sequence_surprisal_reports_nll_and_perplexity() -> None:
+    # Given: a tiny model and a multi-token sequence.
+    from minigpt.prediction import compute_sequence_surprisal  # noqa: PLC0415
+
+    gpt, _prompt = _prediction_model()
+    sequence = [1, 2, 3]
+
+    # When: sequence surprisal is computed.
+    surprisal = compute_sequence_surprisal(gpt, sequence)
+
+    # Then: one entry per predicted position, mean NLL, and perplexity = exp(mean_nll).
+    assert len(surprisal.per_token) == len(sequence) - 1
+    per_token_sum = sum(entry.surprisal for entry in surprisal.per_token) / len(surprisal.per_token)
+    assert float(surprisal.mean_nll) == pytest.approx(per_token_sum, abs=1e-6)
+    assert float(surprisal.perplexity) == pytest.approx(
+        2.718281828459045**surprisal.mean_nll, rel=1e-6
+    )

@@ -5,12 +5,14 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import pytest
 from typing_extensions import override
 
 from minigpt.engine_runner import (
     EngineRunner,
     RunnerConfig,
     RunnerEventType,
+    RunnerInspectionTimeoutError,
     RunnerState,
     StreamEventType,
 )
@@ -293,3 +295,82 @@ def test_shutdown_cancels_active_and_waiting_requests() -> None:
     assert active.future.result(timeout=1.0).status is RequestStatus.CANCELLED
     assert waiting.future.result(timeout=1.0).status is RequestStatus.CANCELLED
     assert runner.state is RunnerState.STOPPED
+
+
+def test_inspection_runs_on_owner_thread_and_propagates_result() -> None:
+    # Given: an idle runner and a pure observation callable.
+    runner = _runner(RecordingExecutor())
+    runner.start()
+    observed_thread: list[int] = []
+
+    def observe() -> tuple[str, int]:
+        observed_thread.append(threading.get_ident())
+        return ("observed", 7)
+
+    # When: the caller requests an owner-thread inspection.
+    result = runner.inspect(observe)
+
+    # Then: the value returns unchanged and the callable used only the owner thread.
+    assert result == ("observed", 7)
+    assert observed_thread == [runner.owner_thread_id]
+    runner.shutdown()
+
+
+def test_queued_inspection_timeout_never_executes_stale_callable() -> None:
+    # Given: the owner blocked inside model work and an inspection queued behind it.
+    executor = BlockingExecutor()
+    runner = _runner(executor, max_active_requests=1)
+    runner.start()
+    request = runner.submit(_request("blocking", max_new_tokens=2), stream=False)
+    assert executor.entered.wait(timeout=2.0)
+    inspection_called = threading.Event()
+
+    def observe() -> None:
+        inspection_called.set()
+
+    # When: the inspection deadline expires before the owner can dequeue it.
+    with pytest.raises(RunnerInspectionTimeoutError, match="did not finish"):
+        _ = runner.inspect(observe, timeout_seconds=0.01)
+    executor.release.set()
+    _ = request.future.result(timeout=2.0)
+    _ = runner.metrics(timeout_seconds=2.0)
+
+    # Then: the cancelled future makes the owner skip the stale callable.
+    assert not inspection_called.is_set()
+    runner.shutdown()
+
+
+def test_started_inspection_timeout_recovers_owner_after_callable_returns() -> None:
+    # Given: an inspection that has already started synchronously on the owner.
+    runner = _runner(RecordingExecutor())
+    runner.start()
+    entered = threading.Event()
+    release = threading.Event()
+    errors: list[BaseException] = []
+
+    def observe() -> int:
+        entered.set()
+        assert release.wait(timeout=2.0)
+        return 11
+
+    def invoke() -> None:
+        try:
+            _ = runner.inspect(observe, timeout_seconds=0.02)
+        except BaseException as error:  # noqa: BLE001 - test captures the caller outcome.
+            errors.append(error)
+
+    caller = threading.Thread(target=invoke)
+    caller.start()
+    assert entered.wait(timeout=1.0)
+    caller.join(timeout=1.0)
+    assert not caller.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], RunnerInspectionTimeoutError)
+
+    # When: the already-running synchronous observation is allowed to finish.
+    release.set()
+    metrics = runner.metrics(timeout_seconds=2.0)
+
+    # Then: the owner remains healthy and continues processing commands.
+    assert metrics.completed_requests == 0
+    runner.shutdown()
