@@ -30,7 +30,7 @@ report = [
 story = [
     "tokenizers>=0.22,<0.23",
     "huggingface-hub>=0.35,<1.0",
-    "pyarrow>=21,<22",
+    "pyarrow>=22,<26",
 ]
 dev = [
     "build>=1.2",
@@ -40,7 +40,7 @@ dev = [
     "matplotlib>=3.10",
     "tokenizers>=0.22,<0.23",
     "huggingface-hub>=0.35,<1.0",
-    "pyarrow>=21,<22",
+    "pyarrow>=22,<26",
     "pytest>=8.0",
     "ruff>=0.15.20",
     "uvicorn>=0.35",
