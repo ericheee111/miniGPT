@@ -669,6 +669,19 @@ def test_bpe_optional_dependency_error_is_actionable(monkeypatch: pytest.MonkeyP
         _ = _story_tokenizer()
 
 
+def test_story_tokenizer_error_allows_normal_traceback_metadata() -> None:
+    # Given: an actionable optional-dependency exception.
+    error = StoryForgeTokenizerError("backend unavailable")
+
+    # When: Python/contextlib attaches ordinary exception metadata.
+    error.__traceback__ = None
+    error.__cause__ = ModuleNotFoundError("native backend unavailable")
+
+    # Then: the exception remains usable instead of raising FrozenInstanceError.
+    assert "backend unavailable" in str(error)
+    assert error.__cause__ is not None
+
+
 def test_bpe_import_is_lazy_for_char_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

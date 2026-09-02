@@ -20,8 +20,6 @@ from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
-from typing_extensions import override
-
 from minigpt.data import CharTokenizer, JsonValue, TokenizerFormatError
 
 if TYPE_CHECKING:
@@ -239,16 +237,12 @@ def _backend() -> _TokenizersModule:
     return cast("_TokenizersModule", cast("object", module))
 
 
-@dataclass(frozen=True, slots=True)
 class StoryForgeTokenizerError(RuntimeError):
     """Describe why a Story Forge BPE operation cannot proceed."""
 
-    reason: str
-
-    @override
-    def __str__(self) -> str:
-        """Render the actionable installation hint alongside the reason."""
-        return f"{self.reason}; install with: {_BPE_ASK_INSTALL}"
+    def __init__(self, reason: str) -> None:
+        """Store the reason while allowing normal exception traceback mutation."""
+        super().__init__(f"{reason}; install with: {_BPE_ASK_INSTALL}")
 
 
 def _invalid_value(reason: str) -> None:
