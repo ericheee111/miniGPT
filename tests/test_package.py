@@ -222,6 +222,9 @@ def test_public_site_client_exposes_safe_story_prediction_and_systems_labs() -> 
     assert "document.cookie" not in app_source
     assert "Content-Security-Policy" in index
     assert 'name="referrer" content="no-referrer"' in index
+    assert 'rel="icon"' in index
+    assert "data:image/svg+xml" in index
+    assert "Local network access" in index
     assert "Backend offline" in app_source
     assert "Number(elements." not in app_source
     for control_id in ("story-seed", "story-max-tokens", "prediction-top-k"):
