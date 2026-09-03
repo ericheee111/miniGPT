@@ -3,12 +3,12 @@
     {
       "bytes": 681,
       "path": "product_summary.json",
-      "sha256": "1ebdb57e9c3d0896ac720f00808b7283c5ca37d66b4c79f59593ed057133933b"
+      "sha256": "16f305c7a26a9f74837d41425d57119aca041d86291a2538cfcb2dc948efd49e"
     },
     {
       "bytes": 654,
       "path": "README.md",
-      "sha256": "ece144471f9889000e7e7925819badf4a484bbbc96c08be1f5bdd24e7ddee67b"
+      "sha256": "9546b53a9ad9dfc5f05e4d774eefc7827cb226cce2be2740cafc3d5e36793127"
     },
     {
       "bytes": 603,
@@ -16,16 +16,16 @@
       "sha256": "63e335a26d6f2cbade49edfdd48d70f4b246f9050b283f77fe270946af149aea"
     },
     {
-      "bytes": 844,
+      "bytes": 846,
       "path": "verification.json",
-      "sha256": "5eb85d3677af2937c1fbd4a90eabe628d8e4d9c6724f45dab59289f93769dab3"
+      "sha256": "629a0787f5ed5fd1c7fe6f16dc83342e0db6babcc19a27ef1815bf8385096675"
     },
     {
       "bytes": 3856,
       "path": "web_assets.json",
-      "sha256": "0f25333185e18d0f35476a52676b4fb6cd55040e1503b056a0682687d459b1d9"
+      "sha256": "79b1bd10e2c33f77d72c68d83ec2a098442f7c0c1b3f3e212b7fbaf16466fc62"
     }
   ],
   "schema_version": 1,
-  "source_commit": "105c1a0c813d03336ac7fbaa2869fc0f4041e566"
+  "source_commit": "9acb151be498a2e251892031eaf5d2b0ad80d2f4"
 }
