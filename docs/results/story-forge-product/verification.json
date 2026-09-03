@@ -1,6 +1,6 @@
 {
   "fresh_worktree": {
-    "detail": "detached source commit 90531532ab6d72ae2d6a6ab566fb4933ef979c2e in a fresh Python 3.14 virtual environment; all 63 tests/test_*.py files covered exactly once",
+    "detail": "detached source commit 105c1a0c813d03336ac7fbaa2869fc0f4041e566 in fresh Python 3.14 review worktrees; all 63 tests/test_*.py files covered exactly once, and the changed checkout-line-ending partition was rerun after the fix",
     "status": "pass"
   },
   "quality": {
@@ -14,7 +14,7 @@
   "schema_version": 1,
   "tests": {
     "failed": 0,
-    "passed": 926,
+    "passed": 927,
     "skipped": 1
   }
 }

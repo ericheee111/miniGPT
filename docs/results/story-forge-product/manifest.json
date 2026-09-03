@@ -3,12 +3,12 @@
     {
       "bytes": 681,
       "path": "product_summary.json",
-      "sha256": "16dadb44c52a7e8bdde1de5a83849fed30b04ef02e2e0d7238f40de72467d737"
+      "sha256": "1ebdb57e9c3d0896ac720f00808b7283c5ca37d66b4c79f59593ed057133933b"
     },
     {
       "bytes": 654,
       "path": "README.md",
-      "sha256": "26e72c175b35c2868bbef3d3453e2c23105e743efdabc229fd1204c17f2bb5bb"
+      "sha256": "ece144471f9889000e7e7925819badf4a484bbbc96c08be1f5bdd24e7ddee67b"
     },
     {
       "bytes": 603,
@@ -16,9 +16,9 @@
       "sha256": "63e335a26d6f2cbade49edfdd48d70f4b246f9050b283f77fe270946af149aea"
     },
     {
-      "bytes": 777,
+      "bytes": 844,
       "path": "verification.json",
-      "sha256": "65b8410968badb5cd26b1a784fdcf006deacfa8d23ca53cdcc3b3564c5c5af00"
+      "sha256": "5eb85d3677af2937c1fbd4a90eabe628d8e4d9c6724f45dab59289f93769dab3"
     },
     {
       "bytes": 3856,
@@ -27,5 +27,5 @@
     }
   ],
   "schema_version": 1,
-  "source_commit": "90531532ab6d72ae2d6a6ab566fb4933ef979c2e"
+  "source_commit": "105c1a0c813d03336ac7fbaa2869fc0f4041e566"
 }
