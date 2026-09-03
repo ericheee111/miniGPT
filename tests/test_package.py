@@ -453,3 +453,28 @@ def test_story_forge_product_evidence_binds_declared_commit_not_worktree(
     changed_digest = hashlib.sha256(changed_path.read_bytes()).hexdigest()
     assert record["sha256"] == committed_digest
     assert record["sha256"] != changed_digest
+
+
+def test_story_forge_product_evidence_checkout_bytes_are_lf_bound() -> None:
+    # Given: the hash-bound Story Forge product evidence directory.
+    git = shutil.which("git")
+    assert git is not None
+
+    # When: Git resolves the checkout end-of-line policy for an evidence artifact.
+    completed = subprocess.run(  # noqa: S603 - resolved Git executable
+        (
+            git,
+            "check-attr",
+            "eol",
+            "--",
+            "docs/results/story-forge-product/product_summary.json",
+        ),
+        cwd=Path(__file__).parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    # Then: Windows and Linux checkouts preserve the bytes hashed by the manifest.
+    assert completed.stdout.strip().endswith(": eol: lf")

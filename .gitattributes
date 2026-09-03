@@ -64,3 +64,6 @@ docs/results/v1-release/** text eol=lf
 
 # Post-v1 Public Playground acceptance binds exact UTF-8/LF trace bytes.
 docs/results/public-playground/** text eol=lf
+
+# Post-v1 Story Forge product evidence binds exact UTF-8/LF checkout bytes.
+docs/results/story-forge-product/** text eol=lf
