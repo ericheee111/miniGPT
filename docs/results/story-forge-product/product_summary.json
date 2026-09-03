@@ -1,0 +1,23 @@
+{
+  "claim_policy": {
+    "authorship_detection_claim": false,
+    "general_chat_claim": false,
+    "production_ready_claim": false,
+    "public_cutover_claim": false,
+    "semantic_understanding_claim": false,
+    "verdict": "descriptive_only"
+  },
+  "features": [
+    "story_forge",
+    "prediction_lab",
+    "systems_lab"
+  ],
+  "model": {
+    "checkpoint_sha256": "9abcf022471df6766d4676fc93a3ecc6a8eaa9ec95c79a391227c2906b85e710",
+    "parameter_count": 4928144,
+    "tokenizer_sha256": "7c897e0d51d135f6bb24bdbd18b0e40db88c0e62defcff9d23f3a204e092585c"
+  },
+  "project_version": "1.1.0",
+  "schema_version": 1,
+  "source_commit": "90531532ab6d72ae2d6a6ab566fb4933ef979c2e"
+}

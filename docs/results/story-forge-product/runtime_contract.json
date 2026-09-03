@@ -1,0 +1,27 @@
+{
+  "endpoints": {
+    "predict_next": "/demo/predict/next",
+    "predict_score": "/demo/predict/score",
+    "story_branches": "/demo/story/branches"
+  },
+  "prediction": {
+    "max_top_k": 10,
+    "no_kv_mutation": true,
+    "no_rng_advance": true,
+    "no_sampling": true,
+    "owner_thread_only": true
+  },
+  "privacy": {
+    "no_path_leakage": true,
+    "no_prompt_logging": true,
+    "text_content_only": true
+  },
+  "schema_version": 1,
+  "story": {
+    "bpe_safe_snapshot_sse": true,
+    "branch_count": 3,
+    "max_branch_tokens": 64,
+    "max_rounds": 4,
+    "stable_derived_seeds": true
+  }
+}

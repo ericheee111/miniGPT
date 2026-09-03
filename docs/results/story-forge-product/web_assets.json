@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "source_files": [
+    {
+      "bytes": 850,
+      "path": "configs/story_forge_public_demo.yaml",
+      "sha256": "1a3cb720e139cb5d138bbdaf05785f72e9b53505a7288943d355835d5076dccc"
+    },
+    {
+      "bytes": 6040,
+      "path": "scripts/build_public_demo_site.py",
+      "sha256": "a2ef1c4c6f16f0783810749d8ff374de0acda2ea0f3e7f80eaf1ba016dea181d"
+    },
+    {
+      "bytes": 1348,
+      "path": "scripts/build_systems_lab_assets.py",
+      "sha256": "d5f928658a8ca1f375fd11b6f2de72a87d0f1324dadbc0c2fd7ff788aac5685d"
+    },
+    {
+      "bytes": 12082,
+      "path": "scripts/start_story_forge_demo.ps1",
+      "sha256": "bd85af2aa8f5b1ad3d91b6d66ef5c07372a8dfe87066d1f28fe5a1da395374df"
+    },
+    {
+      "bytes": 2268,
+      "path": "scripts/stop_story_forge_demo.ps1",
+      "sha256": "1dadc946756fb1af1b6fe7c0d69a8646c68fd6729a1496d2de388c4ba51f515a"
+    },
+    {
+      "bytes": 4398,
+      "path": "scripts/validate_story_forge_model.py",
+      "sha256": "afb7b2f7e98fa5367d149c1ea469daeb4967619171a12e219ace22b3a81b931e"
+    },
+    {
+      "bytes": 23668,
+      "path": "src/minigpt/engine_runner.py",
+      "sha256": "49f4c146ab25e726e5455780bd2144f2ea5cc43cc62c717f01c66401aead4246"
+    },
+    {
+      "bytes": 13004,
+      "path": "src/minigpt/prediction.py",
+      "sha256": "eccf33246514ae54151aee7c61ec34c00e544a7e46e592ceac8cebe8179c8dee"
+    },
+    {
+      "bytes": 122384,
+      "path": "src/minigpt/public_demo.py",
+      "sha256": "3263f755abb7d7b21b40f3bef0509d599db23465fe41ce9e8c9987c0caa7d6ae"
+    },
+    {
+      "bytes": 164319,
+      "path": "src/minigpt/serving.py",
+      "sha256": "8c2a73500af21f99e87f473e82b60003036d6686e046e70b69046fd5b0db0bb5"
+    },
+    {
+      "bytes": 4869,
+      "path": "src/minigpt/story_forge_product.py",
+      "sha256": "1e6c8329daa59d09a39e177f486469383fcdcf81e1bada01ac3ab5562fa5f578"
+    },
+    {
+      "bytes": 11317,
+      "path": "src/minigpt/story_forge_systems.py",
+      "sha256": "0b0906b3c8fb44631cd68b87608ea05bd4072fdf4d2ce1688fe9cef1544f829a"
+    },
+    {
+      "bytes": 50394,
+      "path": "web/app.js",
+      "sha256": "6296df5644e88446bdd16a5c27e031cf777173a3f1c928f5a719aa01d45cfa0d"
+    },
+    {
+      "bytes": 25619,
+      "path": "web/index.html",
+      "sha256": "f678883d60db495d118ea5e4f9c4958cfb483dadbb34315bd7768bb2fabeb0b6"
+    },
+    {
+      "bytes": 30140,
+      "path": "web/styles.css",
+      "sha256": "222ac4ed63f495c87ac6e69ce009f0a94e7f5c93115a42cf05b8ac257f912dfe"
+    },
+    {
+      "bytes": 563,
+      "path": "web/data/automatic_prefix_cache.json",
+      "sha256": "1c25b0d99959ffc4041bd93fe07534c22daa53d70ae61f9c3b9bdf71eabbf505"
+    },
+    {
+      "bytes": 1262,
+      "path": "web/data/continuous_batching.json",
+      "sha256": "75cb8130c530262f1d1e968842adbeaeef55cefe830594c6f4fffd9cdd3bfdfa"
+    },
+    {
+      "bytes": 492,
+      "path": "web/data/kv_preemption.json",
+      "sha256": "0f8ecc6a6187372419f22ce412427ab649208c3ed6cf364e50b8f6bd2b145d9a"
+    },
+    {
+      "bytes": 506,
+      "path": "web/data/lazy_reservation.json",
+      "sha256": "f8a65fb13e3c264b1f0a0b47d69cce28abd8ee9fe71cb76d1c71f567be5523a8"
+    }
+  ],
+  "systems_lab_assets": [
+    {
+      "bytes": 563,
+      "path": "web/data/automatic_prefix_cache.json",
+      "sha256": "1c25b0d99959ffc4041bd93fe07534c22daa53d70ae61f9c3b9bdf71eabbf505"
+    },
+    {
+      "bytes": 1262,
+      "path": "web/data/continuous_batching.json",
+      "sha256": "75cb8130c530262f1d1e968842adbeaeef55cefe830594c6f4fffd9cdd3bfdfa"
+    },
+    {
+      "bytes": 492,
+      "path": "web/data/kv_preemption.json",
+      "sha256": "0f8ecc6a6187372419f22ce412427ab649208c3ed6cf364e50b8f6bd2b145d9a"
+    },
+    {
+      "bytes": 506,
+      "path": "web/data/lazy_reservation.json",
+      "sha256": "f8a65fb13e3c264b1f0a0b47d69cce28abd8ee9fe71cb76d1c71f567be5523a8"
+    }
+  ]
+}

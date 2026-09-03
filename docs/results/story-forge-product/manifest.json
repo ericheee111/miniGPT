@@ -1,0 +1,31 @@
+{
+  "artifacts": [
+    {
+      "bytes": 681,
+      "path": "product_summary.json",
+      "sha256": "16dadb44c52a7e8bdde1de5a83849fed30b04ef02e2e0d7238f40de72467d737"
+    },
+    {
+      "bytes": 654,
+      "path": "README.md",
+      "sha256": "26e72c175b35c2868bbef3d3453e2c23105e743efdabc229fd1204c17f2bb5bb"
+    },
+    {
+      "bytes": 603,
+      "path": "runtime_contract.json",
+      "sha256": "63e335a26d6f2cbade49edfdd48d70f4b246f9050b283f77fe270946af149aea"
+    },
+    {
+      "bytes": 777,
+      "path": "verification.json",
+      "sha256": "65b8410968badb5cd26b1a784fdcf006deacfa8d23ca53cdcc3b3564c5c5af00"
+    },
+    {
+      "bytes": 3856,
+      "path": "web_assets.json",
+      "sha256": "0f25333185e18d0f35476a52676b4fb6cd55040e1503b056a0682687d459b1d9"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "90531532ab6d72ae2d6a6ab566fb4933ef979c2e"
+}

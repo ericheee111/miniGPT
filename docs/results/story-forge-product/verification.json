@@ -1,0 +1,20 @@
+{
+  "fresh_worktree": {
+    "detail": "detached source commit 90531532ab6d72ae2d6a6ab566fb4933ef979c2e in a fresh Python 3.14 virtual environment; all 63 tests/test_*.py files covered exactly once",
+    "status": "pass"
+  },
+  "quality": {
+    "detail": "pip check, ruff format --check, ruff check, basedpyright, quick/ci/release doctor, release artifact validation, and deterministic static asset rebuild passed",
+    "status": "pass"
+  },
+  "runtime_smoke": {
+    "detail": "real local 5M Story Forge model: health/info, three-branch non-stream, multiplexed SSE, Prediction next/score, disconnect cleanup, and recovery request passed on 127.0.0.1:8001",
+    "status": "pass"
+  },
+  "schema_version": 1,
+  "tests": {
+    "failed": 0,
+    "passed": 926,
+    "skipped": 1
+  }
+}
