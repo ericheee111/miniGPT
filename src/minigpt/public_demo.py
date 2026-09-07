@@ -1729,7 +1729,10 @@ async def _stream_completion(  # noqa: PLR0913
     try:
         async with asyncio.timeout_at(deadline):
             while True:
-                event = await asyncio.to_thread(stream_queue.get)
+                try:
+                    event = await asyncio.to_thread(stream_queue.get, block=True, timeout=0.1)
+                except queue.Empty:
+                    continue
                 if event.event_type is StreamEventType.TOKEN:
                     if event.token_id is None:
                         lifecycle.fail(latency_seconds=_elapsed(clock, started_at))

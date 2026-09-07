@@ -6,6 +6,9 @@ on:
 
 jobs:
   test:
+    # A quality run should fail with actionable diagnostics instead of consuming
+    # GitHub Actions' six-hour job allowance when a test leaks process resources.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -47,4 +50,4 @@ jobs:
       - name: Project doctor
         run: python -m minigpt verify --mode release --require-clean
       - name: Test
-        run: pytest
+        run: pytest -vv --durations=25 --durations-min=1.0
