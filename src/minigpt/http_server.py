@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import queue
 import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -245,7 +246,10 @@ async def _stream_completion(  # noqa: PLR0913
     completed_normally = False
     try:
         while True:
-            event = await asyncio.to_thread(stream_queue.get)
+            try:
+                event = await asyncio.to_thread(stream_queue.get, block=True, timeout=0.1)
+            except queue.Empty:
+                continue
             if event.event_type is StreamEventType.TOKEN:
                 if event.token_id is None:
                     yield _sse_error("stream token omitted token_id", "internal_error")
